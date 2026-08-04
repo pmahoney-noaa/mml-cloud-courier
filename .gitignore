@@ -20,6 +20,9 @@ service-account*.json
 # Local scratch output from plan smoke tests
 scratch/
 
+# Downloaded binaries (repo root only)
+/tools/
+
 # Windows
 Thumbs.db
 desktop.ini
