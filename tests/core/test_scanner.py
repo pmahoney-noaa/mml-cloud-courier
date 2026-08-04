@@ -121,3 +121,12 @@ def test_follow_extended_true_with_extended_path_form(tmp_path):
     assert errors == []
     assert totals.file_count == 2
     assert totals.error_count == 0
+
+
+def test_missing_root_with_extended_paths_reports_the_callers_path(tmp_path):
+    missing = str(tmp_path / "nope")
+    files, errors, _ = summarise(iter_source(missing))  # default follow_extended=True
+    assert files == []
+    assert len(errors) == 1
+    assert errors[0].path == missing
+    assert not errors[0].path.startswith("\\\\?\\")

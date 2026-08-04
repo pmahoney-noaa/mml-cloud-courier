@@ -41,10 +41,12 @@ def iter_source(root: str, *, follow_extended: bool = True) -> Iterator[ScanEntr
             it = os.scandir(current)
         except OSError as exc:
             classification = classify(exc)
+            # For root-level errors, report the caller-supplied path, not the \\?\ prefixed version
+            display = root if current == walk_root else current
             yield ScanError(
-                path=current if current == walk_root else current,
+                path=display,
                 category=classification.category,
-                message=f"{classification.message} ({current})",
+                message=f"{classification.message} ({display})",
             )
             continue
 
