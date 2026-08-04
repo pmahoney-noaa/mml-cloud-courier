@@ -124,8 +124,9 @@ mml_cloud_transfer/
   cli/        headless control over the same service API
 ```
 
-`core` has no I/O dependencies, so the correctness-critical logic is testable without a
-network or a Windows service. The CLI exists for testing and for IT scripting; it is a
+`core` touches nothing beyond the local filesystem (reads for hashing and scanning), so
+the correctness-critical logic is testable without a network, a database, or a Windows
+service. The CLI exists for testing and for IT scripting; it is a
 client of the same API the GUI uses, not a second code path.
 
 ## Data Model
@@ -186,12 +187,16 @@ file on download.
 - **Destination exists with different content** → overwritten. Uploads use an
   `if_generation_match` precondition captured at plan time so two concurrent writers cannot
   silently clobber each other; a precondition failure is reported as a conflict rather than
-  retried blindly.
+  retried blindly. The captured generation is stored per file in the manifest
+  (`job_files.precondition_generation`; 0 means the object must not exist yet).
 - **Source file changed between scan and transfer** (size or mtime differs) → the file is
   marked `changed`, its planned checksum is discarded, and it is re-queued once with fresh
   metadata. If it changes again on that second attempt it is marked `failed` with a
   `source_changed` category, because a file being actively written cannot be transferred
   coherently. `changed` is therefore a transient state and never appears in a final report.
+- **Source file missing at transfer time** (deleted between scan and transfer) → marked
+  `failed` with category `not_found`. It stays in the manifest so the report shows it, and
+  a later resume retries it in case the file reappears.
 - **Empty directories** are not represented. GCS has no directories, and recreating them on
   download is not attempted.
 - **Symlinks, junctions, and reparse points** are skipped and reported, rather than
@@ -367,9 +372,9 @@ and what to do about it.
 
 **Recovery.** The service is registered auto-start with restart-on-failure. On startup it
 recovers jobs left in `running`, resets files stranded by a stale heartbeat, and resumes
-(controlled by an auto-resume-on-startup setting, default on). A file that fails repeatedly
-across multiple resume attempts is `quarantined` so the job can still reach a terminal
-verdict instead of looping.
+(controlled by an auto-resume-on-startup setting, default on). A file that exhausts its
+five-attempt allowance in three separate runs (15 cumulative attempts) is `quarantined` so
+the job can still reach a terminal verdict instead of looping.
 
 ## Testing
 

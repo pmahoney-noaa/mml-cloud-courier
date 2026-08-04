@@ -82,6 +82,8 @@ Create these files, each empty for now:
 
 - [ ] **Step 2: Install the package in editable mode**
 
+Prerequisite: Python 3.12 must be installed alongside the system 3.14 — check with `py -0` (it should list `-V:3.12`). If it is missing, install it first: `winget install Python.Python.3.12`.
+
 Run: `py -3.12 -m venv .venv && .venv/Scripts/python -m pip install -e ".[dev]"`
 Expected: installs cleanly, including a `google-crc32c` wheel (no compiler invoked).
 
@@ -649,6 +651,8 @@ Handles the three Windows path problems that would otherwise surface at 2am: map
 Create `tests/core/test_paths.py`:
 
 ```python
+import sys
+
 import pytest
 
 from mml_cloud_transfer.core.paths import (
@@ -679,6 +683,14 @@ def test_extended_path_is_idempotent():
 
 def test_extended_path_normalises_forward_slashes():
     assert extended_path("C:/data/run47") == "\\\\?\\C:\\data\\run47"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="drive-letter semantics")
+def test_extended_path_makes_relative_paths_absolute(tmp_path, monkeypatch):
+    # \\?\ paths are only valid when absolute; a relative input must be
+    # resolved against the current directory before the prefix is applied.
+    monkeypatch.chdir(tmp_path)
+    assert extended_path("src") == "\\\\?\\" + str(tmp_path / "src")
 
 
 def test_is_unc():
@@ -737,6 +749,7 @@ stored, and to extended-length form before it touches the filesystem.
 
 from __future__ import annotations
 
+import os
 import sys
 from collections.abc import Callable
 
@@ -750,12 +763,18 @@ def is_unc(path: str) -> bool:
 
 
 def extended_path(path: str) -> str:
-    """Return ``path`` in ``\\\\?\\`` form so the 260-character limit does not apply."""
+    """Return ``path`` in ``\\\\?\\`` form so the 260-character limit does not apply.
+
+    Relative input is resolved against the current directory first — the
+    ``\\\\?\\`` prefix is only valid on an absolute path, and Windows rejects
+    forms like ``\\\\?\\.\\src`` outright.
+    """
     normalised = path.replace("/", "\\")
     if normalised.startswith(_EXTENDED_PREFIX):
         return normalised
     if is_unc(normalised):
         return _EXTENDED_UNC_PREFIX + normalised[2:]
+    normalised = os.path.abspath(normalised).replace("/", "\\")
     return _EXTENDED_PREFIX + normalised
 
 
@@ -810,7 +829,7 @@ def to_object_name(prefix: str, relative_path: str) -> str:
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `.venv/Scripts/python -m pytest tests/core/test_paths.py -v`
-Expected: PASS, 12 tests
+Expected: PASS, 13 tests
 
 - [ ] **Step 5: Commit**
 
@@ -975,7 +994,7 @@ def plan_slices(size_bytes: int) -> list[SliceSpec]:
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `.venv/Scripts/python -m pytest tests/core/test_slicing.py -v`
-Expected: PASS, 22 tests
+Expected: PASS, 18 tests
 
 - [ ] **Step 5: Commit**
 
@@ -1244,8 +1263,10 @@ def _from_http_status(code: int) -> ErrorCategory | None:
         return ErrorCategory.NOT_FOUND
     if code == 412:
         return ErrorCategory.CONFLICT
-    if code in (408, 429):
+    if code == 429:
         return ErrorCategory.QUOTA
+    if code == 408:
+        return ErrorCategory.NETWORK
     if 500 <= code <= 599:
         return ErrorCategory.NETWORK
     return None
@@ -1714,6 +1735,9 @@ CREATE TABLE IF NOT EXISTS job_files (
     remote_crc32c     INTEGER,
     sha256            TEXT,
     generation        INTEGER,
+    -- Destination generation captured at plan time; 0 means the object must
+    -- not exist yet. Enforced via if_generation_match by the Plan 2 engine.
+    precondition_generation INTEGER,
     bytes_transferred INTEGER NOT NULL DEFAULT 0,
     attempts          INTEGER NOT NULL DEFAULT 0,
     error_category    TEXT,
@@ -1818,7 +1842,7 @@ Owns every state transition. This is the module that makes resume work, so its c
 - Test: `tests/store/test_repository.py`
 
 **Interfaces:**
-- Consumes: `connect` from `store.db`; `Direction`, `FileState`, `JobStatus`, `PlannedFile`, `TransferMethod`, `TERMINAL_SUCCESS_STATES` from `core.models`; `choose_method` from `core.slicing`; `to_object_name` from `core.paths`; `ErrorCategory` from `core.errors`
+- Consumes: `connect` from `store.db`; `Direction`, `FileState`, `JobStatus`, `PlannedFile`, `TransferMethod` from `core.models`; `choose_method` from `core.slicing`; `to_object_name` from `core.paths`; `ErrorCategory` from `core.errors`
 - Produces: `JobRepository(conn)` with exactly these methods — `create_job`, `get_job`, `set_job_status`, `add_planned_files`, `get_files`, `iter_pending_files`, `mark_transferring`, `heartbeat`, `mark_verified`, `mark_skipped`, `mark_failed`, `mark_changed`, `quarantine`, `reset_stale_transfers`, `count_by_state`, `job_verdict`, `record_event`, `get_events`
 
 - [ ] **Step 1: Write the failing test**
@@ -2307,7 +2331,11 @@ class JobRepository:
         return {FileState(r["state"]): r["n"] for r in rows}
 
     def job_verdict(self, job_id: int) -> JobStatus:
-        """COMPLETE only when every planned file is verified or skipped."""
+        """COMPLETE only when every planned file is verified or skipped.
+
+        Checks file states only. The final job status additionally requires
+        the Layer 3 completeness audit (Plan 2) to reconcile.
+        """
         row = self._conn.execute(
             "SELECT COUNT(*) AS n FROM job_files WHERE job_id = ? AND state NOT IN (?, ?)",
             (job_id, FileState.VERIFIED.value, FileState.SKIPPED.value),

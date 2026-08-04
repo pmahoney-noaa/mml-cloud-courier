@@ -17,6 +17,9 @@ dist/
 *.json.key
 service-account*.json
 
+# Local scratch output from plan smoke tests
+scratch/
+
 # Windows
 Thumbs.db
 desktop.ini
