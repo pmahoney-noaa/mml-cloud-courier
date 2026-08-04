@@ -1,4 +1,5 @@
 import os
+import sys
 
 import pytest
 
@@ -79,3 +80,44 @@ def test_symlinks_are_skipped_and_reported(tmp_path):
     assert sorted(f.relative_path for f in files) == ["real/file.txt"]
     assert [e.category for e in errors] == [ErrorCategory.UNKNOWN]
     assert "link" in errors[0].path
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="junctions are Windows-only")
+def test_junctions_are_skipped_and_reported(tmp_path):
+    import _winapi
+
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    (real_dir / "file.txt").write_bytes(b"data")
+    junction_path = tmp_path / "junction"
+
+    try:
+        _winapi.CreateJunction(str(real_dir), str(junction_path))
+    except (OSError, NotImplementedError):
+        pytest.skip("junction creation not permitted in this environment")
+
+    files, errors, _ = collect(tmp_path)
+    assert sorted(f.relative_path for f in files) == ["real/file.txt"]
+    assert [e.category for e in errors] == [ErrorCategory.UNKNOWN]
+    assert "junction" in errors[0].path
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="extended paths are Windows-only")
+def test_follow_extended_true_with_extended_path_form(tmp_path):
+    # Test that follow_extended=True (the production default) works correctly
+    # with extended path prefixes and produces the same relative paths
+    (tmp_path / "subdir").mkdir()
+    (tmp_path / "file.txt").write_bytes(b"content")
+    (tmp_path / "subdir" / "nested.txt").write_bytes(b"more")
+
+    # Scan with follow_extended=True (default production behavior)
+    files, errors, totals = summarise(iter_source(str(tmp_path), follow_extended=True))
+
+    # Verify same relative paths come out with forward slashes
+    assert sorted(f.relative_path for f in files) == [
+        "file.txt",
+        "subdir/nested.txt",
+    ]
+    assert errors == []
+    assert totals.file_count == 2
+    assert totals.error_count == 0
