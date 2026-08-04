@@ -23,24 +23,51 @@ class SliceSpec:
     length: int
 
 
-def choose_method(size_bytes: int) -> TransferMethod:
+@dataclass(frozen=True, slots=True)
+class SizePolicy:
+    """Size thresholds for method selection and slicing.
+
+    Production always uses ``default()``. Tests inject tiny thresholds so a
+    2 MB fixture exercises the sliced path without writing gigabytes.
+    """
+
+    single_shot_max: int
+    resumable_max: int
+    min_slice: int
+    max_components: int
+
+    @classmethod
+    def default(cls) -> "SizePolicy":
+        return cls(
+            single_shot_max=SINGLE_SHOT_MAX_BYTES,
+            resumable_max=RESUMABLE_MAX_BYTES,
+            min_slice=MIN_SLICE_BYTES,
+            max_components=MAX_COMPONENTS,
+        )
+
+
+def choose_method(
+    size_bytes: int, *, policy: SizePolicy | None = None
+) -> TransferMethod:
     if size_bytes < 0:
         raise ValueError("size_bytes must not be negative")
-    if size_bytes <= SINGLE_SHOT_MAX_BYTES:
+    p = policy or SizePolicy.default()
+    if size_bytes <= p.single_shot_max:
         return TransferMethod.SINGLE_SHOT
-    if size_bytes <= RESUMABLE_MAX_BYTES:
+    if size_bytes <= p.resumable_max:
         return TransferMethod.RESUMABLE
     return TransferMethod.SLICED
 
 
-def plan_slices(size_bytes: int) -> list[SliceSpec]:
-    """Cut ``size_bytes`` into at most ``MAX_COMPONENTS`` contiguous slices."""
+def plan_slices(size_bytes: int, *, policy: SizePolicy | None = None) -> list[SliceSpec]:
+    """Cut ``size_bytes`` into at most ``policy.max_components`` contiguous slices."""
     if size_bytes < 0:
         raise ValueError("size_bytes must not be negative")
     if size_bytes == 0:
         return [SliceSpec(index=0, offset=0, length=0)]
 
-    slice_size = max(MIN_SLICE_BYTES, -(-size_bytes // MAX_COMPONENTS))
+    p = policy or SizePolicy.default()
+    slice_size = max(p.min_slice, -(-size_bytes // p.max_components))
 
     slices: list[SliceSpec] = []
     offset = 0

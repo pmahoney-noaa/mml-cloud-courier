@@ -18,7 +18,7 @@ from mml_cloud_transfer.core.models import (
     PlannedFile,
 )
 from mml_cloud_transfer.core.paths import to_object_name
-from mml_cloud_transfer.core.slicing import choose_method
+from mml_cloud_transfer.core.slicing import SizePolicy, choose_method
 
 #: States that will never be retried by a resume.
 _NOT_RETRIED = (
@@ -80,7 +80,13 @@ class JobRepository:
 
     # ---- planning -------------------------------------------------------
 
-    def add_planned_files(self, job_id: int, files: Iterable[PlannedFile]) -> int:
+    def add_planned_files(
+        self,
+        job_id: int,
+        files: Iterable[PlannedFile],
+        *,
+        policy: SizePolicy | None = None,
+    ) -> int:
         """Insert planned files, ignoring any already present. Returns rows added."""
         job = self.get_job(job_id)
         prefix = job["dest_prefix"]
@@ -93,7 +99,7 @@ class JobRepository:
                 to_object_name(prefix, f.relative_path),
                 f.size_bytes,
                 f.mtime_ns,
-                choose_method(f.size_bytes).value,
+                choose_method(f.size_bytes, policy=policy).value,
                 FileState.PENDING.value,
             )
             for f in files

@@ -75,3 +75,12 @@ def test_to_object_name_joins_and_trims_separators():
     assert to_object_name("archive/run47/", "a/b.tif") == "archive/run47/a/b.tif"
     assert to_object_name("", "a/b.tif") == "a/b.tif"
     assert to_object_name("/archive/", "/a.tif") == "archive/a.tif"
+
+
+def test_display_path_strips_the_extended_prefix():
+    from mml_cloud_transfer.core.paths import display_path
+
+    assert display_path("\\\\?\\C:\\data\\run47") == "C:\\data\\run47"
+    assert display_path("\\\\?\\UNC\\nas01\\imaging") == "\\\\nas01\\imaging"
+    assert display_path(r"C:\data\run47") == "C:\\data\\run47"
+    assert display_path("archive/run47/a.tif") == "archive/run47/a.tif"

@@ -82,3 +82,16 @@ def to_object_name(prefix: str, relative_path: str) -> str:
     left = prefix.strip("/")
     right = relative_path.strip("/")
     return f"{left}/{right}" if left else right
+
+
+def display_path(path: str) -> str:
+    """Return ``path`` without the ``\\\\?\\`` machinery, for human eyes.
+
+    Storage and filesystem access keep the extended form; anything shown to
+    a user (errors, reports, logs) goes through here.
+    """
+    if path.startswith(_EXTENDED_UNC_PREFIX):
+        return "\\\\" + path[len(_EXTENDED_UNC_PREFIX) :]
+    if path.startswith(_EXTENDED_PREFIX):
+        return path[len(_EXTENDED_PREFIX) :]
+    return path

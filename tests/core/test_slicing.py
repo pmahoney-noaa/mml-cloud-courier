@@ -65,3 +65,45 @@ def test_zero_byte_file_yields_one_empty_slice():
 def test_negative_size_is_rejected():
     with pytest.raises(ValueError):
         plan_slices(-1)
+
+
+def test_size_policy_default_matches_module_constants():
+    from mml_cloud_transfer.core.slicing import (
+        MAX_COMPONENTS,
+        MIN_SLICE_BYTES,
+        RESUMABLE_MAX_BYTES,
+        SINGLE_SHOT_MAX_BYTES,
+        SizePolicy,
+    )
+
+    policy = SizePolicy.default()
+    assert policy.single_shot_max == SINGLE_SHOT_MAX_BYTES
+    assert policy.resumable_max == RESUMABLE_MAX_BYTES
+    assert policy.min_slice == MIN_SLICE_BYTES
+    assert policy.max_components == MAX_COMPONENTS
+
+
+def test_tiny_policy_reroutes_methods_and_slices():
+    from mml_cloud_transfer.core.slicing import SizePolicy, choose_method, plan_slices
+
+    tiny = SizePolicy(
+        single_shot_max=64 * 1024,
+        resumable_max=256 * 1024,
+        min_slice=256 * 1024,
+        max_components=32,
+    )
+    assert choose_method(64 * 1024, policy=tiny) is TransferMethod.SINGLE_SHOT
+    assert choose_method(64 * 1024 + 1, policy=tiny) is TransferMethod.RESUMABLE
+    assert choose_method(256 * 1024 + 1, policy=tiny) is TransferMethod.SLICED
+
+    slices = plan_slices(1024 * 1024, policy=tiny)
+    assert len(slices) == 4
+    assert sum(s.length for s in slices) == 1024 * 1024
+    assert all(s.length == 256 * 1024 for s in slices)
+
+
+def test_omitting_policy_behaves_exactly_as_before():
+    from mml_cloud_transfer.core.slicing import choose_method, plan_slices
+
+    assert choose_method(8 * MIB) is TransferMethod.SINGLE_SHOT
+    assert plan_slices(2 * GIB)[0].length == GIB

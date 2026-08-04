@@ -313,3 +313,19 @@ def test_state_survives_reopening_the_database(tmp_path):
     assert repo2.count_by_state(job_id)[FileState.VERIFIED] == 1
     assert len(list(repo2.iter_pending_files(job_id))) == 1
     reopened.close()
+
+
+def test_add_planned_files_honours_a_size_policy(repo):
+    from mml_cloud_transfer.core.slicing import SizePolicy
+
+    tiny = SizePolicy(
+        single_shot_max=10,
+        resumable_max=50,
+        min_slice=50,
+        max_components=32,
+    )
+    job_id = repo.create_job(
+        name="j", direction=Direction.UPLOAD, source_root=r"C:\data", dest_prefix=""
+    )
+    repo.add_planned_files(job_id, make_files(1, size=100), policy=tiny)
+    assert repo.get_files(job_id)[0]["method"] == TransferMethod.SLICED.value

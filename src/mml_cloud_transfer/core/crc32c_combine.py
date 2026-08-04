@@ -70,7 +70,12 @@ def combine(crc1: int, crc2: int, len2: int) -> int:
 
 
 def combine_all(pairs: Sequence[tuple[int, int]]) -> int:
-    """Fold a sequence of ``(crc32c, length)`` pairs, in byte order, into one CRC32C."""
+    """Fold a sequence of ``(crc32c, length)`` pairs, in byte order, into one CRC32C.
+
+    Pairs MUST be supplied in slice-index (byte) order. The first pair's
+    length is unused — only the lengths of subsequent ranges shift the
+    running CRC — so a wrong first length cannot be detected here.
+    """
     if not pairs:
         raise ValueError("combine_all requires at least one (crc32c, length) pair")
     result = pairs[0][0]
