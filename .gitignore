@@ -1,0 +1,22 @@
+# Brainstorming companion artifacts
+.superpowers/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local credentials — never commit
+*.json.key
+service-account*.json
+
+# Windows
+Thumbs.db
+desktop.ini
