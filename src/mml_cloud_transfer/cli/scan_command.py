@@ -59,6 +59,11 @@ def run_scan(
                 source_root=root,
                 dest_prefix=dest_prefix,
             )
+        else:
+            # Fail fast with a clean LookupError rather than letting a bogus
+            # id silently no-op set_job_status and then crash record_event
+            # on the job_files/events foreign key.
+            repo.get_job(job_id)
 
         repo.set_job_status(job_id, JobStatus.SCANNING)
         repo.record_event(job_id, "scan_started", f"root={root}")

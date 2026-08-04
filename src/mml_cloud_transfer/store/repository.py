@@ -129,12 +129,21 @@ class JobRepository:
         ).fetchall()
 
     def iter_pending_files(self, job_id: int) -> Iterator[sqlite3.Row]:
+        """Yield every file not yet verified, skipped, or quarantined.
+
+        Rows are fetched eagerly (not streamed from a live cursor): SQLite
+        documents that a SELECT interleaved with writes to the same table on
+        the same connection may skip or repeat rows, and callers are expected
+        to write to this same row (e.g. via ``mark_verified``) while
+        iterating. A million-row list is an acceptable cost for that safety.
+        """
         placeholders = ", ".join("?" for _ in _NOT_RETRIED)
-        yield from self._conn.execute(
+        rows = self._conn.execute(
             f"SELECT * FROM job_files WHERE job_id = ?"
             f" AND state NOT IN ({placeholders}) ORDER BY id",
             (job_id, *_NOT_RETRIED),
-        )
+        ).fetchall()
+        yield from rows
 
     # ---- file state transitions ----------------------------------------
 

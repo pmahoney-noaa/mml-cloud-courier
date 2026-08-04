@@ -148,3 +148,35 @@ def test_main_returns_nonzero_when_the_scan_had_errors(tmp_path, capsys):
     )
     assert code == 1
     assert "error" in capsys.readouterr().out.lower()
+
+
+def test_run_scan_with_a_nonexistent_job_id_raises_lookup_error(tmp_path, tree):
+    with pytest.raises(LookupError, match="no job with id 999"):
+        run_scan(
+            db_path=tmp_path / "jobs.db",
+            source_root=str(tree),
+            dest_prefix="",
+            job_name="j",
+            job_id=999,
+            follow_extended=False,
+        )
+
+
+def test_main_with_a_nonexistent_job_id_returns_one_without_a_traceback(
+    tmp_path, tree, capsys
+):
+    code = main(
+        [
+            "scan",
+            "--db", str(tmp_path / "jobs.db"),
+            "--source", str(tree),
+            "--prefix", "",
+            "--name", "j",
+            "--job-id", "999",
+            "--no-extended-paths",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "no job with id" in out
+    assert "Traceback" not in out

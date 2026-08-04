@@ -36,15 +36,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
     if args.command == "scan":
-        outcome = run_scan(
-            db_path=args.db,
-            source_root=args.source,
-            dest_prefix=args.prefix,
-            job_name=args.name,
-            job_id=args.job_id,
-            csv_path=args.csv,
-            follow_extended=not args.no_extended_paths,
-        )
+        try:
+            outcome = run_scan(
+                db_path=args.db,
+                source_root=args.source,
+                dest_prefix=args.prefix,
+                job_name=args.name,
+                job_id=args.job_id,
+                csv_path=args.csv,
+                follow_extended=not args.no_extended_paths,
+            )
+        except LookupError as exc:
+            print(str(exc))
+            return 1
         gib = outcome.byte_count / 1024**3
         print(f"Job {outcome.job_id}: {outcome.file_count} files, {gib:.2f} GiB")
         if outcome.errors:

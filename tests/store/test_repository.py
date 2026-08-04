@@ -217,6 +217,85 @@ def test_events_are_appended_in_order(repo):
     assert kinds == ["scan_started", "scan_finished"]
 
 
+def test_iter_pending_files_is_safe_to_mutate_during_iteration(repo):
+    """iter_pending_files must materialize rows up front.
+
+    SQLite documents that a SELECT interleaved with writes to the same table
+    on the same connection may skip or repeat rows. The docstring invites
+    exactly this pattern (transfer, then mark_verified, in the same loop),
+    so it must be safe.
+    """
+    job_id = repo.create_job(
+        name="j", direction=Direction.UPLOAD, source_root=r"C:\data", dest_prefix=""
+    )
+    repo.add_planned_files(job_id, make_files(10))
+    expected_ids = sorted(f["id"] for f in repo.get_files(job_id))
+
+    seen_ids = []
+    for row in repo.iter_pending_files(job_id):
+        seen_ids.append(row["id"])
+        repo.mark_verified(row["id"], local_crc32c=1, remote_crc32c=1, generation=1)
+
+    assert sorted(seen_ids) == expected_ids
+    assert len(seen_ids) == len(set(seen_ids))
+
+
+def test_get_job_raises_lookup_error_for_an_unknown_id(repo):
+    with pytest.raises(LookupError, match="no job with id 999"):
+        repo.get_job(999)
+
+
+def test_heartbeat_updates_timestamp_and_bytes_transferred(repo):
+    job_id = repo.create_job(
+        name="j", direction=Direction.UPLOAD, source_root=r"C:\data", dest_prefix=""
+    )
+    repo.add_planned_files(job_id, make_files(1))
+    file_id = repo.get_files(job_id)[0]["id"]
+    repo.mark_transferring(file_id)
+
+    repo.heartbeat(file_id, 12345)
+
+    row = repo.get_files(job_id)[0]
+    assert row["heartbeat_at"] is not None
+    assert row["bytes_transferred"] == 12345
+
+
+def test_reset_stale_transfers_leaves_a_fresh_heartbeat_alone(repo):
+    """Negative case: a file transferring with a recent heartbeat is not stale."""
+    job_id = repo.create_job(
+        name="j", direction=Direction.UPLOAD, source_root=r"C:\data", dest_prefix=""
+    )
+    repo.add_planned_files(job_id, make_files(1))
+    file_id = repo.get_files(job_id)[0]["id"]
+    repo.mark_transferring(file_id)
+    repo.heartbeat(file_id, 10)
+
+    recovered = repo.reset_stale_transfers(job_id, stale_after_seconds=300)
+
+    assert recovered == 0
+    assert repo.get_files(job_id)[0]["state"] == FileState.TRANSFERRING.value
+
+
+def test_mark_changed_resets_transfer_progress_and_is_retried(repo):
+    job_id = repo.create_job(
+        name="j", direction=Direction.UPLOAD, source_root=r"C:\data", dest_prefix=""
+    )
+    repo.add_planned_files(job_id, make_files(1, size=100))
+    file_id = repo.get_files(job_id)[0]["id"]
+    repo.mark_transferring(file_id)
+    repo.heartbeat(file_id, 50)
+
+    repo.mark_changed(file_id, 200, 1_800_000_000_000_000_000)
+
+    row = repo.get_files(job_id)[0]
+    assert row["state"] == FileState.CHANGED.value
+    assert row["size_bytes"] == 200
+    assert row["mtime_ns"] == 1_800_000_000_000_000_000
+    assert row["local_crc32c"] is None
+    assert row["bytes_transferred"] == 0
+    assert [f["id"] for f in repo.iter_pending_files(job_id)] == [file_id]
+
+
 def test_state_survives_reopening_the_database(tmp_path):
     conn = connect(tmp_path / "jobs.db")
     repo = JobRepository(conn)
