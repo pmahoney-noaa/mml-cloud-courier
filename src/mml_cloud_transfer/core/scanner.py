@@ -34,80 +34,62 @@ def iter_source(root: str, *, follow_extended: bool = True) -> Iterator[ScanEntr
     """
     walk_root = extended_path(root) if follow_extended else root
 
-    # Probe the root to get the real error category if it fails
-    try:
-        it = os.scandir(walk_root)
-    except OSError as exc:
-        classification = classify(exc)
-        yield ScanError(
-            path=root,
-            category=classification.category,
-            message=f"{classification.message} ({root})",
-        )
-        return
-
-    stack = [it]
+    stack = [walk_root]
     while stack:
-        current_it = stack.pop()
+        current = stack.pop()
         try:
-            with current_it:
-                while True:
-                    try:
-                        entry = next(current_it)
-                    except StopIteration:
-                        break
-                    except OSError as exc:
-                        classification = classify(exc)
-                        yield ScanError(
-                            path=str(current_it),
-                            category=classification.category,
-                            message=f"{classification.message}",
-                        )
-                        break
-
-                    try:
-                        # Skip symlinks and junctions (reparse points)
-                        if entry.is_symlink() or entry.is_junction():
-                            yield ScanError(
-                                path=entry.path,
-                                category=ErrorCategory.UNKNOWN,
-                                message=f"Skipped link or junction: {entry.path}",
-                            )
-                            continue
-                        if entry.is_dir():
-                            try:
-                                stack.append(os.scandir(entry.path))
-                            except OSError as exc:
-                                classification = classify(exc)
-                                yield ScanError(
-                                    path=entry.path,
-                                    category=classification.category,
-                                    message=f"{classification.message} ({entry.path})",
-                                )
-                            continue
-
-                        stat = entry.stat()
-                        yield PlannedFile(
-                            relative_path=to_relative_path(walk_root, entry.path),
-                            source_path=entry.path,
-                            size_bytes=stat.st_size,
-                            mtime_ns=stat.st_mtime_ns,
-                        )
-                    except OSError as exc:
-                        classification = classify(exc)
-                        yield ScanError(
-                            path=entry.path,
-                            category=classification.category,
-                            message=f"{classification.message} ({entry.path})",
-                        )
+            it = os.scandir(current)
         except OSError as exc:
-            # Shouldn't reach here, but handle gracefully
             classification = classify(exc)
             yield ScanError(
-                path=str(current_it),
+                path=current if current == walk_root else current,
                 category=classification.category,
-                message=f"{classification.message}",
+                message=f"{classification.message} ({current})",
             )
+            continue
+
+        with it:
+            while True:
+                try:
+                    entry = next(it)
+                except StopIteration:
+                    break
+                except OSError as exc:
+                    classification = classify(exc)
+                    yield ScanError(
+                        path=current,
+                        category=classification.category,
+                        message=f"{classification.message} ({current})",
+                    )
+                    break
+
+                try:
+                    # Skip symlinks and junctions (reparse points)
+                    if entry.is_symlink() or entry.is_junction():
+                        yield ScanError(
+                            path=entry.path,
+                            category=ErrorCategory.UNKNOWN,
+                            message=f"Skipped link or junction: {entry.path}",
+                        )
+                        continue
+                    if entry.is_dir():
+                        stack.append(entry.path)
+                        continue
+
+                    stat = entry.stat()
+                    yield PlannedFile(
+                        relative_path=to_relative_path(walk_root, entry.path),
+                        source_path=entry.path,
+                        size_bytes=stat.st_size,
+                        mtime_ns=stat.st_mtime_ns,
+                    )
+                except OSError as exc:
+                    classification = classify(exc)
+                    yield ScanError(
+                        path=entry.path,
+                        category=classification.category,
+                        message=f"{classification.message} ({entry.path})",
+                    )
 
 
 def summarise(
