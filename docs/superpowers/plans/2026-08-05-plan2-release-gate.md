@@ -142,13 +142,25 @@ if (-not $Project) {
     Report-Ok "project is $Project"
 }
 
-# 5. Bucket exists, and its storage class
+# 5-8. Bucket metadata: BEST EFFORT, never fatal.
+#
+# storage.buckets.get is a separate permission from object access, and the
+# project spec RECOMMENDS least-privilege object-level-only credentials
+# ("object-level access to a single bucket"). Failing here would reject the
+# very IAM shape the product tells users to adopt. When metadata is
+# unreadable we say so and move on -- the permission probe below is the
+# authoritative check, because it exercises the operations the gate needs
+# rather than describing them.
 $code, $describe = Invoke-Gcloud storage buckets describe "gs://$Bucket" --format=json
 if ($code -ne 0) {
-    Report-Fail "bucket gs://$Bucket not found or not readable" `
-                "gcloud storage buckets create gs://$Bucket --location=us-central1 --default-storage-class=STANDARD --uniform-bucket-level-access"
+    Report-Warn ("cannot read bucket metadata (storage.buckets.get denied, or the " +
+                 "bucket does not exist) — skipping storage-class, versioning, " +
+                 "retention and lifecycle checks; the permission probe below decides")
+    Report-Warn ("  unverified: storage class (cold-storage minimum-duration charges), " +
+                 "object versioning (deletes leave billable noncurrent versions), " +
+                 "retention policy (deletes refused outright)")
 } else {
-    Report-Ok "bucket gs://$Bucket exists"
+    Report-Ok "bucket gs://$Bucket metadata is readable"
     $meta = $describe | ConvertFrom-Json
     if ($meta.default_storage_class -ne "STANDARD") {
         Report-Warn ("storage class is $($meta.default_storage_class) — temp slice objects " +
@@ -194,17 +206,24 @@ if ($code -ne 0) {
     }
 }
 
-# 9. Write / read / compose / delete permission probe, inside the scratch prefix
+# 9. Permission probe — THE authoritative check.
+#
+# Exercises the four object operations the gate depends on, inside the scratch
+# prefix. This is what decides the exit code: it proves the operations rather
+# than describing the IAM that might allow them, and its delete step is also
+# the real test for a retention policy, which metadata could not tell us about.
 if (-not $script:Failed) {
     $probePrefix = "$PrefixPath" + "mmlct-preflight/$([guid]::NewGuid().ToString('N').Substring(0,8))"
     $tmp = Join-Path $env:TEMP "mmlct-probe.bin"
+    $wrote = $false
     try {
         Set-Content -Path $tmp -Value "mmlct preflight probe" -NoNewline
         $code, $out = Invoke-Gcloud storage cp $tmp "gs://$Bucket/$probePrefix/a.bin"
         if ($code -ne 0) {
-            Report-Fail "cannot write to gs://$Bucket" `
-                        "grant roles/storage.objectAdmin on this bucket to $accounts"
+            Report-Fail "cannot write to gs://$Bucket/$PrefixPath — $($out -split "`n" | Select-Object -First 1)" `
+                        "confirm the bucket exists and grant roles/storage.objectAdmin on it to $accounts"
         } else {
+            $wrote = $true
             Report-Ok "write succeeded"
             $code, $null = Invoke-Gcloud storage cp $tmp "gs://$Bucket/$probePrefix/b.bin"
             $code, $out = Invoke-Gcloud storage objects compose `
@@ -218,9 +237,20 @@ if (-not $script:Failed) {
             }
         }
     } finally {
-        Invoke-Gcloud storage rm --recursive "gs://$Bucket/$probePrefix" | Out-Null
         Remove-Item $tmp -ErrorAction SilentlyContinue
-        Report-Ok "probe objects cleaned up"
+        if ($wrote) {
+            # Deleting is not cleanup hygiene here — it is a check. A retention
+            # policy or object hold refuses deletes, and the gate's fixture
+            # teardown would then fail the whole session after writing 2.6 GiB.
+            Invoke-Gcloud storage rm --recursive "gs://$Bucket/$probePrefix" | Out-Null
+            $code, $survivors = Invoke-Gcloud storage ls --recursive "gs://$Bucket/$probePrefix"
+            if ($survivors -and $survivors -notmatch "One or more URLs matched no objects") {
+                Report-Fail "probe objects could not be deleted: $survivors" `
+                            "check for a retention policy, object hold, or missing storage.objects.delete"
+            } else {
+                Report-Ok "probe objects deleted (deletes are permitted)"
+            }
+        }
     }
 }
 
@@ -581,9 +611,9 @@ Run:
 $env:MMLCT_TEST_BUCKET = "<your-bucket>"
 .venv/Scripts/python -m pytest tests/gcs/test_real_bucket_protocol.py -v
 ```
-Expected: PASS.
+Expected: PASS on the first run. A throwaway probe against this bucket on 2026-08-05 already observed exactly these values — `put308 committed=262144 finalized=None`, `query committed=262144 finalized=None` — so `_parse_committed`'s end-exclusive arithmetic is correct and real GCS does not finalize on the `bytes */total` probe the way fake-gcs-server does. This test exists to pin that behaviour permanently, not to discover it.
 
-**If it fails, stop and report before touching anything.** This is the single highest-risk unknown in the plan, and a red result means resume is wrong in production today. Capture the exact assertion, the response status, and the raw `Range` header value. Do not "fix" it inside this task — the finding is the deliverable, and the fix needs its own design conversation.
+**If it fails anyway, stop and report before touching anything.** A red result now means something changed rather than something was always broken. Capture the exact assertion, the response status, and the raw `Range` header value. Do not "fix" it inside this task — the finding is the deliverable, and the fix needs its own design conversation.
 
 - [ ] **Step 4: Commit**
 
@@ -779,7 +809,9 @@ git commit -m "test: prove real GCS enforces if_generation_match as a conflict"
 
 ### Task 6: Layer-1 server-side CRC rejection, and the taxonomy gap it exposes
 
-Layer 1 is "GCS rejects a corrupted write server-side". This is the one task with a real RED/GREEN cycle, because the expected finding is a `core` defect: `core/errors.py:125-138` maps 401, 403, 404, 412, 429, 408 and 5xx and nothing else, so GCS's **400** on a checksum mismatch falls through to `UNKNOWN` — "An unexpected error occurred." A corrupted-write rejection reading as an unexpected error defeats the taxonomy's entire purpose.
+Layer 1 is "GCS rejects a corrupted write server-side". This is the one task with a real RED/GREEN cycle, because it exposes a confirmed `core` defect: `core/errors.py:125-138` maps 401, 403, 404, 412, 429, 408 and 5xx and nothing else, so GCS's **400** on a checksum mismatch falls through to `UNKNOWN` — "An unexpected error occurred." A corrupted-write rejection reading as an unexpected error defeats the taxonomy's entire purpose.
+
+A probe against this bucket on 2026-08-05 confirmed the exact exception: `google.api_core.exceptions.BadRequest`, `code=400`, message beginning `Provided CRC32C hash ... doesn't match calculated CRC32C hash ...`. It carries `.code`, so `classify` reaches `_from_http_status`; the lowercase message contains `crc32c`, so Step 3's token match fires.
 
 The `DataCorruption` special-case at `core/errors.py:162` does not cover this path: it catches the client library's own validation, and we deliberately pass `checksum=None` because we set `blob.crc32c` ourselves.
 
@@ -899,11 +931,9 @@ $env:MMLCT_TEST_BUCKET = "<your-bucket>"
 ```
 Expected: 4 passed.
 
-Two outcomes are acceptable, and which one you got goes in your report:
-- The exception is a 400 naming the hash → Step 3's mapping is what makes this pass. Expected case.
-- The exception is `DataCorruption` (the client library validated before sending) → it was already classified correctly by `core/errors.py:162`, and Step 3's mapping is defensive rather than load-bearing. Keep it; the core tests still justify it.
+The probe already established which case this is: a 400 naming the hash, so Step 3's mapping is what makes this pass — load-bearing, not defensive.
 
-If the classification is anything else, report the exception type and message verbatim rather than widening the token list to force a pass.
+If the classification comes back as anything else, report the exception type and message verbatim rather than widening the token list to force a pass.
 
 - [ ] **Step 7: Run the whole suite**
 

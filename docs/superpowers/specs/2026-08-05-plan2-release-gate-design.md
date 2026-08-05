@@ -99,20 +99,33 @@ provision.
 | Authenticated | `gcloud auth list` | print `gcloud auth login` |
 | ADC available | `gcloud auth application-default print-access-token` | print `gcloud auth application-default login` |
 | Project configured | `gcloud config get project` | print `gcloud config set project <id>` |
-| Bucket exists | `gcloud storage buckets describe gs://$Bucket` | print the exact `buckets create` command |
+| Bucket metadata readable | `gcloud storage buckets describe gs://$Bucket` | warn, and skip the four metadata checks below — see "Metadata is best-effort" |
 | Storage class STANDARD | same describe | warn: minimum-storage-duration charges on temp slices |
 | Object versioning disabled | same describe | warn: teardown's deletes become noncurrent versions, so the bytes keep billing and "the bucket is clean" is not true |
-| No retention policy or bucket lock | same describe | **fail**: deletes are refused outright and the gate cannot clean up after itself |
-| Write / delete / compose permitted | probe object under `<prefix>/mmlct-preflight/`, composed then deleted | name the missing IAM role |
-| `mmlct-gate/` lifecycle rule | `buckets describe --format=json` | print the rule JSON and `buckets update` command |
+| No retention policy or bucket lock | same describe | warn: deletes would be refused; the probe's delete step is the real test |
+| `mmlct-gate/` lifecycle rule | same describe | warn: print the rule JSON and `buckets update` command |
+| **Write / compose / delete permitted** | probe objects under `<prefix>/mmlct-preflight/`, composed then deleted | **fail**: name the missing IAM role |
 
 Parameters: `-Bucket <name>` (required), `-Prefix <path>` (optional — the scratch folder
 inside an existing bucket), `-Project <id>` (optional, defaults to the configured project).
-Exit code 0 when every check passes, 1 if any check fails. Warnings — non-STANDARD storage
-class, object versioning — are printed but do not affect the exit code, since both are cost
-problems rather than correctness ones. A retention policy *is* a failure, because it breaks
-teardown. The final line on success prints the environment assignments to copy:
-`$env:MMLCT_TEST_BUCKET` and, when `-Prefix` was given, `$env:MMLCT_TEST_PREFIX`.
+Exit code 0 when every check passes, 1 if any check fails. Only the permission probe and
+the auth/ADC checks can fail; everything derived from bucket metadata warns. The final
+lines on success print the environment assignments to copy: `$env:MMLCT_TEST_BUCKET` and,
+when `-Prefix` was given, `$env:MMLCT_TEST_PREFIX`.
+
+### Metadata is best-effort; the probe is authoritative
+
+`storage.buckets.get` is a distinct permission from object access, and this project's own
+spec tells users to adopt least-privilege credentials with "object-level access to a single
+bucket". A preflight that hard-failed without bucket metadata would reject the exact IAM
+shape the product recommends — and the target bucket for this gate is configured that way.
+
+So metadata checks degrade to warnings that name what could not be verified, and the
+permission probe decides the exit code. The probe is the better test regardless: it
+exercises write, compose, and delete rather than describing the IAM that might permit them.
+Its delete step doubles as the retention-policy check, which is the one metadata failure
+that would actually break the gate — teardown would be refused after 2.6 GiB had been
+written.
 
 Provisioning is emitted rather than executed on purpose: a script that silently creates
 billable cloud resources on a machine whose state it has just admitted it does not know is
@@ -263,7 +276,17 @@ scrollback.
 
 Stated in advance so a red result is a confirmation rather than a scramble.
 
-**GCS's 400 on a checksum mismatch will classify as `UNKNOWN`, not `CHECKSUM_MISMATCH`.**
+A one-off probe against `gs://afsc_mml_ccep/scratch/` on 2026-08-05, using the same ADC
+path the tests use, settled two of these before implementation began. The probe is not a
+substitute for the tests — it was throwaway, and the gate needs durable assertions — but it
+means neither test is written blind.
+
+**CONFIRMED — GCS's 400 on a checksum mismatch classifies as `UNKNOWN`, not
+`CHECKSUM_MISMATCH`.** The probe produced
+`google.api_core.exceptions.BadRequest`, `code=400`, message beginning
+`Provided CRC32C hash ... doesn't match calculated CRC32C hash ...`. It carries `.code`,
+so `classify` reaches `_from_http_status`, which has no 400 branch and returns `None` →
+`UNKNOWN`. The lowercase message contains `crc32c`, so the token match below fires.
 `core/errors.py:125-138` maps 401, 403, 404, 412, 429, 408 and 5xx, and nothing else; 400
 falls through to `UNKNOWN`. The `DataCorruption` special-case at `core/errors.py:162` only
 catches the client library's own raise, which is not the path taken when we preset
@@ -272,10 +295,22 @@ catches the client library's own raise, which is not the path taken when we pres
 unit test alongside it, since leaving a corrupted-write rejection reading as "an unexpected
 error occurred" defeats the error taxonomy's entire purpose.
 
-**The resumable status query is the highest-risk unknown.** If real GCS's 308 `Range`
-semantics differ from the shimmed assumption in any way — inclusive-vs-exclusive end,
-absent header on a zero-byte commit — resume is wrong today and nothing in the suite knows.
-Test 1 is designed so that failure is unambiguous and cheap to reproduce.
+**RESOLVED — the resumable status query behaves as the shim assumed.** This was the
+highest-risk unknown: if real GCS's 308 `Range` semantics differed in any way
+(inclusive-vs-exclusive end, absent header on a zero-byte commit), resume would be wrong
+today and nothing in the suite would know. The probe initiated a 512 KiB session, PUT one
+256 KiB chunk, and queried:
+
+```text
+put308  committed=262144  finalized=None
+query   committed=262144  finalized=None
+```
+
+Both match `StatusQueryShim`'s fabricated answer exactly, so `_parse_committed`'s
+end-exclusive arithmetic is right and real GCS does not finalize on the `bytes */total`
+probe the way fake-gcs-server does. Test 1 still ships — the probe was throwaway and this
+behaviour must stay pinned — but it is now expected to pass on the first run, and a red
+result would mean something changed rather than something was always broken.
 
 ## Testing Strategy
 
