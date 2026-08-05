@@ -328,8 +328,9 @@ The gate is itself test code, so "how do we test the test" matters.
 ## Definition of Done
 
 - `pwsh tests/tools/preflight-gcs.ps1 -Bucket <name>` exits 0 on the operator's machine.
-- `pytest -m "real_bucket and not slow" -v` — 7 passed, 0 skipped (4 protocol tests plus
-  3 fixture self-checks).
+- `pytest -m "real_bucket and not slow" -v` — 8 passed, 0 skipped (4 protocol tests, 3
+  fixture self-checks, and the pre-existing `real_bucket` round-trip in
+  `tests/cli/test_interrupt_resume.py`, which the marker selection also collects).
 - `pytest -m "real_bucket and slow" -v` — 1 passed.
 - `pytest` with no marker selection — green, with `real_bucket` and `slow` tests skipping.
 - The gate record is filled in, committed, and its findings section is either empty or lists

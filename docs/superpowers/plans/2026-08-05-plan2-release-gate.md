@@ -440,10 +440,20 @@ def real_bucket_ctx():
     """The release gate's context: a real bucket and a unique run prefix.
 
     Session-scoped so one prefix covers the whole gate run. Teardown deletes
-    everything under the prefix -- including <name>.mmlct.tmp/<nnnn> slice
-    temps, which live under it by construction (gcs.uploader.slice_temp_name)
-    -- and fails the session if anything survives, so a leak surfaces as a red
-    test rather than a surprise bill.
+    every version -- live and noncurrent alike -- of every object under the
+    prefix, including <name>.mmlct.tmp/<nnnn> slice temps (which live under
+    it by construction, gcs.uploader.slice_temp_name), and fails the session
+    if anything survives, so a leak surfaces as a red test rather than a
+    surprise bill.
+
+    This matters because the target bucket has object versioning enabled
+    (proven empirically against afsc_mml_ccep on 2026-08-05: a deleted object
+    still shows up under `gcloud storage ls --all-versions`). Deleting only
+    the live object -- or checking emptiness with a live-only listing --
+    would leave a noncurrent version behind while reporting "clean". Teardown
+    therefore lists and deletes with versions=True and an explicit generation
+    per blob; a plain delete on a versioning-enabled bucket only creates
+    another noncurrent version rather than removing the one just listed.
 
     MMLCT_TEST_PREFIX confines the run to a scratch folder, so an in-use
     bucket is a valid target.
@@ -451,12 +461,11 @@ def real_bucket_ctx():
     bucket = os.environ.get("MMLCT_TEST_BUCKET")
     if not bucket:
         pytest.skip(
-            "set MMLCT_TEST_BUCKET (and ADC credentials) to run the release gate — "
+            "set MMLCT_TEST_BUCKET (and ADC credentials) to run the release gate - "
             "see docs/superpowers/gates/2026-08-05-plan2-release-gate.md"
         )
 
     from mml_cloud_transfer.gcs.client import make_context
-    from mml_cloud_transfer.gcs.objects import delete_object, list_prefix
 
     run_prefix = _gate_run_prefix(os.environ.get("MMLCT_TEST_PREFIX", ""))
     ctx = make_context(bucket)
@@ -470,10 +479,29 @@ def real_bucket_ctx():
         assert f"/{GATE_SEGMENT}/" in f"/{run_prefix}", (
             f"refusing to delete under {run_prefix!r} — it is not a gate prefix"
         )
-        for meta in list(list_prefix(ctx, run_prefix)):
-            delete_object(ctx, meta.name)
-        survivors = [m.name for m in list_prefix(ctx, run_prefix)]
-        assert not survivors, f"release gate leaked objects: {survivors}"
+        bucket_handle = ctx.client.bucket(ctx.bucket)
+        delete_errors: list[str] = []
+        # versions=True is what makes this correct on a versioning-enabled
+        # bucket: without it we would delete only live objects and then
+        # "verify" emptiness against a listing that cannot see what survived.
+        for blob in list(
+            ctx.client.list_blobs(ctx.bucket, prefix=run_prefix, versions=True)
+        ):
+            # One failed delete (transient 503, 403, an object hold, ...) must
+            # not abort the sweep -- that would leak every remaining object
+            # and skip the emptiness re-check below. Accumulate instead, and
+            # let the final assertion report everything at once.
+            try:
+                bucket_handle.delete_blob(blob.name, generation=blob.generation)
+            except Exception as exc:
+                delete_errors.append(f"{blob.name}#{blob.generation}: {exc}")
+        survivors = [
+            f"{b.name}#{b.generation}"
+            for b in ctx.client.list_blobs(ctx.bucket, prefix=run_prefix, versions=True)
+        ]
+        assert not survivors and not delete_errors, (
+            f"release gate leaked objects: {survivors}; delete errors: {delete_errors}"
+        )
 ```
 
 and extend the existing import block at the top of the file with the datetime import (`os`, `uuid`, and `pytest` are already imported):
@@ -1232,10 +1260,17 @@ Also required:
   on that bucket.
 - 6 GiB free disk for the scale test's source tree.
 - **No retention policy or bucket lock** — deletes would be refused and the gate
-  could not clean up after itself. Preflight fails on this.
-- Object versioning **disabled**, ideally. With it on, the gate's deletes leave
-  noncurrent versions that keep billing, and "the bucket is clean" is not true
-  even when every assertion passes. Preflight warns.
+  could not clean up after itself. Preflight's delete probe is the real test.
+- **Object versioning: supported either way.** The fixture's teardown lists with
+  `versions=True` and deletes by explicit generation, so it removes noncurrent
+  versions too. This matters: a plain delete on a versioned bucket merely adds
+  another noncurrent version instead of removing the one you listed, and a
+  live-only emptiness check would then report "clean" while the bytes remain.
+  `afsc_mml_ccep` **has versioning enabled** — confirmed empirically on
+  2026-08-05, since `storage.buckets.get` is denied and preflight cannot read it.
+  To check any bucket without that permission: write an object, delete it, then
+  `gcloud storage ls --all-versions` — a listed `name#generation` means versioning
+  is on.
 
 Recommended bucket lifecycle rule — the safety net for slice temp objects
 orphaned by a hard crash (`AbortIncompleteMultipartUpload` does not apply;
@@ -1257,7 +1292,7 @@ Apply with `gcloud storage buckets update gs://<bucket> --lifecycle-file=rule.js
 pwsh tests/tools/preflight-gcs.ps1 -Bucket <bucket> -Prefix <scratch-folder>   # must exit 0
 $env:MMLCT_TEST_BUCKET = "<bucket>"
 $env:MMLCT_TEST_PREFIX = "<scratch-folder>"                       # omit for a dedicated bucket
-.venv/Scripts/python -m pytest -m "real_bucket and not slow" -v   # 7 tests, <1 min
+.venv/Scripts/python -m pytest -m "real_bucket and not slow" -v   # 8 tests, ~1 min
 .venv/Scripts/python -m pytest -m "real_bucket and slow" -v       # 1 test, uplink-bound
 ```
 
@@ -1299,12 +1334,16 @@ _(One entry per surprise. Empty is a valid result.)_
 
 ## Teardown
 
-- [ ] `gcloud storage ls --recursive "gs://<bucket>/<prefix>/mmlct-gate/"` returns nothing
-- [ ] `gcloud storage ls --recursive "gs://<bucket>/<prefix>/mmlct-preflight/"` returns nothing
+Use `--all-versions` on every check. Without it a versioned bucket reports clean
+while the bytes are still there — the exact failure this gate had before the
+fixture was made version-aware.
+
+- [ ] `gcloud storage ls --all-versions --recursive "gs://<bucket>/<prefix>/mmlct-gate/**"` matches no objects
+- [ ] `gcloud storage ls --all-versions --recursive "gs://<bucket>/<prefix>/mmlct-preflight/**"` matches no objects
+- [ ] `gcloud storage ls --all-versions --recursive "gs://<bucket>/mmlct-test/**"` matches no objects
+      (bucket root — catches a regression of the legacy round-trip test's old unconfined prefix)
 - [ ] Nothing outside `<prefix>/` was created or modified — compare against the
       folder listing you took before the run
-- [ ] If versioning is enabled: `gcloud storage ls --all-versions --recursive` under
-      `<prefix>/` returns nothing, or the noncurrent versions were purged
 - [ ] Lifecycle rule in place (or noted as deliberately absent)
 - [ ] Local 2.6 GiB source tree removed (pytest's `tmp_path` cleanup handles this;
       confirm if the run was interrupted)
@@ -1320,7 +1359,7 @@ $env:MMLCT_TEST_PREFIX = "<scratch-folder>"
 .venv/Scripts/python -m pytest -m "real_bucket and not slow" -v
 .venv/Scripts/python -m pytest -m "real_bucket and slow" -v
 ```
-Expected: preflight exit 0; 7 passed; 1 passed.
+Expected: preflight exit 0; 8 passed; 1 passed.
 
 Before the first run, take a listing of the scratch folder's parent so the teardown checklist has something to compare against.
 
@@ -1347,7 +1386,7 @@ Plan 2's release gate is closed. The four behaviours the emulator cannot vouch f
 **Definition of done:**
 
 - `pwsh tests/tools/preflight-gcs.ps1 -Bucket <name>` exits 0.
-- `pytest -m "real_bucket and not slow" -v` — 7 passed, 0 skipped (3 fixture self-checks + 4 protocol tests).
+- `pytest -m "real_bucket and not slow" -v` — 8 passed, 0 skipped (3 fixture self-checks + 4 protocol tests + the round-trip in `tests/cli/test_interrupt_resume.py`, which is `real_bucket`-marked and therefore collected by the gate command).
 - `pytest -m "real_bucket and slow" -v` — 1 passed.
 - `pytest` with no marker selection — green, gate tests skipping, the 2 prefix-guard tests passing.
 - The gate record is filled in and committed; findings are either empty or filed as follow-ups.
