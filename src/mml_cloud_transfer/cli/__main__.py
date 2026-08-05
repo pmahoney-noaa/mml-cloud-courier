@@ -105,10 +105,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
         return 0
 
-    if args.command == "transfer":
-        return run_transfer(args)
-    if args.command == "resume":
-        return run_resume(args)
+    if args.command in ("transfer", "resume"):
+        dispatch = run_transfer if args.command == "transfer" else run_resume
+        try:
+            return dispatch(args)
+        except ValueError as exc:
+            print(str(exc))
+            return 2
     if args.command == "status":
         return run_status(args)
     if args.command == "report":

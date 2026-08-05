@@ -296,6 +296,51 @@ def test_mark_changed_resets_transfer_progress_and_is_retried(repo):
     assert [f["id"] for f in repo.iter_pending_files(job_id)] == [file_id]
 
 
+def test_mark_skipped_persists_proven_checksums_and_clears_errors(repo):
+    """IMPORTANT 3 regression: a skip is a proven match (dest already has the
+    right size+CRC), so the proven values must be recorded, not discarded —
+    and any stale error from an earlier failed attempt must be cleared, same
+    as mark_verified does.
+    """
+    job_id = repo.create_job(
+        name="j", direction=Direction.UPLOAD, source_root=r"C:\data", dest_prefix=""
+    )
+    repo.add_planned_files(job_id, make_files(1))
+    file_id = repo.get_files(job_id)[0]["id"]
+    repo.mark_failed(file_id, ErrorCategory.NETWORK, "earlier drop")
+
+    repo.mark_skipped(
+        file_id, local_crc32c=42, remote_crc32c=42, generation=99, sha256="ab"
+    )
+
+    row = repo.get_files(job_id)[0]
+    assert row["state"] == FileState.SKIPPED.value
+    assert row["local_crc32c"] == 42
+    assert row["remote_crc32c"] == 42
+    assert row["generation"] == 99
+    assert row["sha256"] == "ab"
+    assert row["error_category"] is None
+    assert row["error_message"] is None
+    assert row["finished_at"] is not None
+
+
+def test_mark_skipped_with_no_values_stays_backward_compatible(repo):
+    job_id = repo.create_job(
+        name="j", direction=Direction.UPLOAD, source_root=r"C:\data", dest_prefix=""
+    )
+    repo.add_planned_files(job_id, make_files(1))
+    file_id = repo.get_files(job_id)[0]["id"]
+
+    repo.mark_skipped(file_id)
+
+    row = repo.get_files(job_id)[0]
+    assert row["state"] == FileState.SKIPPED.value
+    assert row["local_crc32c"] is None
+    assert row["remote_crc32c"] is None
+    assert row["generation"] is None
+    assert row["sha256"] is None
+
+
 def test_state_survives_reopening_the_database(tmp_path):
     conn = connect(tmp_path / "jobs.db")
     repo = JobRepository(conn)

@@ -99,3 +99,18 @@ def test_clear_slices_removes_all_rows(repo, file_id):
     repo.upsert_slice(file_id, 1, offset=10, length=10)
     repo.clear_slices(file_id)
     assert repo.get_slices(file_id) == []
+
+
+def test_mark_changed_clears_stale_slices(repo, file_id):
+    """CRITICAL 1 regression: a same-size in-place rewrite must not let resume
+    reuse content-A slice temp objects recorded before the change was seen.
+    """
+    from mml_cloud_transfer.core.models import FileState
+
+    repo.upsert_slice(file_id, 0, offset=0, length=10, crc32c=111, state=SliceState.UPLOADED)
+    repo.upsert_slice(file_id, 1, offset=10, length=10, crc32c=222, state=SliceState.UPLOADED)
+
+    repo.mark_changed(file_id, 999, 1_800_000_000_000_000_000)
+
+    assert repo.get_slices(file_id) == []
+    assert repo.get_file(file_id)["state"] == FileState.CHANGED.value

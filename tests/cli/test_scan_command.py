@@ -120,6 +120,29 @@ def test_scan_reports_a_missing_source_without_crashing(tmp_path):
     assert len(outcome.errors) == 1
 
 
+def test_scan_errors_are_persisted_as_events(tmp_path):
+    """IMPORTANT 4 regression: scan errors must be visible in the job's event
+    log, not just in the in-memory ScanOutcome — a report generated later
+    (or a resumed job) reads events, not the return value of this call.
+    """
+    db = tmp_path / "jobs.db"
+    outcome = run_scan(
+        db_path=db,
+        source_root=str(tmp_path / "nope"),
+        dest_prefix="",
+        job_name="j",
+        follow_extended=False,
+    )
+    conn = connect(db)
+    events = JobRepository(conn).get_events(outcome.job_id)
+    conn.close()
+
+    scan_error_events = [e for e in events if e["kind"] == "scan_error"]
+    assert len(scan_error_events) == 1
+    assert outcome.errors[0].category.value in scan_error_events[0]["detail"]
+    assert outcome.errors[0].message in scan_error_events[0]["detail"]
+
+
 def test_main_returns_zero_on_success(tmp_path, tree, capsys):
     code = main(
         [

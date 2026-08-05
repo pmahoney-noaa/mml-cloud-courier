@@ -6,7 +6,7 @@ import pytest
 
 import mml_cloud_transfer.engine.runner as runner
 from mml_cloud_transfer.core.errors import ErrorCategory
-from mml_cloud_transfer.core.models import Direction, FileState, JobStatus
+from mml_cloud_transfer.core.models import Direction, FileState, JobStatus, SliceState
 from mml_cloud_transfer.core.retry import RetrySchedule
 from mml_cloud_transfer.engine.runner import EngineOptions, run_job
 from mml_cloud_transfer.gcs.objects import ObjectMeta
@@ -179,6 +179,108 @@ def test_changed_source_is_requeued_once_then_transferred(job, monkeypatch, tmp_
     conn.close()
     assert row["size_bytes"] == 150
     assert row["state"] == FileState.VERIFIED.value
+
+
+def test_changed_source_clears_stale_slices_before_retransfer(job, monkeypatch, tmp_path):
+    """CRITICAL 1 regression: slices recorded against the OLD content must be
+    gone before the retry transfers the new content, or resume could reuse a
+    stale temp object / CRC and Layer 2 would verify a chimera object.
+    """
+    db, job_id = job
+    conn = connect(db)
+    repo = JobRepository(conn)
+    file_id = [
+        r for r in repo.get_files(job_id) if r["relative_path"] == "a.bin"
+    ][0]["id"]
+    # Slices left behind from an earlier attempt against the file's old content.
+    repo.upsert_slice(
+        file_id, 0, offset=0, length=100, crc32c=999, state=SliceState.UPLOADED
+    )
+    conn.close()
+
+    # In-place rewrite: same-ish size, different bytes.
+    (tmp_path / "src" / "a.bin").write_bytes(b"a" * 150)
+
+    seen_slices_at_transfer = {}
+
+    def capture(ctx, path, name, **k):
+        if name == "p/a.bin":
+            conn2 = connect(db)
+            seen_slices_at_transfer["a.bin"] = JobRepository(conn2).get_slices(file_id)
+            conn2.close()
+            return verified(150)
+        return verified(100)
+
+    monkeypatch.setattr(runner, "upload_single_shot", capture)
+    monkeypatch.setattr(runner, "get_meta", lambda ctx, name: None)
+    status = run_job(db, job_id, ctx=None, options=opts())
+
+    assert status is JobStatus.COMPLETE
+    assert seen_slices_at_transfer["a.bin"] == []
+
+    conn = connect(db)
+    row = JobRepository(conn).get_file(file_id)
+    conn.close()
+    assert row["state"] == FileState.VERIFIED.value
+    assert row["size_bytes"] == 150
+
+
+def test_checksum_mismatch_clears_stale_slices(job, monkeypatch):
+    """IMPORTANT 5 regression: a checksum-mismatch failure must clear slice
+    state, or the next attempt starts from a sticky, already-broken state
+    until the file is quarantined many attempts later.
+    """
+    from mml_cloud_transfer.gcs.uploader import ChecksumMismatch
+
+    db, job_id = job
+    conn = connect(db)
+    repo = JobRepository(conn)
+    file_id = [
+        r for r in repo.get_files(job_id) if r["relative_path"] == "a.bin"
+    ][0]["id"]
+    repo.upsert_slice(
+        file_id, 0, offset=0, length=100, crc32c=1, state=SliceState.UPLOADED
+    )
+    conn.close()
+
+    monkeypatch.setattr(
+        runner, "upload_single_shot",
+        lambda *a, **k: (_ for _ in ()).throw(ChecksumMismatch("mismatch")),
+    )
+    monkeypatch.setattr(runner, "get_meta", lambda ctx, name: None)
+    run_job(db, job_id, ctx=None, options=opts())
+
+    conn = connect(db)
+    slices = JobRepository(conn).get_slices(file_id)
+    row = JobRepository(conn).get_file(file_id)
+    conn.close()
+    assert slices == []
+    assert row["state"] == FileState.FAILED.value
+    assert row["error_category"] == ErrorCategory.CHECKSUM_MISMATCH.value
+
+
+def test_error_messages_are_scrubbed_of_url_query_strings(job, monkeypatch):
+    """MINOR 7 regression: resumable session URIs carry bearer tokens in
+    their query string — they must never reach the database or the report.
+    """
+    db, job_id = job
+    monkeypatch.setattr(
+        runner, "upload_single_shot",
+        lambda *a, **k: (_ for _ in ()).throw(
+            RuntimeError("PUT https://host/upload?upload_id=SECRET123 failed")
+        ),
+    )
+    monkeypatch.setattr(runner, "get_meta", lambda ctx, name: None)
+    run_job(db, job_id, ctx=None, options=opts())
+
+    conn = connect(db)
+    rows = JobRepository(conn).get_files(job_id)
+    conn.close()
+    messages = [r["error_message"] for r in rows if r["error_message"]]
+    assert messages, "expected at least one failed file with an error message"
+    for message in messages:
+        assert "SECRET123" not in message
+        assert "?..." in message
 
 
 def test_source_changing_twice_fails_as_source_changed(job, monkeypatch, tmp_path):

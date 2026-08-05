@@ -89,6 +89,23 @@ def run_scan(
         if batch:
             repo.add_planned_files(job_id, batch, policy=policy)
 
+        # Scan errors are otherwise invisible: a job can reach COMPLETE with
+        # files silently unplanned. Persist them as events so the report and
+        # exit code can surface them. Capped so a pathological tree (e.g. a
+        # permissions-locked share) can't blow up the events table.
+        _SCAN_ERROR_CAP = 200
+        for index, error in enumerate(errors):
+            if index >= _SCAN_ERROR_CAP:
+                repo.record_event(
+                    job_id,
+                    "scan_error",
+                    f"and {len(errors) - _SCAN_ERROR_CAP} more scan errors",
+                )
+                break
+            repo.record_event(
+                job_id, "scan_error", f"[{error.category.value}] {error.message}"[:500]
+            )
+
         repo.record_event(
             job_id, "scan_finished", f"files={file_count} bytes={byte_count} errors={len(errors)}"
         )

@@ -108,6 +108,47 @@ def test_complete_job_reports_complete(tmp_path):
     assert "COMPLETE" in paths.report_html.read_text(encoding="utf-8")
 
 
+def test_summary_and_html_surface_scan_errors(tmp_path):
+    """IMPORTANT 4 regression: scan errors recorded as events must show up in
+    both summary.json and report.html, or a job can look COMPLETE while
+    files were silently unplanned.
+    """
+    db = tmp_path / "jobs.db"
+    conn = connect(db)
+    repo = JobRepository(conn)
+    job_id = repo.create_job(
+        name="partial-scan", direction=Direction.UPLOAD,
+        source_root=r"C:\x", dest_prefix="",
+    )
+    repo.add_planned_files(job_id, make_files(1))
+    repo.mark_verified(
+        repo.get_files(job_id)[0]["id"], local_crc32c=1, remote_crc32c=1, generation=1
+    )
+    repo.record_event(job_id, "scan_error", "[permission_denied] denied (C:\\locked)")
+    repo.record_event(job_id, "scan_error", "[not_found] vanished (C:\\gone)")
+    repo.finish_job(job_id, JobStatus.COMPLETE)
+    conn.close()
+
+    paths = write_report(db, job_id, tmp_path / "out")
+
+    summary = json.loads(paths.summary_json.read_text(encoding="utf-8"))
+    assert summary["scan_errors"] == 2
+
+    html = paths.report_html.read_text(encoding="utf-8")
+    assert "Scan errors (2)" in html
+    assert "permission_denied" in html
+    assert "C:\\locked" in html
+
+
+def test_summary_scan_errors_is_zero_when_none_recorded(finished_job, tmp_path):
+    db, job_id = finished_job
+    paths = write_report(db, job_id, tmp_path / "out")
+
+    summary = json.loads(paths.summary_json.read_text(encoding="utf-8"))
+    assert summary["scan_errors"] == 0
+    assert "Scan errors" not in paths.report_html.read_text(encoding="utf-8")
+
+
 def test_failure_groups_are_capped_at_fifty_with_overflow_line(tmp_path):
     db = tmp_path / "jobs.db"
     conn = connect(db)

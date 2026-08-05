@@ -63,9 +63,11 @@ def write_report(
         repo = JobRepository(conn)
         job = repo.get_job(job_id)
         rows = repo.get_files(job_id)
+        events = repo.get_events(job_id)
     finally:
         conn.close()
 
+    scan_error_events = [e for e in events if e["kind"] == "scan_error"]
     counts = Counter(r["state"] for r in rows)
     failures = [r for r in rows if r["error_category"] is not None]
     errors_by_category = Counter(r["error_category"] for r in failures)
@@ -98,6 +100,7 @@ def write_report(
         ),
         "counts": dict(counts),
         "errors_by_category": dict(errors_by_category),
+        "scan_errors": len(scan_error_events),
     }
     summary_path = out / "summary.json"
     summary_path.write_text(
@@ -129,14 +132,14 @@ def write_report(
             )
 
     html_path = out / "report.html"
-    html_path.write_text(_render_html(summary, failures), encoding="utf-8")
+    html_path.write_text(_render_html(summary, failures, scan_error_events), encoding="utf-8")
 
     return ReportPaths(
         summary_json=summary_path, manifest_csv=csv_path, report_html=html_path
     )
 
 
-def _render_html(summary: dict, failures) -> str:
+def _render_html(summary: dict, failures, scan_error_events=()) -> str:
     ok = summary["verdict"] == "COMPLETE"
     banner_color = "#166534" if ok else "#991b1b"
     banner_bg = "#dcfce7" if ok else "#fee2e2"
@@ -181,6 +184,19 @@ def _render_html(summary: dict, failures) -> str:
         "".join(failure_sections) if failure_sections else "<p>No failures.</p>"
     )
 
+    scan_errors_html = ""
+    if scan_error_events:
+        shown = scan_error_events[:_MAX_FAILURES_SHOWN]
+        items = "".join(f"<li>{esc(e['detail'])}</li>" for e in shown)
+        more = (
+            f"<p>… and {len(scan_error_events) - len(shown)} more.</p>"
+            if len(scan_error_events) > len(shown)
+            else ""
+        )
+        scan_errors_html = (
+            f"<h2>Scan errors ({len(scan_error_events)})</h2><ul>{items}</ul>{more}"
+        )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -198,6 +214,7 @@ code {{ background: #f1f5f9; padding: .1rem .3rem; border-radius: 3px; }}
 <body>
 <div class="banner">{esc(summary["verdict"])}</div>
 <table>{stats}</table>
+{scan_errors_html}
 <h2>Failures</h2>
 {failures_html}
 </body>

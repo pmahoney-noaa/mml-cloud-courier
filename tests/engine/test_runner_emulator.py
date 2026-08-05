@@ -63,3 +63,31 @@ def test_upload_then_download_round_trip(ctx, tmp_path):
         original = (src / rel).read_bytes()
         fetched = (down_root / rel).read_bytes()
         assert fetched == original, f"{rel} did not round-trip"
+
+
+@pytest.mark.emulator
+def test_scan_remote_skips_zero_byte_directory_marker_objects(ctx, tmp_path):
+    """MINOR 9 regression: zero-byte objects whose name ends in '/' (the
+    "directory" placeholders written by gsutil/Console when you create an
+    empty folder) are not real files and must not be planned for download.
+    """
+    bucket = ctx.client.bucket(ctx.bucket)
+    bucket.blob("rt/sub/").upload_from_string(b"")
+    bucket.blob("rt/sub/real.bin").upload_from_string(b"hello")
+
+    db = tmp_path / "jobs.db"
+    conn = connect(db)
+    repo = JobRepository(conn)
+    job_id = repo.create_job(
+        name="down", direction=Direction.DOWNLOAD,
+        source_root=str(tmp_path / "down"), dest_prefix="rt",
+    )
+    conn.close()
+
+    count = scan_remote(ctx, db, job_id)
+    assert count == 1
+
+    conn = connect(db)
+    rows = JobRepository(conn).get_files(job_id)
+    conn.close()
+    assert [r["relative_path"] for r in rows] == ["sub/real.bin"]

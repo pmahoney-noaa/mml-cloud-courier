@@ -37,6 +37,8 @@ def _options(args) -> EngineOptions:
     if args.size_policy:
         options.policy = parse_size_policy(args.size_policy)
     if args.workers is not None:
+        if args.workers < 1:
+            raise ValueError("--workers must be >= 1")
         options.file_workers = args.workers
     return options
 
@@ -66,6 +68,7 @@ def run_transfer(args) -> int:
     options = _options(args)
     ctx = _context(args)
     direction = Direction(args.direction)
+    scan_error_count = 0
 
     if direction is Direction.UPLOAD:
         outcome = run_scan(
@@ -73,6 +76,7 @@ def run_transfer(args) -> int:
             job_name=args.name, policy=options.policy,
         )
         job_id = outcome.job_id
+        scan_error_count = len(outcome.errors)
         print(f"Scanned {outcome.file_count} files")
         if outcome.errors:
             print(f"{len(outcome.errors)} scan error(s) — see the report")
@@ -100,7 +104,11 @@ def run_transfer(args) -> int:
             conn.close()
 
     status = run_job(args.db, job_id, ctx, options=options)
-    return _finish(args, args.db, job_id, status)
+    code = _finish(args, args.db, job_id, status)
+    # A scan that failed to enumerate every file is not a complete transfer,
+    # even if every file it did find made it — force a nonzero exit so the
+    # caller doesn't treat this as success.
+    return 1 if scan_error_count else code
 
 
 def run_resume(args) -> int:
@@ -115,8 +123,11 @@ def run_resume(args) -> int:
     finally:
         conn.close()
 
+    # Validate options (e.g. --workers) before building the GCS context, so
+    # a bad flag fails cleanly without touching credentials or the network.
+    options = _options(args)
     ctx = _context(args)
-    status = run_job(args.db, args.job_id, ctx, options=_options(args))
+    status = run_job(args.db, args.job_id, ctx, options=options)
     return _finish(args, args.db, args.job_id, status)
 
 

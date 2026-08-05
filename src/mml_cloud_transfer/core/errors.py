@@ -168,6 +168,18 @@ def classify(exc: BaseException) -> Classification:
         if category is not None:
             return _build(category)
 
+    # requests' ConnectionError/ReadTimeout/ChunkedEncodingError subclass
+    # OSError, so this must run before the isinstance(exc, OSError) check
+    # below or that branch would swallow them into UNKNOWN. Matched by
+    # module rather than an import, to keep this module dependency-free.
+    module = type(exc).__module__
+    if module.startswith(("requests", "urllib3")):
+        return _build(ErrorCategory.NETWORK)
+    if type(exc).__name__ in ("RefreshError", "DefaultCredentialsError") and module.startswith(
+        "google.auth"
+    ):
+        return _build(ErrorCategory.CREDENTIAL)
+
     if isinstance(exc, OSError):
         return _build(_from_os_error(exc))
 

@@ -229,11 +229,28 @@ class JobRepository:
             ),
         )
 
-    def mark_skipped(self, file_id: int) -> None:
+    def mark_skipped(
+        self,
+        file_id: int,
+        *,
+        local_crc32c: int | None = None,
+        remote_crc32c: int | None = None,
+        generation: int | None = None,
+        sha256: str | None = None,
+    ) -> None:
         self._conn.execute(
-            "UPDATE job_files SET state = ?, heartbeat_at = NULL, finished_at = ?"
-            " WHERE id = ?",
-            (FileState.SKIPPED.value, _now(), file_id),
+            "UPDATE job_files SET state = ?, local_crc32c = ?, remote_crc32c = ?,"
+            " generation = ?, sha256 = ?, error_category = NULL, error_message = NULL,"
+            " heartbeat_at = NULL, finished_at = ? WHERE id = ?",
+            (
+                FileState.SKIPPED.value,
+                local_crc32c,
+                remote_crc32c,
+                generation,
+                sha256,
+                _now(),
+                file_id,
+            ),
         )
 
     def mark_failed(self, file_id: int, category: ErrorCategory, message: str) -> None:
@@ -250,6 +267,11 @@ class JobRepository:
             " WHERE id = ?",
             (FileState.CHANGED.value, size_bytes, mtime_ns, file_id),
         )
+        # A same-size in-place rewrite must not let a later resume reuse
+        # content-A slice temp objects/CRCs recorded before this change was
+        # detected — otherwise Layer 2 can verify a chimera of old and new
+        # bytes. See CRITICAL 1 in the final-review report.
+        self._conn.execute("DELETE FROM file_slices WHERE file_id = ?", (file_id,))
 
     def quarantine(self, file_id: int) -> None:
         self._conn.execute(

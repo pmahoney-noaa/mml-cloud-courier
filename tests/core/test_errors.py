@@ -1,3 +1,7 @@
+import google.auth.exceptions
+import requests.exceptions
+import urllib3.exceptions
+
 from mml_cloud_transfer.core.errors import Classification, ErrorCategory, classify
 
 
@@ -94,3 +98,39 @@ def test_every_classification_carries_user_facing_text():
         result = classify(exc)
         assert result.message
         assert result.action
+
+
+# CRITICAL 2 regression: requests/urllib3 transport errors and
+# google.auth.exceptions.RefreshError must not fall through to UNKNOWN, or
+# every multi-GB raw-session transfer gets zero retry and credential
+# failures don't pause the job.
+
+
+def test_requests_connection_error_is_transient_network():
+    result = classify(requests.exceptions.ConnectionError("connection broke"))
+    assert result.category is ErrorCategory.NETWORK
+    assert result.transient is True
+
+
+def test_requests_read_timeout_is_transient_network():
+    result = classify(requests.exceptions.ReadTimeout("timed out"))
+    assert result.category is ErrorCategory.NETWORK
+    assert result.transient is True
+
+
+def test_requests_chunked_encoding_error_is_transient_network():
+    result = classify(requests.exceptions.ChunkedEncodingError("truncated"))
+    assert result.category is ErrorCategory.NETWORK
+    assert result.transient is True
+
+
+def test_urllib3_protocol_error_is_transient_network():
+    result = classify(urllib3.exceptions.ProtocolError("connection aborted"))
+    assert result.category is ErrorCategory.NETWORK
+    assert result.transient is True
+
+
+def test_google_auth_refresh_error_pauses_the_job_as_credential():
+    result = classify(google.auth.exceptions.RefreshError("token refresh failed"))
+    assert result.category is ErrorCategory.CREDENTIAL
+    assert result.pauses_job is True

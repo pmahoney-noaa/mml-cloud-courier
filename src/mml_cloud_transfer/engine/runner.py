@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -49,6 +50,14 @@ from mml_cloud_transfer.store.repository import JobRepository
 
 class JobPaused(Exception):
     """Raised inside a worker when retrying anything else is pointless."""
+
+
+_QUERY_STRING = re.compile(r"\?[^\s\"']+")
+
+
+def _scrub(message: str) -> str:
+    """Strip URL query strings (session tokens are bearer credentials)."""
+    return _QUERY_STRING.sub("?...", message)
 
 
 @dataclass
@@ -86,8 +95,12 @@ def scan_remote(ctx, db_path, job_id: int, *, policy: SizePolicy | None = None) 
         batch: list[PlannedFile] = []
         count = 0
         for meta in list_prefix(ctx, lead):
+            if meta.name.endswith("/"):
+                # A zero-byte "directory" placeholder object (gsutil/Console
+                # create these for empty folders) — not a real file.
+                continue
             relative = meta.name[len(lead):]
-            if not relative:  # a zero-byte "directory" placeholder object
+            if not relative:
                 continue
             batch.append(
                 PlannedFile(
@@ -242,7 +255,13 @@ def _transfer_once(ctx, db_path, repo: JobRepository, job, row, options: EngineO
         )
 
     if result.state == "skipped":
-        repo.mark_skipped(file_id)
+        repo.mark_skipped(
+            file_id,
+            local_crc32c=result.local_crc32c,
+            remote_crc32c=result.remote_crc32c,
+            generation=result.generation,
+            sha256=result.sha256,
+        )
     else:
         repo.mark_verified(
             file_id,
@@ -268,7 +287,7 @@ def _process_file(
                 size, mtime = _stat_source(row["source_path"])
             except OSError as exc:
                 cls = classify(exc)
-                repo.mark_failed(file_id, cls.category, str(exc)[:500])
+                repo.mark_failed(file_id, cls.category, _scrub(str(exc))[:500])
                 return
             if size != row["size_bytes"] or mtime != row["mtime_ns"]:
                 if row["state"] == FileState.CHANGED.value:
@@ -291,7 +310,11 @@ def _process_file(
                 return
             except Exception as exc:
                 category, transient, pauses = _classify_transfer_error(exc)
-                repo.mark_failed(file_id, category, str(exc)[:500])
+                repo.mark_failed(file_id, category, _scrub(str(exc))[:500])
+                if category is ErrorCategory.CHECKSUM_MISMATCH:
+                    # Don't let the next attempt reuse slice state recorded
+                    # against the bytes that just failed verification.
+                    repo.clear_slices(file_id)
                 if pauses:
                     raise JobPaused(str(exc)) from exc
                 cumulative = repo.get_file(file_id)["attempts"]
