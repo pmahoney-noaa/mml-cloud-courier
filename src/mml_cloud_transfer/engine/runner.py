@@ -427,6 +427,7 @@ def run_job(
 
         if paused:
             repo.finish_job(job_id, JobStatus.PAUSED)
+            repo.record_event(job_id, "run_finished", JobStatus.PAUSED.value)
             return JobStatus.PAUSED
 
         if options.audit:

@@ -107,6 +107,12 @@ class JobRepository:
             (generation, file_id),
         )
 
+    def set_audit_hash(self, job_id: int, enabled: bool) -> None:
+        self.get_job(job_id)  # LookupError on a bogus id, matching get_precondition
+        self._conn.execute(
+            "UPDATE jobs SET audit_hash = ? WHERE id = ?", (int(enabled), job_id)
+        )
+
     def get_precondition(self, file_id: int) -> int | None:
         row = self._conn.execute(
             "SELECT precondition_generation FROM job_files WHERE id = ?", (file_id,)

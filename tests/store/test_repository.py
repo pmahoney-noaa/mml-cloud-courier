@@ -374,3 +374,19 @@ def test_add_planned_files_honours_a_size_policy(repo):
     )
     repo.add_planned_files(job_id, make_files(1, size=100), policy=tiny)
     assert repo.get_files(job_id)[0]["method"] == TransferMethod.SLICED.value
+
+
+def test_set_audit_hash_flips_the_flag(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    repo = JobRepository(conn)
+    job_id = repo.create_job(
+        name="j", direction=Direction.UPLOAD, source_root="s", dest_prefix=""
+    )
+    assert repo.get_job(job_id)["audit_hash"] == 0
+    repo.set_audit_hash(job_id, True)
+    assert repo.get_job(job_id)["audit_hash"] == 1
+    repo.set_audit_hash(job_id, False)
+    assert repo.get_job(job_id)["audit_hash"] == 0
+    with pytest.raises(LookupError):
+        repo.set_audit_hash(999, True)
+    conn.close()

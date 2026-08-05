@@ -236,9 +236,13 @@ permissions error, a file lock, or an over-long path — the most common real-wo
 The scan records size and mtime; a source file that changes between scan and transfer is
 marked `changed` and reported rather than shipped silently.
 
-**Optional SHA-256** is computed in the same single read pass, so enabling it costs CPU but
-no additional I/O. It is stored in `job_files` and stamped into the object's custom
-metadata so the hash travels with the object.
+**Optional SHA-256** is computed in the same single read pass for single-shot and
+single-session resumable files, so there it costs CPU but no additional I/O. Sliced
+files (> 1 GiB) hash their slices in parallel and out of order, so the whole-file
+SHA-256 requires one additional sequential read of the source after the slices
+complete — enabling the audit hash roughly doubles local read I/O for the largest
+files. It is stored in `job_files` and stamped into the object's custom metadata so
+the hash travels with the object.
 
 ### Why not read-back verification
 

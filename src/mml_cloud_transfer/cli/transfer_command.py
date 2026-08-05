@@ -97,9 +97,7 @@ def run_transfer(args) -> int:
     if direction is Direction.UPLOAD and args.audit_hash:
         conn = connect(args.db)
         try:
-            conn.execute(
-                "UPDATE jobs SET audit_hash = 1 WHERE id = ?", (job_id,)
-            )
+            JobRepository(conn).set_audit_hash(job_id, True)
         finally:
             conn.close()
 

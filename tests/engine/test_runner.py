@@ -354,3 +354,17 @@ def test_precondition_is_captured_before_the_first_attempt(job, monkeypatch):
     )
     run_job(db, job_id, ctx=None, options=opts())
     assert seen == {"p/a.bin": 42, "p/b.bin": 0}
+
+
+def test_paused_run_still_records_run_finished(job, monkeypatch):
+    db, job_id = job
+    monkeypatch.setattr(
+        runner, "upload_single_shot",
+        lambda *a, **k: (_ for _ in ()).throw(FakeApiError(403)),
+    )
+    monkeypatch.setattr(runner, "get_meta", lambda ctx, name: None)
+    run_job(db, job_id, ctx=None, options=opts())
+    conn = connect(db)
+    pairs = [(e["kind"], e["detail"]) for e in JobRepository(conn).get_events(job_id)]
+    conn.close()
+    assert ("run_finished", JobStatus.PAUSED.value) in pairs
