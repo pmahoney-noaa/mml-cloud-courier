@@ -48,6 +48,20 @@ def _b64_or_empty(value: int | None) -> str:
     return crc32c_to_base64(value) if value is not None else ""
 
 
+def _tmp_path(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".tmp")
+
+
+def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Write to a sibling temp file then `os.replace` into place — atomic on
+    Windows — so a concurrent reader (or a second writer: the worker's
+    automatic report and the API's POST /report can both write these files)
+    never observes a truncated/interleaved file."""
+    tmp = _tmp_path(path)
+    tmp.write_text(text, encoding=encoding)
+    os.replace(tmp, path)
+
+
 def write_report(
     db_path,
     job_id: int,
@@ -103,12 +117,13 @@ def write_report(
         "scan_errors": len(scan_error_events),
     }
     summary_path = out / "summary.json"
-    summary_path.write_text(
-        json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8"
+    _atomic_write_text(
+        summary_path, json.dumps(summary, indent=2, ensure_ascii=False)
     )
 
     csv_path = out / "manifest.csv"
-    with csv_path.open("w", newline="", encoding="utf-8") as fp:
+    csv_tmp = _tmp_path(csv_path)
+    with csv_tmp.open("w", newline="", encoding="utf-8") as fp:
         writer = csv.DictWriter(fp, fieldnames=_CSV_COLUMNS)
         writer.writeheader()
         for r in rows:
@@ -130,9 +145,10 @@ def write_report(
                     "finished_at": r["finished_at"] or "",
                 }
             )
+    os.replace(csv_tmp, csv_path)
 
     html_path = out / "report.html"
-    html_path.write_text(_render_html(summary, failures, scan_error_events), encoding="utf-8")
+    _atomic_write_text(html_path, _render_html(summary, failures, scan_error_events))
 
     return ReportPaths(
         summary_json=summary_path, manifest_csv=csv_path, report_html=html_path

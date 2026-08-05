@@ -245,7 +245,7 @@ def test_get_job_raises_lookup_error_for_an_unknown_id(repo):
         repo.get_job(999)
 
 
-def test_heartbeat_updates_timestamp_and_bytes_transferred(repo):
+def test_heartbeat_does_not_write_bytes_transferred(repo):
     job_id = repo.create_job(
         name="j", direction=Direction.UPLOAD, source_root=r"C:\data", dest_prefix=""
     )
