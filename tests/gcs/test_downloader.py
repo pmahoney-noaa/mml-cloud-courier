@@ -106,6 +106,27 @@ def test_completed_ranges_are_not_refetched_on_resume(ctx, remote, tmp_path):
 
 
 @pytest.mark.emulator
+def test_stale_range_states_without_a_part_file_are_ignored(ctx, remote, tmp_path):
+    # Claimed CRCs without their bytes must NOT be honored: with no .part
+    # file, everything is re-fetched and the result is still correct.
+    dest = tmp_path / "s2.bin"
+    events_a = []
+    download_file(ctx, "d/big.bin", str(dest), range_bytes=RANGE,
+                  on_progress=lambda i, d, c: events_a.append((i, c)))
+    states = {i: c for i, c in events_a if c is not None}
+    dest.unlink()  # both dest and part are now gone
+
+    fetched = []
+    result = download_file(ctx, "d/big.bin", str(dest), range_bytes=RANGE,
+                           range_states=states,
+                           on_progress=lambda i, d, c: fetched.append(i))
+    assert result.state == "verified"
+    assert set(fetched) == {0, 1, 2, 3}          # everything re-fetched
+    assert result.bytes_received == len(remote)
+    assert dest.read_bytes() == remote
+
+
+@pytest.mark.emulator
 def test_matching_local_file_is_skipped(ctx, remote, tmp_path):
     dest = tmp_path / "s.bin"
     download_file(ctx, "d/big.bin", str(dest), range_bytes=RANGE)

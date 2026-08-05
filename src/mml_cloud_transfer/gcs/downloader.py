@@ -138,33 +138,12 @@ def download_file(
 
     # Create/size the part file. A part file of the wrong size belongs to a
     # different generation or range layout — start over in that case.
-    if part.exists():
-        if part.stat().st_size != meta.size:
-            # Part file exists but wrong size -> different generation/layout, start over
-            with part.open("wb") as fp:
-                if meta.size:
-                    fp.seek(meta.size - 1)
-                    fp.write(b"\0")
-            range_states = {}
-    else:
-        # Part file doesn't exist -> create it (preserving any passed-in range_states)
+    if not part.exists() or part.stat().st_size != meta.size:
         with part.open("wb") as fp:
             if meta.size:
                 fp.seek(meta.size - 1)
                 fp.write(b"\0")
-
-    # Restore data from destination or part file if available (for resume scenarios).
-    # Destination: normal completion, part file persists (if reused).
-    # Part file: crash-interrupted download, part file survives with partial data.
-    if dest.exists() and dest.stat().st_size == meta.size:
-        with dest.open("rb") as src, part.open("r+b") as dst:
-            src_data = src.read()
-            dst.seek(0)
-            dst.write(src_data)
-    elif part.exists() and part.stat().st_size == meta.size and range_states:
-        # Part file from previous (interrupted) download exists with partial data.
-        # Keep it as-is; fetched ranges will overwrite their portions.
-        pass
+        range_states = {}
 
     url = _media_url(ctx, object_name, meta.generation)
     crcs: dict[int, int] = dict(range_states)
