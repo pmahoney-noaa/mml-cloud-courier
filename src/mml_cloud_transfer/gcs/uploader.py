@@ -18,7 +18,7 @@ from mml_cloud_transfer.core.crc32c_combine import combine_all
 from mml_cloud_transfer.core.hashing import crc32c_to_base64, hash_file, hash_range
 from mml_cloud_transfer.core.slicing import SizePolicy, SliceSpec, plan_slices
 from mml_cloud_transfer.gcs.client import GcsContext
-from mml_cloud_transfer.gcs.objects import ObjectMeta, delete_object, get_meta, list_prefix
+from mml_cloud_transfer.gcs.objects import ObjectMeta, delete_object, get_meta
 from mml_cloud_transfer.gcs.resumable import (
     CHUNK_ALIGN,
     SessionExpired,
@@ -416,6 +416,9 @@ def upload_sliced(
             crc, temp_meta = future.result()  # re-raises worker failures
             results[spec.index] = (crc, temp_meta)
             bytes_sent += spec.length
+    # Context exit calls shutdown(wait=True) without cancel_futures, so already-submitted
+    # slices run to completion. Leftover temp objects and live sessions are picked up by
+    # the next resume (matching temp CRCs are reused) or the bucket lifecycle rule.
 
     ordered = [results[spec.index] for spec in specs]
     whole_crc = combine_all([(crc, spec.length) for (crc, _), spec in zip(ordered, specs)])

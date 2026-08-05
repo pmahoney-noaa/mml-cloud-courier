@@ -108,3 +108,54 @@ def test_skip_rule_applies_before_any_slicing(ctx, source):
     )
     assert again.state == "skipped"
     assert again.bytes_sent == 0
+
+
+@pytest.mark.emulator
+def test_sliced_sha256_is_computed_and_stamped(ctx, source):
+    import hashlib
+
+    result = upload_sliced(
+        ctx, str(source), "s/sha.bin", 1024 * 1024,
+        precondition_generation=0, policy=TINY, chunk_size=CHUNK, with_sha256=True,
+    )
+    assert result.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
+    stamped = ctx.client.bucket(ctx.bucket).get_blob("s/sha.bin")
+    assert stamped.metadata == {"mmlct-sha256": result.sha256}
+
+
+@pytest.mark.emulator
+def test_partial_slice_resumes_from_its_session_uri(ctx, source):
+    from tests.gcs.test_uploader_resumable import DyingSession, StatusQueryShim
+
+    # 1 MiB -> 2 slices of 512 KiB; chunk 256 KiB -> 2 chunks per slice.
+    policy = SizePolicy(
+        single_shot_max=64 * 1024, resumable_max=128 * 1024,
+        min_slice=512 * 1024, max_components=32,
+    )
+    events = []
+    dying = DyingSession(ctx.session, live_puts=1)  # chunk 1 commits, chunk 2 dies
+    broken = type(ctx)(
+        client=ctx.client, session=dying, endpoint=ctx.endpoint, bucket=ctx.bucket
+    )
+    with pytest.raises(ConnectionResetError):
+        upload_sliced(
+            broken, str(source), "s/partial.bin", 1024 * 1024,
+            precondition_generation=0, policy=policy, chunk_size=CHUNK,
+            max_workers=1,
+            on_progress=lambda i, u, c, r: events.append((i, u, c, r)),
+        )
+    partial = [(i, u, c) for i, u, c, r in events if u and r is None and 0 < c < 512 * 1024]
+    assert partial, "expected a slice with committed bytes and no crc"
+    idx, uri, committed = partial[-1]
+
+    resumed = type(ctx)(
+        client=ctx.client, session=StatusQueryShim(ctx.session, committed),
+        endpoint=ctx.endpoint, bucket=ctx.bucket,
+    )
+    result = upload_sliced(
+        resumed, str(source), "s/partial.bin", 1024 * 1024,
+        precondition_generation=0, policy=policy, chunk_size=CHUNK, max_workers=1,
+        slice_states={idx: (uri, None)},
+    )
+    assert result.state == "verified"
+    assert result.local_crc32c == hash_file(source).crc32c
