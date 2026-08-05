@@ -77,7 +77,7 @@ a result.
 | Test | Proves | Why the emulator cannot |
 | --- | --- | --- |
 | `test_run_prefix_is_unique_and_well_formed` | Runs cannot collide | — (fixture self-check) |
-| `test_a_dirty_prefix_would_be_detected` | The fixture's virgin-prefix check (in `real_bucket_ctx` setup) actually discriminates dirty from clean sub-paths | — (fixture self-check; see Findings for why this replaced `test_the_run_prefix_starts_empty`) |
+| `test_a_dirty_prefix_would_be_detected` | The fixture's virgin-prefix check (in `real_bucket_ctx` setup) sees noncurrent versions, not just live objects — using the exact `list_blobs(..., versions=True)` call the check makes, it proves a `versions=True` listing still finds a probe object after its live version is deleted, which a live-only listing would miss | — (fixture self-check; see Findings for why this replaced `test_the_run_prefix_starts_empty`, and for a second finding on the same test) |
 | `test_objects_written_under_the_prefix_are_reachable` | Credentials can write and read | — (fixture self-check) |
 | `test_status_query_returns_the_servers_committed_offset` | Resume reads the server's real committed offset | fake-gcs-server finalizes a truncated upload on the `bytes */total` probe |
 | `test_compose_preserves_slice_order` | Layer 2 detects a mis-stitched object; `crc32c_combine` matches real compose | emulator compose is not the real implementation |
@@ -151,7 +151,7 @@ gate today.
 | Versioning / retention policy | Versioning: **enabled**, confirmed empirically (write + delete + `gcloud storage ls --all-versions` still lists `name#generation`). Retention policy: unverified by metadata read; preflight's delete probe (the practical retention check) passed, so no retention lock is blocking deletes. |
 | Uplink (observed) | 0.12–0.15 MB/s (~1 Mbps), from the Task 7 attempt |
 | Preflight | Pass — exit 0, with expected metadata warnings (see Findings) |
-| Fast suite (`real_bucket and not slow`) | 8 passed, 0 failed, 0 skipped — run twice for repeatability: 37.49s then 40.40s |
+| Fast suite (`real_bucket and not slow`) | 8 passed, 0 failed, 0 skipped — run twice for repeatability: 62.62s then 39.94s (final, post-review-fix runs; see Finding 2) |
 | Scale test (`real_bucket and slow`) | **Not run — deferred.** See "Task 7 — deferred" above. |
 | Bytes re-sent on resume | 0 of the committed prefix — status-query test observed `put308 committed=262144`, then a resumed upload sending only `bytes_sent=786432` of 1048576 (i.e. the already-committed 262144 bytes were not re-sent) |
 | Run by | Claude (Task 8), operator account `peter.mahoney@noaa.gov`, project `ggn-nmfs-afscinf-infra-01` |
@@ -222,7 +222,66 @@ default collection order (no reordering, no file-list override):
 - Run 2 (repeatability + proof teardown left nothing behind for the fresh
   run to collide with): `8 passed, 262 deselected, 1 warning in 40.40s`
 
-### 2. Preflight cannot read bucket metadata — expected, not a misconfiguration
+### 2. `test_a_dirty_prefix_would_be_detected` (Finding 1's replacement) did not actually prove version-awareness — fixed on code review
+
+Code review of Finding 1's fix caught a second, more subtle defect in the
+same test before it shipped. `test_a_dirty_prefix_would_be_detected` used
+`list_prefix()`, a plain live-only listing, to check a probe object it had
+written but never deleted. That proves "an object that exists is listed" —
+never in doubt — not that the check is version-aware. The production
+collision check it exists to protect lists with `versions=True` specifically
+so a *noncurrent* version under a colliding prefix is also caught. A
+regression that dropped `versions=True` from the production check would have
+left this test green, on a bucket where that exact regression matters most
+(`afsc_mml_ccep` has versioning enabled) — silently reintroducing the class
+of bug this plan had already hit twice (once in the fixture's original
+teardown, once in Finding 1's `test_the_run_prefix_starts_empty`).
+
+Fix: rewrote the test to call the exact listing shape the production check
+uses (`ctx.client.list_blobs(..., versions=True)`, not `list_prefix`), and
+made the assertion decisive by deleting the probe's live object before
+asserting the listing still finds it — a state only a `versions=True`
+listing reports correctly; a live-only listing would report the sub-path
+empty at that point, which is exactly the failure mode Finding 1's version of
+the test could not have caught.
+
+That fix immediately surfaced a **third**, independent bug, caught by running
+it rather than by inspection: the first attempt deleted the probe via
+`blob.delete()` on the same `Blob` object returned by `upload_from_string()`.
+The `google-cloud-storage` client's `Blob.delete()` forwards
+`generation=self.generation`, and that object's `.generation` was already
+populated from the upload response — so the call was a **generation-scoped**
+delete, which permanently purges that exact version rather than clearing
+only the live pointer. Verified directly (a throwaway script against
+`afsc_mml_ccep`, cleaned up after): deleting that way left a `versions=True`
+listing of the object's prefix empty, i.e. the object was gone outright, not
+archived. Deleting through a *fresh* `Blob` handle from the same path (no
+generation known locally) instead performs a live-pointer delete, and the
+same listing then correctly showed one noncurrent version. This distinction —
+generation-scoped delete purges a specific version outright; a delete with no
+known generation only clears the live pointer and archives the rest — is not
+obvious from the client library's signature and is easy to get backwards
+silently, since both calls succeed and neither raises.
+
+The rewritten test now: writes a probe under `<run_prefix>collision-check/`,
+deletes it through a fresh `Blob` handle, asserts a `versions=True` listing
+of that sub-path is still non-empty (the decisive check), and asserts a
+`versions=True` listing of an untouched sibling sub-path
+(`<run_prefix>collision-check-absent/`) is empty. It still leaves the
+noncurrent version for the fixture's teardown to sweep, and still reasons
+only about sub-paths it owns, so it remains order-independent. The now-unused
+`list_prefix` import was dropped.
+
+Verification after this fix, again against the exact documented command with
+default collection order:
+
+- Run 1: `8 passed, 262 deselected, 1 warning in 62.62s`
+- Run 2 (repeatability): `8 passed, 262 deselected, 1 warning in 39.94s`
+- Full suite, no bucket env vars: `260 passed, 10 skipped in 9.79s`
+- `gcloud storage ls --all-versions --recursive "gs://afsc_mml_ccep/scratch/mmlct-gate/**"`
+  — matched no objects
+
+### 3. Preflight cannot read bucket metadata — expected, not a misconfiguration
 
 `storage.buckets.get` is denied for the operator account on `afsc_mml_ccep`.
 Preflight therefore cannot read storage class, versioning, retention policy,
@@ -234,9 +293,9 @@ write/compose/delete probes are the practical substitute: they confirm the
 account can actually do everything the gate needs, without needing to read
 metadata to know it.
 
-### 3. Storage class and retention policy remain formally unverified
+### 4. Storage class and retention policy remain formally unverified
 
-Consequence of Finding 2: storage class and retention policy could not be
+Consequence of Finding 3: storage class and retention policy could not be
 read from bucket metadata. The preflight delete probe (successfully deleting
 a probe object) is the practical retention check — a retention lock would
 have refused the delete — and it passed, so no retention policy is blocking
@@ -257,7 +316,7 @@ fixture was made version-aware.
       (bucket root — catches a regression of the legacy round-trip test's old unconfined prefix)
 - [x] Nothing outside `scratch/` was created or modified — `gcloud storage ls "gs://afsc_mml_ccep/scratch/"` was the only populated path touched by this run; no other top-level object was written.
 - [ ] Lifecycle rule: **not applied.** `storage.buckets.get`/`bucketsUpdate` are outside this
-      operator account's grant (Finding 2). The recommended rule JSON above is on record for
+      operator account's grant (Finding 3). The recommended rule JSON above is on record for
       whoever holds bucket-admin on `afsc_mml_ccep`.
 - [x] Local 2.6 GiB source tree: never created. Task 7's scale test was deferred and its
       `big_tree` fixture never ran (confirmed: the run skipped in 0.28s, before the tree-building
