@@ -36,7 +36,7 @@ def _options(args) -> EngineOptions:
     options = EngineOptions()
     if args.size_policy:
         options.policy = parse_size_policy(args.size_policy)
-    if args.workers:
+    if args.workers is not None:
         options.file_workers = args.workers
     return options
 
@@ -63,8 +63,8 @@ def _finish(args, db, job_id: int, status: JobStatus) -> int:
 
 
 def run_transfer(args) -> int:
-    ctx = _context(args)
     options = _options(args)
+    ctx = _context(args)
     direction = Direction(args.direction)
 
     if direction is Direction.UPLOAD:

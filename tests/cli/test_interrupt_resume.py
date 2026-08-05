@@ -118,32 +118,35 @@ def test_real_bucket_round_trip(tmp_path):
     (src / "b.bin").write_bytes(os.urandom(400 * 1024))
     db = tmp_path / "jobs.db"
 
-    up = subprocess.run(
-        _cli(
-            "transfer", "--db", str(db), "--bucket", bucket, "--name", "real-up",
-            "--source", str(src), "--prefix", run_prefix,
-            "--size-policy", POLICY,
-        ),
-        capture_output=True, text=True, timeout=600,
-    )
-    assert up.returncode == 0, up.stdout + up.stderr
-
-    dest = tmp_path / "restored"
-    down = subprocess.run(
-        _cli(
-            "transfer", "--db", str(db), "--bucket", bucket, "--name", "real-down",
-            "--direction", "download", "--source", str(dest), "--prefix", run_prefix,
-            "--size-policy", POLICY,
-        ),
-        capture_output=True, text=True, timeout=600,
-    )
-    assert down.returncode == 0, down.stdout + down.stderr
-    assert (dest / "a.bin").read_bytes() == (src / "a.bin").read_bytes()
-    assert (dest / "b.bin").read_bytes() == (src / "b.bin").read_bytes()
-
-    # Clean up the run's objects.
-    from mml_cloud_transfer.gcs.objects import delete_object, list_prefix
-
     ctx = make_context(bucket)
-    for meta in list_prefix(ctx, f"{run_prefix}/"):
-        delete_object(ctx, meta.name)
+    try:
+        up = subprocess.run(
+            _cli(
+                "transfer", "--db", str(db), "--bucket", bucket, "--name", "real-up",
+                "--source", str(src), "--prefix", run_prefix,
+                "--size-policy", POLICY,
+            ),
+            capture_output=True, text=True, timeout=600,
+        )
+        assert up.returncode == 0, up.stdout + up.stderr
+
+        dest = tmp_path / "restored"
+        down = subprocess.run(
+            _cli(
+                "transfer", "--db", str(db), "--bucket", bucket, "--name", "real-down",
+                "--direction", "download", "--source", str(dest), "--prefix", run_prefix,
+                "--size-policy", POLICY,
+            ),
+            capture_output=True, text=True, timeout=600,
+        )
+        assert down.returncode == 0, down.stdout + down.stderr
+        assert (dest / "a.bin").read_bytes() == (src / "a.bin").read_bytes()
+        assert (dest / "b.bin").read_bytes() == (src / "b.bin").read_bytes()
+    finally:
+        # Clean up the run's objects, even if an assertion above failed —
+        # otherwise a failed real-bucket run leaks billable objects that the
+        # *.mmlct.tmp/ lifecycle rule does not cover.
+        from mml_cloud_transfer.gcs.objects import delete_object, list_prefix
+
+        for meta in list_prefix(ctx, f"{run_prefix}/"):
+            delete_object(ctx, meta.name)
