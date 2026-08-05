@@ -83,13 +83,13 @@ def test_dead_session_raises_session_expired():
     for code in (404, 410):
         session = StubSession([StubResponse(code)])
         with pytest.raises(SessionExpired):
-            put_chunk(session, "http://s/u", b"x", start=0, total=10)
+            put_chunk(session, "http://s/u", b"x" * 10, start=0, total=10)
 
 
 def test_server_errors_surface_as_gcs_http_error():
     session = StubSession([StubResponse(503, body="try later")])
     with pytest.raises(GcsHttpError) as excinfo:
-        put_chunk(session, "http://s/u", b"x", start=0, total=10)
+        put_chunk(session, "http://s/u", b"x" * 10, start=0, total=10)
     assert excinfo.value.code == 503
 
 

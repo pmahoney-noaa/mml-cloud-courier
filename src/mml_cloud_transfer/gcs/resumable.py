@@ -78,7 +78,7 @@ def put_chunk(session, uri: str, data: bytes, start: int, total: int) -> PutResu
     """Send one chunk. The final chunk is the one where start+len == total."""
     end = start + len(data) - 1
     is_final = start + len(data) == total
-    if not is_final and total >= CHUNK_ALIGN and len(data) % CHUNK_ALIGN != 0:
+    if not is_final and len(data) % CHUNK_ALIGN != 0:
         raise ValueError(f"non-final chunks must be a multiple of 256 KiB, got {len(data)}")
     response = session.put(
         uri,
