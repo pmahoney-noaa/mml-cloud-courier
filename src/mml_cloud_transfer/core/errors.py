@@ -132,7 +132,7 @@ def _build(category: ErrorCategory) -> Classification:
     )
 
 
-def _from_http_status(code: int) -> ErrorCategory | None:
+def _from_http_status(code: int, message: str = "") -> ErrorCategory | None:
     if code in (401, 403):
         return ErrorCategory.CREDENTIAL
     if code == 404:
@@ -145,6 +145,13 @@ def _from_http_status(code: int) -> ErrorCategory | None:
         return ErrorCategory.NETWORK
     if 500 <= code <= 599:
         return ErrorCategory.NETWORK
+    # GCS reports a rejected checksum as a 400 whose message names the hash.
+    # Only that shape is reclassified — a plain 400 is still UNKNOWN, because
+    # a malformed request is not a corrupted transfer.
+    if code == 400 and any(
+        token in message.lower() for token in ("crc32c", "checksum", "md5")
+    ):
+        return ErrorCategory.CHECKSUM_MISMATCH
     return None
 
 
@@ -174,7 +181,7 @@ def classify(exc: BaseException) -> Classification:
 
     code = getattr(exc, "code", None)
     if isinstance(code, int) and not isinstance(code, bool):
-        category = _from_http_status(code)
+        category = _from_http_status(code, str(exc))
         if category is not None:
             return _build(category)
 

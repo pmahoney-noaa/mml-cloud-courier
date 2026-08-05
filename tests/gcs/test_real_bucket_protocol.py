@@ -11,7 +11,7 @@ import pytest
 
 from mml_cloud_transfer.core.crc32c_combine import combine_all
 from mml_cloud_transfer.core.errors import ErrorCategory, classify
-from mml_cloud_transfer.core.hashing import crc32c_from_base64, hash_file
+from mml_cloud_transfer.core.hashing import crc32c_from_base64, crc32c_to_base64, hash_file
 from mml_cloud_transfer.core.slicing import SizePolicy, plan_slices
 from mml_cloud_transfer.gcs.objects import delete_object, get_meta, list_prefix
 from mml_cloud_transfer.gcs.resumable import (
@@ -183,3 +183,22 @@ def test_stale_precondition_is_a_conflict_on_real_gcs(real_bucket_ctx, tmp_path)
     )
     assert replaced.state == "verified"
     assert replaced.generation != created.generation
+
+
+@pytest.mark.real_bucket
+def test_server_rejects_a_wrong_crc32c(real_bucket_ctx, source):
+    """Layer 1: GCS must refuse a write whose declared CRC32C is wrong."""
+    ctx, run_prefix = real_bucket_ctx
+    name = f"{run_prefix}corrupt.bin"
+
+    blob = ctx.client.bucket(ctx.bucket).blob(name)
+    blob.crc32c = crc32c_to_base64(0xDEADBEEF)  # deliberately not the file's CRC
+
+    with pytest.raises(Exception) as excinfo:
+        blob.upload_from_filename(str(source), checksum=None, if_generation_match=0)
+
+    assert classify(excinfo.value).category is ErrorCategory.CHECKSUM_MISMATCH, (
+        f"unexpected classification for {type(excinfo.value).__name__}: "
+        f"{excinfo.value}"
+    )
+    assert get_meta(ctx, name) is None, "a rejected write must leave no object"

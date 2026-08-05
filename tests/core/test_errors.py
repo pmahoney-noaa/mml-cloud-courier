@@ -134,3 +134,28 @@ def test_google_auth_refresh_error_pauses_the_job_as_credential():
     result = classify(google.auth.exceptions.RefreshError("token refresh failed"))
     assert result.category is ErrorCategory.CREDENTIAL
     assert result.pauses_job is True
+
+
+def test_a_400_naming_crc32c_is_a_checksum_mismatch():
+    """GCS rejects a write whose declared CRC32C does not match the bytes.
+
+    That is Layer 1 doing its job, and the user must be told the copy was
+    corrupted -- not that something unexpected happened.
+    """
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "Provided CRC32C hash 'AAAAAA==' doesn't match calculated CRC32C hash 'zzzzzz=='."
+    )
+    assert classify(exc).category is ErrorCategory.CHECKSUM_MISMATCH
+
+
+def test_a_400_about_anything_else_stays_unknown():
+    """Only checksum 400s are reclassified; a malformed request is not."""
+
+    class BadRequest(Exception):
+        code = 400
+
+    assert classify(BadRequest("Invalid argument.")).category is ErrorCategory.UNKNOWN
