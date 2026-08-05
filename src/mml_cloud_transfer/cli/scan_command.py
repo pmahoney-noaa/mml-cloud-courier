@@ -12,6 +12,7 @@ from mml_cloud_transfer.core.errors import ScanError
 from mml_cloud_transfer.core.models import Direction, JobStatus, PlannedFile
 from mml_cloud_transfer.core.paths import default_drive_resolver, resolve_mapped_drive
 from mml_cloud_transfer.core.scanner import iter_source
+from mml_cloud_transfer.core.slicing import SizePolicy
 from mml_cloud_transfer.store.db import connect
 from mml_cloud_transfer.store.repository import JobRepository
 
@@ -45,6 +46,7 @@ def run_scan(
     csv_path: str | os.PathLike[str] | None = None,
     resolver: Callable[[str], str | None] = default_drive_resolver,
     follow_extended: bool = True,
+    policy: SizePolicy | None = None,
 ) -> ScanOutcome:
     """Scan ``source_root`` into a job manifest, creating the job if needed."""
     root = resolve_mapped_drive(source_root, resolver)
@@ -81,11 +83,11 @@ def run_scan(
             file_count += 1
             byte_count += entry.size_bytes
             if len(batch) >= _BATCH_SIZE:
-                repo.add_planned_files(job_id, batch)
+                repo.add_planned_files(job_id, batch, policy=policy)
                 batch.clear()
 
         if batch:
-            repo.add_planned_files(job_id, batch)
+            repo.add_planned_files(job_id, batch, policy=policy)
 
         repo.record_event(
             job_id, "scan_finished", f"files={file_count} bytes={byte_count} errors={len(errors)}"

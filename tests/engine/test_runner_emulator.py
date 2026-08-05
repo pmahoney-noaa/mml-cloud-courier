@@ -1,0 +1,65 @@
+import pytest
+
+from mml_cloud_transfer.core.models import Direction, JobStatus
+from mml_cloud_transfer.core.retry import RetrySchedule
+from mml_cloud_transfer.core.slicing import SizePolicy
+from mml_cloud_transfer.engine.runner import EngineOptions, run_job, scan_remote
+from mml_cloud_transfer.gcs.client import make_context
+from mml_cloud_transfer.cli.scan_command import run_scan
+from mml_cloud_transfer.store.db import connect
+from mml_cloud_transfer.store.repository import JobRepository
+
+TINY = SizePolicy(
+    single_shot_max=64 * 1024,
+    resumable_max=256 * 1024,
+    min_slice=256 * 1024,
+    max_components=32,
+)
+
+
+@pytest.fixture
+def ctx(emulator, emulator_client):
+    _, bucket_name = emulator_client
+    return make_context(bucket_name, emulator_endpoint=emulator.endpoint)
+
+
+@pytest.mark.emulator
+def test_upload_then_download_round_trip(ctx, tmp_path):
+    # Three files, one per method under the tiny policy.
+    src = tmp_path / "src"
+    (src / "deep").mkdir(parents=True)
+    (src / "tiny.bin").write_bytes(b"t" * 10_000)
+    (src / "deep" / "medium.bin").write_bytes(bytes(range(256)) * 512)   # 128 KiB
+    (src / "big.bin").write_bytes(bytes(range(256)) * 2400)              # 600 KiB
+
+    db = tmp_path / "jobs.db"
+    outcome = run_scan(
+        db_path=db, source_root=str(src), dest_prefix="rt", job_name="up",
+        follow_extended=False, policy=TINY,
+    )
+    options = EngineOptions(
+        policy=TINY, file_workers=2, chunk_size=256 * 1024,
+        download_range_bytes=256 * 1024,
+        retry=RetrySchedule(max_attempts=2, base_delay=0.01),
+    )
+    status = run_job(db, outcome.job_id, ctx, options=options)
+    assert status is JobStatus.COMPLETE
+
+    # Download the prefix back to a fresh directory and compare bytes.
+    conn = connect(db)
+    repo = JobRepository(conn)
+    down_root = tmp_path / "down"
+    down_id = repo.create_job(
+        name="down", direction=Direction.DOWNLOAD,
+        source_root=str(down_root), dest_prefix="rt",
+    )
+    conn.close()
+
+    assert scan_remote(ctx, db, down_id, policy=TINY) == 3
+    status = run_job(db, down_id, ctx, options=options)
+    assert status is JobStatus.COMPLETE
+
+    for rel in ("tiny.bin", "deep/medium.bin", "big.bin"):
+        original = (src / rel).read_bytes()
+        fetched = (down_root / rel).read_bytes()
+        assert fetched == original, f"{rel} did not round-trip"
