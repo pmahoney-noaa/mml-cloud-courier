@@ -18,6 +18,7 @@ These apply to every task. Do not restate them; do not violate them.
 - **This is verification work on merged code.** Nothing under `src/` changes except Task 6's one-line error-taxonomy mapping. If a task tempts you to "fix" engine behaviour, stop and report the finding instead.
 - **The test is the deliverable, so the TDD loop is inverted.** There is no implementation to make a test pass. The cycle for each gate test is: write it → run without `MMLCT_TEST_BUCKET` and confirm it **skips cleanly** (this is the RED-equivalent: it proves the marker and fixture gating work) → run with the bucket set and confirm it **passes** → commit. Task 6 is the exception and uses a real RED/GREEN cycle, because it changes `core`.
 - **Never run a real-bucket test without cleanup in a `finally`.** A failed assertion must not leak billable objects. `tests/cli/test_interrupt_resume.py:145` is the existing precedent.
+- **The gate runs inside a scratch folder of a bucket that holds real data.** `MMLCT_TEST_PREFIX` names that folder; every real-bucket run command in this plan sets it alongside `MMLCT_TEST_BUCKET` (omit it only for a bucket dedicated to the gate). No test may write outside the fixture's `run_prefix`, and no code may delete outside a path containing the `mmlct-gate/` segment the fixture builds itself. Task 2's guard enforces this; do not weaken or bypass it.
 - **`core` stays pure** — no `google.cloud.storage`, `google.auth`, `requests`, or `sqlite3` imports under `core/`.
 - **`google.cloud.storage` / `google.auth` / `requests` are imported only under `gcs/` and in test files.**
 - **Marker discipline:** every test touching a real bucket is marked `real_bucket`; the 2.6 GiB one is additionally marked `slow`. A plain `.venv/Scripts/python -m pytest` on a machine with no `MMLCT_TEST_BUCKET` must stay green with these skipping.
@@ -49,7 +50,7 @@ A read-only, idempotent script that answers "what do I have, and what do I run n
 
 **Interfaces:**
 - Consumes: nothing from this repo. Requires `gcloud` on PATH.
-- Produces: an operator-facing script. Exit 0 when every check passes, 1 when any check fails. Warnings do not affect the exit code. On success the last line printed is `$env:MMLCT_TEST_BUCKET = "<bucket>"`.
+- Produces: an operator-facing script `preflight-gcs.ps1 -Bucket <name> [-Prefix <path>] [-Project <id>]`. Exit 0 when every check passes, 1 when any check fails. Warnings (non-STANDARD storage class, object versioning) do not affect the exit code; a retention policy does, because it breaks teardown. On success the script prints the `$env:MMLCT_TEST_BUCKET` assignment and, when `-Prefix` was given, the `$env:MMLCT_TEST_PREFIX` assignment.
 
 - [ ] **Step 1: Write the script**
 
@@ -65,13 +66,23 @@ Create `tests/tools/preflight-gcs.ps1`:
   missing. Creates no billable resources: the one object it writes is a
   permission probe that it deletes again.
 
+  -Prefix names a scratch folder inside an existing bucket. The gate confines
+  every object it writes to that folder, so an in-use bucket is a valid target.
+
 .EXAMPLE
   pwsh tests/tools/preflight-gcs.ps1 -Bucket mmlct-gate-test
+
+.EXAMPLE
+  pwsh tests/tools/preflight-gcs.ps1 -Bucket my-research-bucket -Prefix scratch/mmlct
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Bucket,
+    [string]$Prefix,
     [string]$Project
 )
+
+# Normalise: no leading slash, exactly one trailing slash, or empty.
+$PrefixPath = if ($Prefix) { $Prefix.Trim('/') + '/' } else { "" }
 
 $ErrorActionPreference = "Stop"
 $script:Failed = $false
@@ -91,7 +102,9 @@ function Invoke-Gcloud {
 }
 
 Write-Host "`nPlan 2 release-gate preflight" -ForegroundColor White
-Write-Host "bucket: $Bucket`n"
+Write-Host "bucket: $Bucket"
+Write-Host ("scratch prefix: " + $(if ($PrefixPath) { $PrefixPath } else { "(bucket root)" }))
+Write-Host ""
 
 # 1. gcloud present
 if (-not (Get-Command gcloud -ErrorAction SilentlyContinue)) {
@@ -144,7 +157,30 @@ if ($code -ne 0) {
         Report-Ok "storage class is STANDARD"
     }
 
-    # 6. Lifecycle safety net for orphaned slice temps
+    # 6. Object versioning — teardown's deletes would become noncurrent versions,
+    #    so the gate's bytes would keep billing and "the bucket is clean" would
+    #    be false even though every assertion passed.
+    if ($meta.versioning_enabled -eq $true) {
+        Report-Warn ("object versioning is ENABLED — the gate's deletes leave noncurrent " +
+                     "versions that keep billing; add a noncurrent-version lifecycle rule " +
+                     "or expect to purge them manually")
+    } else {
+        Report-Ok "object versioning is disabled"
+    }
+
+    # 7. Retention policy / bucket lock — this one is fatal rather than costly:
+    #    deletes are refused, so the fixture's teardown cannot clean up and its
+    #    emptiness assertion fails the whole session.
+    if ($meta.retention_policy) {
+        Report-Fail ("bucket has a retention policy " +
+                     "($($meta.retention_policy.retention_period)s) — the gate cannot " +
+                     "delete what it writes") `
+                    "run the gate against a bucket without a retention policy"
+    } else {
+        Report-Ok "no retention policy"
+    }
+
+    # 8. Lifecycle safety net for orphaned slice temps
     $rules = $meta.lifecycle_config.rule
     $hasTmpRule = $false
     foreach ($rule in $rules) {
@@ -152,15 +188,15 @@ if ($code -ne 0) {
             ($rule.condition.matches_prefix -join " ") -match "mmlct") { $hasTmpRule = $true }
     }
     if (-not $hasTmpRule) {
-        Report-Warn "no lifecycle rule covering *.mmlct.tmp/ orphans — see the gate record for the JSON"
+        Report-Warn "no lifecycle rule covering mmlct-gate/ orphans — see the gate record for the JSON"
     } else {
-        Report-Ok "lifecycle rule covering mmlct temp objects is present"
+        Report-Ok "lifecycle rule covering mmlct objects is present"
     }
 }
 
-# 7. Write / read / compose / delete permission probe
+# 9. Write / read / compose / delete permission probe, inside the scratch prefix
 if (-not $script:Failed) {
-    $probePrefix = "mmlct-preflight/$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $probePrefix = "$PrefixPath" + "mmlct-preflight/$([guid]::NewGuid().ToString('N').Substring(0,8))"
     $tmp = Join-Path $env:TEMP "mmlct-probe.bin"
     try {
         Set-Content -Path $tmp -Value "mmlct preflight probe" -NoNewline
@@ -196,6 +232,9 @@ if ($script:Failed) {
 Write-Host "Preflight passed. Run the gate with:" -ForegroundColor Green
 Write-Host ""
 Write-Host "  `$env:MMLCT_TEST_BUCKET = `"$Bucket`""
+if ($PrefixPath) {
+    Write-Host "  `$env:MMLCT_TEST_PREFIX = `"$($PrefixPath.TrimEnd('/'))`""
+}
 Write-Host ""
 exit 0
 ```
@@ -207,12 +246,14 @@ Expected: PowerShell prompts for the mandatory `-Bucket` parameter (or errors in
 
 - [ ] **Step 3: Run it for real**
 
-Run: `pwsh tests/tools/preflight-gcs.ps1 -Bucket <your-bucket-name>`
+Run: `pwsh tests/tools/preflight-gcs.ps1 -Bucket <your-bucket-name> -Prefix <scratch-folder>`
 Expected: a checklist. Whatever the outcome, every FAIL line is followed by a runnable `fix:` command. Work through them until the script exits 0.
 
-If you have no bucket yet, the create command it prints is the one to run. Prefer a **single-region STANDARD** bucket dedicated to this gate, so teardown is unambiguous.
+Two supported shapes:
+- **A bucket dedicated to this gate** — omit `-Prefix`; the gate writes at the bucket root. Prefer single-region STANDARD, so teardown is unambiguous.
+- **A scratch folder inside an existing, in-use bucket** — pass `-Prefix`; every object the gate writes lands under it. This is the expected deployment here, and it is why the teardown guard in Task 2 exists.
 
-Record the final state in your report: which checks passed, which needed fixing, and the bucket's region and storage class.
+Record the final state in your report: which checks passed, which needed fixing, the bucket's region and storage class, and whether versioning or a retention policy is in play.
 
 - [ ] **Step 4: Commit**
 
@@ -234,7 +275,9 @@ Every subsequent task depends on this. One session-scoped fixture that owns a un
 
 **Interfaces:**
 - Consumes: `make_context` from `gcs.client`; `list_prefix`, `delete_object` from `gcs.objects`.
-- Produces: pytest fixture `real_bucket_ctx` (session-scoped), yielding `tuple[GcsContext, str]` — the context and a trailing-slash-terminated `run_prefix` of the form `mmlct-gate/<YYYYmmddTHHMMSSZ>-<uuid8>/`. Skips with an actionable message when `MMLCT_TEST_BUCKET` is unset. Teardown deletes everything under `run_prefix` and fails the session if anything survives. Marker `slow` is registered.
+- Produces: pytest fixture `real_bucket_ctx` (session-scoped), yielding `tuple[GcsContext, str]` — the context and a trailing-slash-terminated `run_prefix` of the form `<base/>mmlct-gate/<YYYYmmddTHHMMSSZ>-<uuid8>/`, where `base` is the optional `MMLCT_TEST_PREFIX`. Skips with an actionable message when `MMLCT_TEST_BUCKET` is unset. Teardown deletes everything under `run_prefix` and fails the session if anything survives. Also produces the module-level helper `_gate_run_prefix(base: str) -> str` so the guard is testable without a bucket. Marker `slow` is registered.
+
+**Why the guard exists:** teardown recursively deletes everything under `run_prefix`. That is safe only while the prefix is ours by construction. `MMLCT_TEST_PREFIX` points the gate into a bucket that holds real data, so a typo in that variable is the difference between deleting scratch and deleting someone's imaging run. The `mmlct-gate/` segment is therefore **mandatory and never operator-supplied**, and teardown asserts it before the first delete.
 
 - [ ] **Step 1: Add the marker**
 
@@ -265,7 +308,30 @@ import pytest
 
 from mml_cloud_transfer.gcs.objects import get_meta, list_prefix
 
-PREFIX_SHAPE = re.compile(r"^mmlct-gate/\d{8}T\d{6}Z-[0-9a-f]{8}/$")
+from tests.conftest import _gate_run_prefix
+
+PREFIX_SHAPE = re.compile(
+    r"^(?:[^/]+/)*mmlct-gate/\d{8}T\d{6}Z-[0-9a-f]{8}/$"
+)
+
+
+def test_the_gate_segment_is_never_operator_supplied():
+    """No MMLCT_TEST_PREFIX value can produce a prefix without mmlct-gate/.
+
+    Teardown recursively deletes everything under the run prefix. This is the
+    assertion standing between a typo in that variable and someone's data.
+    Runs without a bucket, so it guards every machine, not just the gate host.
+    """
+    for base in ("", "/", "scratch", "scratch/", "/scratch/mmlct/", "a/b/c"):
+        prefix = _gate_run_prefix(base)
+        assert "/mmlct-gate/" in f"/{prefix}", prefix
+        assert PREFIX_SHAPE.match(prefix), prefix
+        assert not prefix.startswith("/"), prefix
+
+
+def test_a_prefix_confines_the_run_to_the_scratch_folder():
+    assert _gate_run_prefix("scratch/mmlct").startswith("scratch/mmlct/mmlct-gate/")
+    assert _gate_run_prefix("").startswith("mmlct-gate/")
 
 
 @pytest.mark.real_bucket
@@ -297,13 +363,32 @@ def test_objects_written_under_the_prefix_are_reachable(real_bucket_ctx):
 - [ ] **Step 3: Run to verify it skips, then fails**
 
 Run (with `MMLCT_TEST_BUCKET` **unset**): `.venv/Scripts/python -m pytest tests/gcs/test_real_bucket_fixture.py -v`
-Expected: 3 ERRORS — `fixture 'real_bucket_ctx' not found`. This is the RED state.
+Expected: a collection ERROR — `ImportError: cannot import name '_gate_run_prefix' from 'tests.conftest'`. This is the RED state.
 
 - [ ] **Step 4: Implement the fixture**
 
 Append to `tests/conftest.py`:
 
 ```python
+#: The one path segment an operator can never supply. Teardown deletes
+#: everything under the run prefix, so this segment is what makes that
+#: deletion safe -- see _gate_run_prefix and the guard in real_bucket_ctx.
+GATE_SEGMENT = "mmlct-gate"
+
+
+def _gate_run_prefix(base: str) -> str:
+    """Build a unique run prefix under `base`, always inside GATE_SEGMENT.
+
+    `base` is the operator's MMLCT_TEST_PREFIX -- a scratch folder inside a
+    bucket that may hold real data. It is normalised, never trusted, and can
+    never displace the gate segment.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run = f"{GATE_SEGMENT}/{stamp}-{uuid.uuid4().hex[:8]}/"
+    base = base.strip().strip("/")
+    return f"{base}/{run}" if base else run
+
+
 @pytest.fixture(scope="session")
 def real_bucket_ctx():
     """The release gate's context: a real bucket and a unique run prefix.
@@ -313,6 +398,9 @@ def real_bucket_ctx():
     temps, which live under it by construction (gcs.uploader.slice_temp_name)
     -- and fails the session if anything survives, so a leak surfaces as a red
     test rather than a surprise bill.
+
+    MMLCT_TEST_PREFIX confines the run to a scratch folder, so an in-use
+    bucket is a valid target.
     """
     bucket = os.environ.get("MMLCT_TEST_BUCKET")
     if not bucket:
@@ -324,12 +412,18 @@ def real_bucket_ctx():
     from mml_cloud_transfer.gcs.client import make_context
     from mml_cloud_transfer.gcs.objects import delete_object, list_prefix
 
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    run_prefix = f"mmlct-gate/{stamp}-{uuid.uuid4().hex[:8]}/"
+    run_prefix = _gate_run_prefix(os.environ.get("MMLCT_TEST_PREFIX", ""))
     ctx = make_context(bucket)
     try:
         yield ctx, run_prefix
     finally:
+        # The guard. Everything below deletes recursively, and MMLCT_TEST_PREFIX
+        # points into a bucket that may hold real data -- so refuse to delete
+        # anything whose path is not demonstrably ours. A typo fails a test
+        # instead of destroying data.
+        assert f"/{GATE_SEGMENT}/" in f"/{run_prefix}", (
+            f"refusing to delete under {run_prefix!r} — it is not a gate prefix"
+        )
         for meta in list(list_prefix(ctx, run_prefix)):
             delete_object(ctx, meta.name)
         survivors = [m.name for m in list_prefix(ctx, run_prefix)]
@@ -345,23 +439,27 @@ from datetime import datetime, timezone
 - [ ] **Step 5: Verify it skips cleanly without a bucket**
 
 Run (with `MMLCT_TEST_BUCKET` **unset**): `.venv/Scripts/python -m pytest tests/gcs/test_real_bucket_fixture.py -v`
-Expected: 3 skipped, with the message naming `MMLCT_TEST_BUCKET` and the gate doc.
+Expected: **2 passed, 3 skipped**. The two guard tests need no bucket — that is deliberate, so the assertion protecting the operator's data is verified on every machine, not only the gate host.
 
 - [ ] **Step 6: Verify it passes against the real bucket**
 
 Run:
 ```powershell
 $env:MMLCT_TEST_BUCKET = "<your-bucket>"
+$env:MMLCT_TEST_PREFIX = "<your-scratch-folder>"   # omit if the bucket is dedicated
 .venv/Scripts/python -m pytest tests/gcs/test_real_bucket_fixture.py -v
 ```
-Expected: 3 passed.
+Expected: 5 passed.
 
-Then run it a **second** time. Expected: 3 passed again — `test_the_run_prefix_starts_empty` passing on the second run is the proof that the first run's teardown actually deleted `reachable.bin`.
+Then run it a **second** time. Expected: 5 passed again — `test_the_run_prefix_starts_empty` passing on the second run is the proof that the first run's teardown actually deleted `reachable.bin`.
+
+Confirm by eye that the objects appeared under your scratch folder and nowhere else:
+`gcloud storage ls --recursive "gs://$env:MMLCT_TEST_BUCKET/$env:MMLCT_TEST_PREFIX/"`
 
 - [ ] **Step 7: Confirm the default suite is unaffected**
 
 Run (with `MMLCT_TEST_BUCKET` **unset**): `.venv/Scripts/python -m pytest`
-Expected: the existing suite green, with the 3 new tests skipping.
+Expected: the existing suite green, plus the 2 guard tests passing and the 3 real-bucket tests skipping.
 
 - [ ] **Step 8: Commit**
 
@@ -1030,8 +1128,10 @@ If the kill deadline expires, the most likely cause is that the transfer finishe
 
 - [ ] **Step 4: Confirm the bucket is clean**
 
-Run: `gcloud storage ls --recursive "gs://$env:MMLCT_TEST_BUCKET/mmlct-gate/"`
+Run: `gcloud storage ls --recursive "gs://$env:MMLCT_TEST_BUCKET/$env:MMLCT_TEST_PREFIX/mmlct-gate/"` (drop the `$env:MMLCT_TEST_PREFIX/` segment if the bucket is dedicated).
 Expected: nothing. The fixture's teardown deletes the whole run prefix and asserts emptiness, so this is a belt-and-braces check that the assertion is real.
+
+If the bucket has object versioning enabled, also check for noncurrent versions — `gcloud storage ls --all-versions --recursive` — because deletes there leave versions behind and the 2.6 GiB keeps billing.
 
 - [ ] **Step 5: Commit**
 
@@ -1069,19 +1169,33 @@ semantics, which is exactly the machinery the design depends on.
 
 ## Prerequisites
 
-- A dedicated **single-region STANDARD** GCS bucket.
+Either shape works:
+
+- **A dedicated bucket** — single-region STANDARD, gate writes at the root.
+- **A scratch folder in an existing bucket** — set `MMLCT_TEST_PREFIX`; every
+  object the gate writes lands under it, and teardown refuses to delete
+  anything outside a `mmlct-gate/` segment it built itself.
+
+Also required:
+
 - Application Default Credentials on this machine with `roles/storage.objectAdmin`
   on that bucket.
 - 6 GiB free disk for the scale test's source tree.
+- **No retention policy or bucket lock** — deletes would be refused and the gate
+  could not clean up after itself. Preflight fails on this.
+- Object versioning **disabled**, ideally. With it on, the gate's deletes leave
+  noncurrent versions that keep billing, and "the bucket is clean" is not true
+  even when every assertion passes. Preflight warns.
 
 Recommended bucket lifecycle rule — the safety net for slice temp objects
 orphaned by a hard crash (`AbortIncompleteMultipartUpload` does not apply;
-these are ordinary composed-source objects):
+these are ordinary composed-source objects). Adjust the prefix to match your
+`MMLCT_TEST_PREFIX`:
 
 ```json
 {"lifecycle": {"rule": [
   {"action": {"type": "Delete"},
-   "condition": {"age": 7, "matchesPrefix": ["mmlct-gate/"]}}
+   "condition": {"age": 7, "matchesPrefix": ["<scratch-folder>/mmlct-gate/"]}}
 ]}}
 ```
 
@@ -1090,8 +1204,9 @@ Apply with `gcloud storage buckets update gs://<bucket> --lifecycle-file=rule.js
 ## Run order
 
 ```powershell
-pwsh tests/tools/preflight-gcs.ps1 -Bucket <bucket>     # must exit 0
+pwsh tests/tools/preflight-gcs.ps1 -Bucket <bucket> -Prefix <scratch-folder>   # must exit 0
 $env:MMLCT_TEST_BUCKET = "<bucket>"
+$env:MMLCT_TEST_PREFIX = "<scratch-folder>"                       # omit for a dedicated bucket
 .venv/Scripts/python -m pytest -m "real_bucket and not slow" -v   # 7 tests, <1 min
 .venv/Scripts/python -m pytest -m "real_bucket and slow" -v       # 1 test, uplink-bound
 ```
@@ -1118,7 +1233,9 @@ succeed and would only cost time and bytes proving it.
 | --- | --- |
 | Date (UTC) | _(fill in)_ |
 | Bucket | _(fill in)_ |
+| Scratch prefix (`MMLCT_TEST_PREFIX`) | _(fill in, or "bucket root")_ |
 | Region / storage class | _(fill in)_ |
+| Versioning / retention policy | _(fill in)_ |
 | Uplink (observed) | _(fill in)_ |
 | Preflight | _(pass/fail)_ |
 | Fast suite (`real_bucket and not slow`) | _(N passed, duration)_ |
@@ -1132,8 +1249,12 @@ _(One entry per surprise. Empty is a valid result.)_
 
 ## Teardown
 
-- [ ] `gcloud storage ls --recursive "gs://<bucket>/mmlct-gate/"` returns nothing
-- [ ] `gcloud storage ls --recursive "gs://<bucket>/mmlct-preflight/"` returns nothing
+- [ ] `gcloud storage ls --recursive "gs://<bucket>/<prefix>/mmlct-gate/"` returns nothing
+- [ ] `gcloud storage ls --recursive "gs://<bucket>/<prefix>/mmlct-preflight/"` returns nothing
+- [ ] Nothing outside `<prefix>/` was created or modified — compare against the
+      folder listing you took before the run
+- [ ] If versioning is enabled: `gcloud storage ls --all-versions --recursive` under
+      `<prefix>/` returns nothing, or the noncurrent versions were purged
 - [ ] Lifecycle rule in place (or noted as deliberately absent)
 - [ ] Local 2.6 GiB source tree removed (pytest's `tmp_path` cleanup handles this;
       confirm if the run was interrupted)
@@ -1143,12 +1264,15 @@ _(One entry per surprise. Empty is a valid result.)_
 
 Run, in order:
 ```powershell
-pwsh tests/tools/preflight-gcs.ps1 -Bucket <bucket>
+pwsh tests/tools/preflight-gcs.ps1 -Bucket <bucket> -Prefix <scratch-folder>
 $env:MMLCT_TEST_BUCKET = "<bucket>"
+$env:MMLCT_TEST_PREFIX = "<scratch-folder>"
 .venv/Scripts/python -m pytest -m "real_bucket and not slow" -v
 .venv/Scripts/python -m pytest -m "real_bucket and slow" -v
 ```
 Expected: preflight exit 0; 7 passed; 1 passed.
+
+Before the first run, take a listing of the scratch folder's parent so the teardown checklist has something to compare against.
 
 Fill in the Results table and the Findings section with what actually happened. **Do not write "pass" for anything you did not watch pass.**
 
@@ -1175,8 +1299,8 @@ Plan 2's release gate is closed. The four behaviours the emulator cannot vouch f
 - `pwsh tests/tools/preflight-gcs.ps1 -Bucket <name>` exits 0.
 - `pytest -m "real_bucket and not slow" -v` — 7 passed, 0 skipped (3 fixture self-checks + 4 protocol tests).
 - `pytest -m "real_bucket and slow" -v` — 1 passed.
-- `pytest` with no marker selection — green, gate tests skipping.
+- `pytest` with no marker selection — green, gate tests skipping, the 2 prefix-guard tests passing.
 - The gate record is filled in and committed; findings are either empty or filed as follow-ups.
-- No objects remain under `mmlct-gate/` or `mmlct-preflight/`.
+- No objects remain under `<prefix>/mmlct-gate/` or `<prefix>/mmlct-preflight/`, and nothing outside `<prefix>/` was touched.
 
 **Carry-forward:** Plan 3's manual step at `2026-08-05-windows-service.md:3769` extends this gate with the service-hosted equivalent — the same kill-and-resume driven through the local API, surviving a service restart and a logoff. It should append to this same record rather than starting a new one.

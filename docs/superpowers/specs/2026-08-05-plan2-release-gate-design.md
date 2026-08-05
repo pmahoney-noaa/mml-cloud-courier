@@ -45,6 +45,8 @@ would notice.
 - Prove the defining interrupt-and-resume promise at real scale with the **default** size
   policy — real 1 GiB slices, real session lifetimes — not shrunken test thresholds.
 - Make the gate runnable by someone who does not yet know what GCP resources they have.
+- Let the gate run inside a scratch folder of an existing, in-use bucket without ever
+  touching data outside that folder.
 - Guarantee the gate leaks no billable objects, including on failure.
 - Leave a durable, dated record of what was run and what it proved.
 
@@ -99,15 +101,18 @@ provision.
 | Project configured | `gcloud config get project` | print `gcloud config set project <id>` |
 | Bucket exists | `gcloud storage buckets describe gs://$Bucket` | print the exact `buckets create` command |
 | Storage class STANDARD | same describe | warn: minimum-storage-duration charges on temp slices |
-| Write / delete / compose permitted | probe object under `mmlct-preflight/`, composed then deleted | name the missing IAM role |
-| `*.mmlct.tmp/` lifecycle rule | `buckets describe --format=json` | print the rule JSON and `buckets update` command |
+| Object versioning disabled | same describe | warn: teardown's deletes become noncurrent versions, so the bytes keep billing and "the bucket is clean" is not true |
+| No retention policy or bucket lock | same describe | **fail**: deletes are refused outright and the gate cannot clean up after itself |
+| Write / delete / compose permitted | probe object under `<prefix>/mmlct-preflight/`, composed then deleted | name the missing IAM role |
+| `mmlct-gate/` lifecycle rule | `buckets describe --format=json` | print the rule JSON and `buckets update` command |
 
-Parameters: `-Bucket <name>` (required), `-Project <id>` (optional, defaults to the
-configured project). Exit code 0 when every check passes, 1 if any check fails. Warnings
-— currently only the non-STANDARD storage class — are printed but do not affect the exit
-code, since a Nearline bucket is a cost problem, not a correctness one. The final line on
-success prints the environment assignment to copy:
-`$env:MMLCT_TEST_BUCKET = "<name>"`.
+Parameters: `-Bucket <name>` (required), `-Prefix <path>` (optional — the scratch folder
+inside an existing bucket), `-Project <id>` (optional, defaults to the configured project).
+Exit code 0 when every check passes, 1 if any check fails. Warnings — non-STANDARD storage
+class, object versioning — are printed but do not affect the exit code, since both are cost
+problems rather than correctness ones. A retention policy *is* a failure, because it breaks
+teardown. The final line on success prints the environment assignments to copy:
+`$env:MMLCT_TEST_BUCKET` and, when `-Prefix` was given, `$env:MMLCT_TEST_PREFIX`.
 
 Provisioning is emitted rather than executed on purpose: a script that silently creates
 billable cloud resources on a machine whose state it has just admitted it does not know is
@@ -123,13 +128,36 @@ A session-scoped `real_bucket_ctx` fixture in `tests/conftest.py`, beside the ex
 - Yields `(GcsContext, run_prefix)`.
 - Skips when `MMLCT_TEST_BUCKET` is unset, with the message
   `set MMLCT_TEST_BUCKET (and ADC credentials) to run the release gate`.
-- `run_prefix` is `mmlct-gate/<YYYYmmddTHHMMSSZ>-<uuid8>/`, unique per session, so
-  concurrent runs and abandoned runs never collide.
+- `run_prefix` is `<base/>mmlct-gate/<YYYYmmddTHHMMSSZ>-<uuid8>/`, unique per session, so
+  concurrent runs and abandoned runs never collide. `base` comes from the optional
+  `MMLCT_TEST_PREFIX`, so the gate can run inside an existing folder of an existing bucket
+  rather than only at the bucket root.
 - Teardown, in a `finally`, deletes every object under `run_prefix` — including
   `<name>.mmlct.tmp/<nnnn>` slice temps, which fall under the prefix by construction
   (`slice_temp_name` in `gcs/uploader.py:259`) — then re-lists and fails the session if
   anything survives. `tests/cli/test_interrupt_resume.py:145` already learned this lesson
   per-test; the fixture generalizes it so no individual test can leak.
+
+### The teardown guard
+
+Teardown recursively deletes everything under `run_prefix`. That is safe only because the
+prefix is ours by construction. Once `MMLCT_TEST_PREFIX` lets an operator point the gate
+into a bucket that holds real data — the expected deployment — a typo in that variable is
+the difference between deleting scratch and deleting someone's imaging run.
+
+So the `mmlct-gate/` segment is **mandatory and not operator-supplied**, and teardown
+asserts its own prefix before deleting anything:
+
+```python
+assert "/mmlct-gate/" in f"/{run_prefix}", f"refusing to delete under {run_prefix!r}"
+```
+
+A misconfiguration then fails a test instead of destroying data. The assertion is cheap,
+runs before the first delete, and is itself covered by a fixture self-check.
+
+Operators pointing the gate at a bucket with real data should set `MMLCT_TEST_PREFIX` to a
+dedicated scratch folder rather than the folder their real transfers target — the guard
+protects against a typo, not against a deliberate aim at live data.
 
 A `slow` marker is added to `pyproject.toml` alongside `emulator` and `real_bucket`:
 
@@ -224,7 +252,8 @@ in when the gate is run:
 4. A results table: date, bucket, region, storage class, uplink, per-phase duration,
    pass/fail, findings.
 5. Teardown checklist: confirm the gate prefix is empty, confirm no `mmlct-preflight/`
-   residue, note whether the lifecycle rule is in place.
+   residue, note whether the lifecycle rule is in place, and — when running inside an
+   existing bucket — confirm nothing outside `MMLCT_TEST_PREFIX` was touched.
 
 Plan 3 already references this gate — `2026-08-05-windows-service.md:3769` extends it with
 the service-hosted equivalent — so it wants to be a durable artifact rather than terminal
