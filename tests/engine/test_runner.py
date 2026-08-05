@@ -136,6 +136,28 @@ def test_cumulative_attempts_reach_quarantine(job, monkeypatch):
     assert FileState.QUARANTINED.value in states.values()
 
 
+def test_credential_error_pauses_even_a_nearly_quarantined_file(job, monkeypatch):
+    db, job_id = job
+    conn = connect(db)
+    repo = JobRepository(conn)
+    first = repo.get_files(job_id)[0]["id"]
+    for _ in range(14):
+        repo.mark_failed(first, ErrorCategory.NETWORK, "past runs")
+    conn.close()
+
+    monkeypatch.setattr(
+        runner, "upload_single_shot",
+        lambda *a, **k: (_ for _ in ()).throw(FakeApiError(403)),
+    )
+    monkeypatch.setattr(runner, "get_meta", lambda ctx, name: None)
+    status = run_job(db, job_id, ctx=None, options=opts())
+    assert status is JobStatus.PAUSED
+    conn = connect(db)
+    row = JobRepository(conn).get_file(first)
+    conn.close()
+    assert row["state"] == FileState.FAILED.value  # failed, NOT quarantined
+
+
 def test_changed_source_is_requeued_once_then_transferred(job, monkeypatch, tmp_path):
     db, job_id = job
     # Grow a.bin after the scan: first pass must mark it changed with fresh

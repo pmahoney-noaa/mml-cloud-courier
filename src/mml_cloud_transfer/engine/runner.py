@@ -292,6 +292,8 @@ def _process_file(
             except Exception as exc:
                 category, transient, pauses = _classify_transfer_error(exc)
                 repo.mark_failed(file_id, category, str(exc)[:500])
+                if pauses:
+                    raise JobPaused(str(exc)) from exc
                 cumulative = repo.get_file(file_id)["attempts"]
                 if cumulative >= QUARANTINE_ATTEMPTS:
                     repo.quarantine(file_id)
@@ -299,8 +301,6 @@ def _process_file(
                         job["id"], "quarantined", row["relative_path"], file_id
                     )
                     return
-                if pauses:
-                    raise JobPaused(str(exc)) from exc
                 if not transient or attempt == options.retry.max_attempts - 1:
                     return
                 sleep(next(delays))
