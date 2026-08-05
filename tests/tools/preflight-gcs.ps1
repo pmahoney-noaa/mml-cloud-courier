@@ -126,7 +126,7 @@ if ($code -ne 0) {
     #    emptiness assertion fails the whole session.
     if ($meta.retention_policy) {
         Report-Fail ("bucket has a retention policy " +
-                     "($($meta.retention_policy.retention_period)s) — the gate cannot " +
+                     "($($meta.retention_policy.retentionPeriod)s) — the gate cannot " +
                      "delete what it writes") `
                     "run the gate against a bucket without a retention policy"
     } else {
@@ -137,8 +137,8 @@ if ($code -ne 0) {
     $rules = $meta.lifecycle_config.rule
     $hasTmpRule = $false
     foreach ($rule in $rules) {
-        if ($rule.condition.matches_prefix -and
-            ($rule.condition.matches_prefix -join " ") -match "mmlct") { $hasTmpRule = $true }
+        if ($rule.condition.matchesPrefix -and
+            ($rule.condition.matchesPrefix -join " ") -match "mmlct") { $hasTmpRule = $true }
     }
     if (-not $hasTmpRule) {
         Report-Warn "no lifecycle rule covering mmlct-gate/ orphans — see the gate record for the JSON"
@@ -166,15 +166,20 @@ if (-not $script:Failed) {
         } else {
             $wrote = $true
             Report-Ok "write succeeded"
-            $code, $null = Invoke-Gcloud storage cp $tmp "gs://$Bucket/$probePrefix/b.bin"
-            $code, $out = Invoke-Gcloud storage objects compose `
-                "gs://$Bucket/$probePrefix/a.bin" "gs://$Bucket/$probePrefix/b.bin" `
-                "gs://$Bucket/$probePrefix/composed.bin"
+            $code, $out = Invoke-Gcloud storage cp $tmp "gs://$Bucket/$probePrefix/b.bin"
             if ($code -ne 0) {
-                Report-Fail "compose is not permitted" `
-                            "grant roles/storage.objectAdmin (compose needs create + get)"
+                Report-Fail "cannot write gs://$Bucket/$probePrefix/b.bin — $($out -split "`n" | Select-Object -First 1)" `
+                            "confirm the bucket exists and grant roles/storage.objectAdmin on it to $accounts"
             } else {
-                Report-Ok "compose succeeded"
+                $code, $out = Invoke-Gcloud storage objects compose `
+                    "gs://$Bucket/$probePrefix/a.bin" "gs://$Bucket/$probePrefix/b.bin" `
+                    "gs://$Bucket/$probePrefix/composed.bin"
+                if ($code -ne 0) {
+                    Report-Fail "compose is not permitted" `
+                                "grant roles/storage.objectAdmin (compose needs create + get)"
+                } else {
+                    Report-Ok "compose succeeded"
+                }
             }
         }
     } finally {
