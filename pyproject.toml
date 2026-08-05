@@ -9,6 +9,7 @@ dependencies = [
     "requests>=2.31",
     "fastapi>=0.111",
     "uvicorn>=0.30",
+    "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
@@ -20,6 +21,7 @@ dev = [
 
 [project.scripts]
 mmlct = "mml_cloud_transfer.cli.__main__:main"
+mmlct-service = "mml_cloud_transfer.service.windows_service:main"
 
 [build-system]
 requires = ["hatchling"]
