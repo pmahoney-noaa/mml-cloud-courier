@@ -354,3 +354,63 @@ def test_precondition_is_captured_before_the_first_attempt(job, monkeypatch):
     )
     run_job(db, job_id, ctx=None, options=opts())
     assert seen == {"p/a.bin": 42, "p/b.bin": 0}
+
+
+def test_paused_run_still_records_run_finished(job, monkeypatch):
+    db, job_id = job
+    monkeypatch.setattr(
+        runner, "upload_single_shot",
+        lambda *a, **k: (_ for _ in ()).throw(FakeApiError(403)),
+    )
+    monkeypatch.setattr(runner, "get_meta", lambda ctx, name: None)
+    run_job(db, job_id, ctx=None, options=opts())
+    conn = connect(db)
+    pairs = [(e["kind"], e["detail"]) for e in JobRepository(conn).get_events(job_id)]
+    conn.close()
+    assert ("run_finished", JobStatus.PAUSED.value) in pairs
+
+
+def test_stop_between_files_reenqueues_the_job(job, monkeypatch):
+    db, job_id = job
+    calls = {"n": 0}
+    stop = {"flag": False}
+
+    def one_then_stop(*a, **k):
+        calls["n"] += 1
+        stop["flag"] = True
+        return verified(100)
+
+    monkeypatch.setattr(runner, "upload_single_shot", one_then_stop)
+    monkeypatch.setattr(runner, "get_meta", lambda ctx, name: None)
+    status = run_job(
+        db, job_id, ctx=None,
+        options=opts(should_stop=lambda: stop["flag"]),
+    )
+    assert status is JobStatus.PENDING
+    assert calls["n"] == 1                      # second file never attempted
+    conn = connect(db)
+    repo = JobRepository(conn)
+    job_row = repo.get_job(job_id)
+    kinds = [e["kind"] for e in repo.get_events(job_id)]
+    conn.close()
+    assert job_row["status"] == JobStatus.PENDING.value
+    assert job_row["finished_at"] is None       # a stop is not a finish
+    assert "run_stopped" in kinds
+    states = files_by_state(db, job_id)
+    assert FileState.VERIFIED.value in states.values()
+    assert FileState.PENDING.value in states.values()
+
+
+def test_stopped_file_is_not_marked_failed(job, monkeypatch):
+    from mml_cloud_transfer.core.errors import TransferStopped
+
+    db, job_id = job
+    monkeypatch.setattr(
+        runner, "upload_single_shot",
+        lambda *a, **k: (_ for _ in ()).throw(TransferStopped("wind-down")),
+    )
+    monkeypatch.setattr(runner, "get_meta", lambda ctx, name: None)
+    status = run_job(db, job_id, ctx=None, options=opts())
+    assert status is JobStatus.PENDING
+    states = files_by_state(db, job_id)
+    assert FileState.FAILED.value not in states.values()

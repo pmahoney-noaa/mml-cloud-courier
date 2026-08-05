@@ -3,10 +3,91 @@ import json
 import pytest
 
 from mml_cloud_transfer.cli.__main__ import main
-from mml_cloud_transfer.cli.transfer_command import parse_size_policy
+from mml_cloud_transfer.cli.transfer_command import (
+    _finish_via_service,
+    _watch_until_settled,
+    parse_size_policy,
+)
+from mml_cloud_transfer.core.models import JobStatus
 from mml_cloud_transfer.core.slicing import SizePolicy
 
 POLICY_ARG = "65536,262144,262144"
+
+
+class _StubReportEventsClient:
+    """Duck-typed client for _finish_via_service — no HTTP involved."""
+
+    def __init__(self, events):
+        self._events = events
+
+    def report(self, job_id):
+        return {"report_html": "report.html"}
+
+    def events(self, job_id, after_id=0):
+        return self._events
+
+
+def test_finish_via_service_flags_scan_errors_even_on_a_complete_job(capsys):
+    """IMPORTANT 3 regression: service mode must not report success for a
+    COMPLETE job whose scan silently skipped files — those files never
+    entered the manifest, so the report alone can't reveal the gap."""
+    client = _StubReportEventsClient([{"kind": "scan_error", "detail": "boom"}])
+    code = _finish_via_service(client, 1, JobStatus.COMPLETE)
+    assert code == 1
+    assert "scan error" in capsys.readouterr().out.lower()
+
+
+def test_finish_via_service_returns_zero_when_no_scan_errors(capsys):
+    client = _StubReportEventsClient([])
+    code = _finish_via_service(client, 1, JobStatus.COMPLETE)
+    assert code == 0
+
+
+class _StubWatchClient:
+    """`stream` yields a terminal INCOMPLETE tick first (masking a stall the
+    service is about to decide on), then a genuine COMPLETE tick. `get_job`
+    mirrors that: STALLED on the first re-check, COMPLETE on the second."""
+
+    def __init__(self):
+        self._stream_calls = 0
+        self._get_job_calls = 0
+
+    def stream(self, job_id):
+        self._stream_calls += 1
+        if self._stream_calls == 1:
+            yield {
+                "status": "incomplete",
+                "progress": {
+                    "files_done": 1, "files_total": 2,
+                    "bytes_done": 1, "bytes_total": 2,
+                },
+                "events": [],
+            }
+        else:
+            yield {
+                "status": "complete",
+                "progress": {
+                    "files_done": 2, "files_total": 2,
+                    "bytes_done": 2, "bytes_total": 2,
+                },
+                "events": [],
+            }
+
+    def get_job(self, job_id):
+        self._get_job_calls += 1
+        return {"status": "stalled" if self._get_job_calls == 1 else "complete"}
+
+
+def test_watch_until_settled_reconciles_a_stall_masked_as_incomplete(capsys):
+    """IMPORTANT 7 regression: an in-flight watcher receives the terminal
+    INCOMPLETE tick before the service decides to stall the job. The CLI
+    must re-check after the stream closes and keep watching rather than
+    reporting a false failure."""
+    client = _StubWatchClient()
+    status = _watch_until_settled(client, 1)
+    assert status is JobStatus.COMPLETE
+    assert client._stream_calls == 2
+    assert "moved to stalled" in capsys.readouterr().out
 
 
 def test_parse_size_policy():

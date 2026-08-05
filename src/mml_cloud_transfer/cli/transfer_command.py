@@ -15,21 +15,15 @@ from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.engine.runner import EngineOptions, run_job, scan_remote
 from mml_cloud_transfer.gcs.client import make_context
 from mml_cloud_transfer.cli.scan_command import run_scan
+from mml_cloud_transfer.cli.service_client import ApiClient, ServiceError
+from mml_cloud_transfer.service.security import read_token
+from mml_cloud_transfer.service.config import load_config
 from mml_cloud_transfer.store.db import connect
 from mml_cloud_transfer.store.repository import JobRepository
 
 
 def parse_size_policy(text: str) -> SizePolicy:
-    parts = text.split(",")
-    if len(parts) != 3:
-        raise ValueError(
-            "size policy must be 'single_shot_max,resumable_max,min_slice'"
-        )
-    single, resumable, min_slice = (int(p) for p in parts)
-    return SizePolicy(
-        single_shot_max=single, resumable_max=resumable,
-        min_slice=min_slice, max_components=32,
-    )
+    return SizePolicy.parse(text)
 
 
 def _options(args) -> EngineOptions:
@@ -64,7 +58,106 @@ def _finish(args, db, job_id: int, status: JobStatus) -> int:
     return 0 if status is JobStatus.COMPLETE else 1
 
 
+def _api_client(args) -> ApiClient:
+    token_path = (
+        Path(args.token_file) if args.token_file else load_config().token_path
+    )
+    return ApiClient(args.service_url, read_token(token_path))
+
+
+def _watch(client: ApiClient, job_id: int) -> JobStatus:
+    """Print progress lines until the server closes the stream, then
+    return the job's final status."""
+    last_line = ""
+    final_status = None
+    for event in client.stream(job_id):
+        final_status = event["status"]
+        progress = event["progress"]
+        line = (
+            f"[{event['status']}] "
+            f"{progress['files_done']}/{progress['files_total']} files, "
+            f"{progress['bytes_done']}/{progress['bytes_total']} bytes"
+        )
+        if line != last_line:
+            print(line)
+            last_line = line
+        for entry in event["events"]:
+            if entry["kind"] in ("job_stalled", "job_unstalled", "run_paused"):
+                print(f"  ! {entry['kind']}: {entry['detail'] or ''}")
+    if final_status is None:
+        raise ServiceError(0, "stream ended without any event")
+    return JobStatus(final_status)
+
+
+def _finish_via_service(client: ApiClient, job_id: int, status: JobStatus) -> int:
+    report = client.report(job_id)
+    print(f"Job {job_id}: {status.value.upper()}")
+    print(f"Report: {report['report_html']}")
+    # A COMPLETE verdict only means every PLANNED file transferred — a scan
+    # that silently skipped files never gets them into the manifest, so the
+    # report alone can't reveal the gap. scan_error events are persisted
+    # even in service mode; surface them here the same way direct mode does.
+    scan_errors = [e for e in client.events(job_id, after_id=0) if e["kind"] == "scan_error"]
+    if scan_errors:
+        print(
+            f"{len(scan_errors)} scan error(s) — some files were never"
+            " planned; see the report"
+        )
+        return 1
+    return 0 if status is JobStatus.COMPLETE else 1
+
+
+_SERVICE_TERMINAL_STATUSES = {
+    JobStatus.COMPLETE.value, JobStatus.INCOMPLETE.value,
+    JobStatus.PAUSED.value, JobStatus.CANCELLED.value,
+}
+
+
+def _watch_until_settled(client: ApiClient, job_id: int) -> JobStatus:
+    """`_watch` can return INCOMPLETE for a job the service is about to mark
+    STALLED and quietly retry: the SSE stream always emits the terminal
+    INCOMPLETE tick before the stall is decided (see service/sse.py), so an
+    in-flight watcher sees it first. Re-check the job once the stream
+    closes and keep watching if it actually moved on rather than settled."""
+    while True:
+        _watch(client, job_id)
+        current = client.get_job(job_id)["status"]
+        if current in _SERVICE_TERMINAL_STATUSES:
+            return JobStatus(current)
+        print(
+            f"job moved to {current} — still being retried by the service;"
+            " watching..."
+        )
+
+
+def run_transfer_via_service(args) -> int:
+    client = _api_client(args)
+    job_id = client.submit_job({
+        "name": args.name,
+        "direction": args.direction,
+        "source_root": args.source,
+        "dest_prefix": args.prefix,
+        "bucket": args.bucket,
+        "credentials_path": args.credentials,
+        "emulator_endpoint": args.emulator_endpoint,
+        "audit_hash": args.audit_hash,
+        "scheduled_start_at": args.scheduled_at,
+    })
+    print(f"Job {job_id} submitted")
+    if args.scheduled_at:
+        print(f"Scheduled to start at {args.scheduled_at}; check progress with"
+              f" 'mmlct status --service-url {args.service_url}'")
+        return 0
+    return _finish_via_service(client, job_id, _watch_until_settled(client, job_id))
+
+
 def run_transfer(args) -> int:
+    if args.scheduled_at and not args.service_url:
+        raise ValueError(
+            "--scheduled-at requires the service; pass --service-url"
+        )
+    if args.service_url:
+        return run_transfer_via_service(args)
     options = _options(args)
     ctx = _context(args)
     direction = Direction(args.direction)
@@ -97,9 +190,7 @@ def run_transfer(args) -> int:
     if direction is Direction.UPLOAD and args.audit_hash:
         conn = connect(args.db)
         try:
-            conn.execute(
-                "UPDATE jobs SET audit_hash = 1 WHERE id = ?", (job_id,)
-            )
+            JobRepository(conn).set_audit_hash(job_id, True)
         finally:
             conn.close()
 
@@ -112,6 +203,12 @@ def run_transfer(args) -> int:
 
 
 def run_resume(args) -> int:
+    if args.service_url:
+        client = _api_client(args)
+        client.resume(args.job_id)
+        return _finish_via_service(
+            client, args.job_id, _watch_until_settled(client, args.job_id)
+        )
     conn = connect(args.db)
     try:
         repo = JobRepository(conn)
@@ -132,6 +229,19 @@ def run_resume(args) -> int:
 
 
 def run_status(args) -> int:
+    if args.service_url:
+        client = _api_client(args)
+        jobs = client.list_jobs()
+        if not jobs:
+            print("No jobs.")
+            return 0
+        for job in jobs:
+            print(
+                f"#{job['id']} {job['name']} [{job['direction']}] {job['status']}"
+                f" — {display_path(job['source_root'])} ->"
+                f" {job['dest_prefix'] or '(root)'}"
+            )
+        return 0
     conn = connect(args.db)
     try:
         jobs = conn.execute("SELECT * FROM jobs ORDER BY id").fetchall()
@@ -153,6 +263,10 @@ def run_status(args) -> int:
 
 
 def run_report_cmd(args) -> int:
+    if args.service_url:
+        client = _api_client(args)
+        print(f"Report: {client.report(args.job_id)['report_html']}")
+        return 0
     conn = connect(args.db)
     try:
         JobRepository(conn).get_job(args.job_id)

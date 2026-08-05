@@ -15,6 +15,7 @@ from typing import BinaryIO
 import google_crc32c
 
 from mml_cloud_transfer.core.crc32c_combine import combine_all
+from mml_cloud_transfer.core.errors import TransferStopped
 from mml_cloud_transfer.core.hashing import crc32c_to_base64, hash_file, hash_range
 from mml_cloud_transfer.core.slicing import SizePolicy, SliceSpec, plan_slices
 from mml_cloud_transfer.gcs.client import GcsContext
@@ -155,6 +156,7 @@ def upload_resumable(
     with_sha256: bool = False,
     chunk_size: int = 8 * 1024 * 1024,
     on_progress: ProgressFn | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> UploadResult:
     if chunk_size % CHUNK_ALIGN != 0:
         raise ValueError(f"chunk_size must be a multiple of 256 KiB, got {chunk_size}")
@@ -227,6 +229,8 @@ def upload_resumable(
         offset = committed
         finalized = None
         while offset < size_bytes:
+            if should_stop is not None and should_stop():
+                raise TransferStopped(object_name)
             data = fp.read(min(chunk_size, size_bytes - offset))
             hashes.update(data)
             result = put_chunk(ctx.session, session_uri, data, offset, size_bytes)
@@ -269,6 +273,7 @@ def upload_slice(
     session_uri: str | None = None,
     chunk_size: int = 8 * 1024 * 1024,
     on_progress: SliceProgressFn | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> tuple[int, ObjectMeta]:
     """Upload one slice to its temp object; returns (slice_crc32c, temp meta)."""
     temp_name = slice_temp_name(object_name, spec.index)
@@ -306,6 +311,8 @@ def upload_slice(
         offset = committed
         finalized = None
         while offset < spec.length:
+            if should_stop is not None and should_stop():
+                raise TransferStopped(object_name)
             data = fp.read(min(chunk_size, spec.length - offset))
             hashes.update(data)
             result = put_chunk(ctx.session, session_uri, data, offset, spec.length)
@@ -368,6 +375,7 @@ def upload_sliced(
     chunk_size: int = 8 * 1024 * 1024,
     with_sha256: bool = False,
     on_progress: SliceProgressFn | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> UploadResult:
     slice_states = slice_states or {}
     specs = plan_slices(size_bytes, policy=policy)
@@ -397,6 +405,9 @@ def upload_sliced(
                 continue
         to_upload.append(spec)
 
+    if should_stop is not None and should_stop():
+        raise TransferStopped(object_name)
+
     bytes_sent = 0
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
@@ -409,6 +420,7 @@ def upload_sliced(
                 session_uri=slice_states.get(spec.index, (None, None))[0],
                 chunk_size=chunk_size,
                 on_progress=on_progress,
+                should_stop=should_stop,
             ): spec
             for spec in to_upload
         }

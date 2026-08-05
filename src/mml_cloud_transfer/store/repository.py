@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from mml_cloud_transfer.core.errors import ErrorCategory
@@ -31,6 +32,16 @@ _NOT_RETRIED = (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+@dataclass(frozen=True, slots=True)
+class JobProgress:
+    files_total: int
+    files_done: int      # verified + skipped
+    files_failed: int    # failed + quarantined
+    bytes_total: int
+    bytes_done: int      # sizes of done files + in-flight slice bytes
+    state_counts: dict[str, int]
 
 
 class JobRepository:
@@ -107,6 +118,12 @@ class JobRepository:
             (generation, file_id),
         )
 
+    def set_audit_hash(self, job_id: int, enabled: bool) -> None:
+        self.get_job(job_id)  # LookupError on a bogus id, matching get_precondition
+        self._conn.execute(
+            "UPDATE jobs SET audit_hash = ? WHERE id = ?", (int(enabled), job_id)
+        )
+
     def get_precondition(self, file_id: int) -> int | None:
         row = self._conn.execute(
             "SELECT precondition_generation FROM job_files WHERE id = ?", (file_id,)
@@ -115,6 +132,29 @@ class JobRepository:
             raise LookupError(f"no file with id {file_id}")
         value = row["precondition_generation"]
         return None if value is None else int(value)
+
+    def list_jobs(self) -> list[sqlite3.Row]:
+        return self._conn.execute("SELECT * FROM jobs ORDER BY id").fetchall()
+
+    def jobs_with_status(self, status: JobStatus) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM jobs WHERE status = ? ORDER BY id", (status.value,)
+        ).fetchall()
+
+    def next_eligible_job(self, now: str) -> sqlite3.Row | None:
+        """FIFO by id among pending jobs whose scheduled start has passed.
+
+        String comparison is correct only because both sides use the
+        _now() format (UTC ISO-8601, seconds, +00:00). The API layer owns
+        normalizing user-supplied schedules into that format. A missed
+        window needs no special case: its schedule is simply <= now.
+        """
+        return self._conn.execute(
+            "SELECT * FROM jobs WHERE status = ?"
+            " AND (scheduled_start_at IS NULL OR scheduled_start_at <= ?)"
+            " ORDER BY id LIMIT 1",
+            (JobStatus.PENDING.value, now),
+        ).fetchone()
 
     # ---- planning -------------------------------------------------------
 
@@ -199,10 +239,12 @@ class JobRepository:
             (FileState.TRANSFERRING.value, now, now, file_id),
         )
 
-    def heartbeat(self, file_id: int, bytes_transferred: int) -> None:
+    def heartbeat(self, file_id: int) -> None:
+        """Refresh the staleness timestamp. Byte progress lives in
+        file_slices — a whole-file number written from concurrent slice
+        callbacks flaps, so it is derived (job_progress), not stored."""
         self._conn.execute(
-            "UPDATE job_files SET heartbeat_at = ?, bytes_transferred = ? WHERE id = ?",
-            (_now(), bytes_transferred, file_id),
+            "UPDATE job_files SET heartbeat_at = ? WHERE id = ?", (_now(), file_id)
         )
 
     def mark_verified(
@@ -317,6 +359,61 @@ class JobRepository:
         ).fetchone()
         return JobStatus.COMPLETE if row["n"] == 0 else JobStatus.INCOMPLETE
 
+    def job_progress(self, job_id: int) -> JobProgress:
+        job = self.get_job(job_id)
+        counts = {
+            r["state"]: r["n"]
+            for r in self._conn.execute(
+                "SELECT state, COUNT(*) AS n FROM job_files"
+                " WHERE job_id = ? GROUP BY state",
+                (job_id,),
+            )
+        }
+        done_bytes = self._conn.execute(
+            "SELECT COALESCE(SUM(size_bytes), 0) AS b FROM job_files"
+            " WHERE job_id = ? AND state IN (?, ?)",
+            (job_id, FileState.VERIFIED.value, FileState.SKIPPED.value),
+        ).fetchone()["b"]
+        inflight = self._conn.execute(
+            "SELECT COALESCE(SUM(s.bytes_transferred), 0) AS b FROM file_slices s"
+            " JOIN job_files f ON f.id = s.file_id"
+            " WHERE f.job_id = ? AND f.state = ?",
+            (job_id, FileState.TRANSFERRING.value),
+        ).fetchone()["b"]
+        return JobProgress(
+            files_total=job["planned_files"],
+            files_done=counts.get(FileState.VERIFIED.value, 0)
+            + counts.get(FileState.SKIPPED.value, 0),
+            files_failed=counts.get(FileState.FAILED.value, 0)
+            + counts.get(FileState.QUARANTINED.value, 0),
+            bytes_total=job["planned_bytes"],
+            bytes_done=done_bytes + inflight,
+            state_counts=counts,
+        )
+
+    def get_files_page(
+        self, job_id: int, *, state: str | None = None,
+        limit: int = 500, offset: int = 0,
+    ) -> list[sqlite3.Row]:
+        if state is None:
+            return self._conn.execute(
+                "SELECT * FROM job_files WHERE job_id = ?"
+                " ORDER BY id LIMIT ? OFFSET ?",
+                (job_id, limit, offset),
+            ).fetchall()
+        return self._conn.execute(
+            "SELECT * FROM job_files WHERE job_id = ? AND state = ?"
+            " ORDER BY id LIMIT ? OFFSET ?",
+            (job_id, state, limit, offset),
+        ).fetchall()
+
+    def count_failures(self, job_id: int, category: ErrorCategory) -> int:
+        return self._conn.execute(
+            "SELECT COUNT(*) AS n FROM job_files WHERE job_id = ?"
+            " AND state = ? AND error_category = ?",
+            (job_id, FileState.FAILED.value, category.value),
+        ).fetchone()["n"]
+
     # ---- events ---------------------------------------------------------
 
     def record_event(
@@ -330,6 +427,12 @@ class JobRepository:
     def get_events(self, job_id: int) -> list[sqlite3.Row]:
         return self._conn.execute(
             "SELECT * FROM events WHERE job_id = ? ORDER BY id", (job_id,)
+        ).fetchall()
+
+    def events_after(self, job_id: int, after_id: int = 0) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM events WHERE job_id = ? AND id > ? ORDER BY id",
+            (job_id, after_id),
         ).fetchall()
 
     # ---- slices ---------------------------------------------------------
@@ -377,3 +480,54 @@ class JobRepository:
 
     def clear_slices(self, file_id: int) -> None:
         self._conn.execute("DELETE FROM file_slices WHERE file_id = ?", (file_id,))
+
+    # ---- profiles -------------------------------------------------------
+
+    def create_profile(
+        self, *, name: str, bucket: str, auth_type: str,
+        credential_ref: str | None = None, project_id: str = "",
+        default_prefix: str = "",
+    ) -> int:
+        cursor = self._conn.execute(
+            "INSERT INTO profiles (name, project_id, bucket, auth_type,"
+            " credential_ref, default_prefix, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (name, project_id, bucket, auth_type, credential_ref,
+             default_prefix, _now()),
+        )
+        return int(cursor.lastrowid)
+
+    def get_profile(self, profile_id: int) -> sqlite3.Row:
+        row = self._conn.execute(
+            "SELECT * FROM profiles WHERE id = ?", (profile_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"no profile with id {profile_id}")
+        return row
+
+    def find_profile(
+        self, *, bucket: str, auth_type: str, credential_ref: str | None
+    ) -> sqlite3.Row | None:
+        # "IS ?" is SQLite's NULL-safe equality, so an ADC profile
+        # (credential_ref NULL) is found rather than duplicated.
+        return self._conn.execute(
+            "SELECT * FROM profiles WHERE bucket = ? AND auth_type = ?"
+            " AND credential_ref IS ? ORDER BY id LIMIT 1",
+            (bucket, auth_type, credential_ref),
+        ).fetchone()
+
+    def get_or_create_profile(
+        self, *, bucket: str, auth_type: str, credential_ref: str | None = None
+    ) -> int:
+        row = self.find_profile(
+            bucket=bucket, auth_type=auth_type, credential_ref=credential_ref
+        )
+        if row is not None:
+            return int(row["id"])
+        count = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM profiles"
+        ).fetchone()["n"]
+        return self.create_profile(
+            name=f"{bucket} [{auth_type} {count + 1}]",  # profiles.name is UNIQUE
+            bucket=bucket, auth_type=auth_type, credential_ref=credential_ref,
+        )

@@ -140,6 +140,17 @@ def test_summary_and_html_surface_scan_errors(tmp_path):
     assert "C:\\locked" in html
 
 
+def test_write_report_leaves_no_tmp_files_behind(finished_job, tmp_path):
+    """IMPORTANT 4 regression: each of the three files is written to a
+    sibling temp path and atomically replaced into place so a concurrent
+    writer (worker auto-report vs. POST /report) can't interleave/truncate
+    the other's output. No .tmp artifact should survive a normal write."""
+    db, job_id = finished_job
+    out_dir = tmp_path / "out"
+    write_report(db, job_id, out_dir, bucket="mml-archive")
+    assert list(out_dir.glob("*.tmp")) == []
+
+
 def test_summary_scan_errors_is_zero_when_none_recorded(finished_job, tmp_path):
     db, job_id = finished_job
     paths = write_report(db, job_id, tmp_path / "out")

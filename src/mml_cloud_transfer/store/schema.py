@@ -61,6 +61,9 @@ CREATE TABLE IF NOT EXISTS job_files (
     -- Destination generation captured at plan time; 0 means the object must
     -- not exist yet. Enforced via if_generation_match by the Plan 2 engine.
     precondition_generation INTEGER,
+    -- Retained for schema stability; no longer written during transfer.
+    -- Live byte progress is per-slice in file_slices.bytes_transferred
+    -- and aggregated by JobRepository.job_progress.
     bytes_transferred INTEGER NOT NULL DEFAULT 0,
     attempts          INTEGER NOT NULL DEFAULT 0,
     error_category    TEXT,

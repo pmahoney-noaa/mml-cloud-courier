@@ -24,7 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from mml_cloud_transfer.core.errors import ErrorCategory, classify
+from mml_cloud_transfer.core.errors import ErrorCategory, TransferStopped, classify
 from mml_cloud_transfer.core.models import (
     Direction,
     FileState,
@@ -69,6 +69,7 @@ class EngineOptions:
     download_range_bytes: int = 128 * 1024 * 1024
     retry: RetrySchedule = field(default_factory=RetrySchedule)
     audit: bool = True
+    should_stop: Callable[[], bool] | None = None
 
 
 def _stat_source(path: str) -> tuple[int, int]:
@@ -183,13 +184,13 @@ def _transfer_once(ctx, db_path, repo: JobRepository, job, row, options: EngineO
                         session_uri=session_uri, state=SliceState.UPLOADING,
                         bytes_transferred=committed,
                     )
-                    r.heartbeat(file_id, committed)
+                    r.heartbeat(file_id)
 
             result = upload_resumable(
                 ctx, row["source_path"], row["object_name"], row["size_bytes"],
                 precondition_generation=precondition, session_uri=uri,
                 with_sha256=with_sha256, chunk_size=options.chunk_size,
-                on_progress=on_progress,
+                on_progress=on_progress, should_stop=options.should_stop,
             )
         else:
             specs = plan_slices(row["size_bytes"], policy=options.policy)
@@ -211,14 +212,14 @@ def _transfer_once(ctx, db_path, repo: JobRepository, job, row, options: EngineO
                         state=SliceState.UPLOADED if crc is not None else SliceState.UPLOADING,
                         bytes_transferred=committed,
                     )
-                    r.heartbeat(file_id, committed)
+                    r.heartbeat(file_id)
 
             result = upload_sliced(
                 ctx, row["source_path"], row["object_name"], row["size_bytes"],
                 precondition_generation=precondition, policy=options.policy,
                 slice_states=stored, max_workers=options.slice_workers,
                 chunk_size=options.chunk_size, with_sha256=with_sha256,
-                on_progress=on_slice,
+                on_progress=on_slice, should_stop=options.should_stop,
             )
     else:
         from mml_cloud_transfer.gcs.downloader import plan_ranges
@@ -244,7 +245,7 @@ def _transfer_once(ctx, db_path, repo: JobRepository, job, row, options: EngineO
                         file_id, idx, offset=spec.offset, length=spec.length,
                         crc32c=crc, state=SliceState.UPLOADED, bytes_transferred=done,
                     )
-                r.heartbeat(file_id, done)
+                r.heartbeat(file_id)
 
         result = download_file(
             ctx, row["object_name"], dest,
@@ -252,6 +253,7 @@ def _transfer_once(ctx, db_path, repo: JobRepository, job, row, options: EngineO
             range_bytes=options.download_range_bytes,
             max_workers=options.slice_workers,
             with_sha256=with_sha256, on_progress=on_range,
+            should_stop=options.should_stop,
         )
 
     if result.state == "skipped":
@@ -304,10 +306,16 @@ def _process_file(
 
         delays = iter(options.retry.delays(rng))
         for attempt in range(options.retry.max_attempts):
+            if options.should_stop is not None and options.should_stop():
+                raise TransferStopped(row["relative_path"])
             repo.mark_transferring(file_id)
             try:
                 _transfer_once(ctx, db_path, repo, job, row, options)
                 return
+            except TransferStopped:
+                # Not a failure: the service asked us to wind down. The file
+                # stays `transferring`; the next run picks it up by state.
+                raise
             except Exception as exc:
                 category, transient, pauses = _classify_transfer_error(exc)
                 repo.mark_failed(file_id, category, _scrub(str(exc))[:500])
@@ -399,6 +407,7 @@ def run_job(
         repo.reset_stale_transfers(job_id)
 
         paused = False
+        stopped = False
         for _pass in range(2):  # second pass picks up files marked `changed`
             pending = [dict(r) for r in repo.iter_pending_files(job_id)]
             if _pass == 1:
@@ -422,11 +431,24 @@ def run_job(
                         pool.shutdown(cancel_futures=True)
                         paused = True
                         break
-            if paused:
+                    except TransferStopped:
+                        repo.record_event(job_id, "run_stopped")
+                        pool.shutdown(cancel_futures=True)
+                        stopped = True
+                        break
+            if paused or stopped:
                 break
+
+        if stopped:
+            # Deliberately NOT finish_job: a stop is an interruption, not an
+            # outcome. `pending` + run_stopped puts the job exactly where the
+            # startup-recovery / resume path expects to find it.
+            repo.set_job_status(job_id, JobStatus.PENDING)
+            return JobStatus.PENDING
 
         if paused:
             repo.finish_job(job_id, JobStatus.PAUSED)
+            repo.record_event(job_id, "run_finished", JobStatus.PAUSED.value)
             return JobStatus.PAUSED
 
         if options.audit:

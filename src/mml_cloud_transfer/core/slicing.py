@@ -45,6 +45,20 @@ class SizePolicy:
             max_components=MAX_COMPONENTS,
         )
 
+    @classmethod
+    def parse(cls, text: str) -> "SizePolicy":
+        """Parse 'single_shot_max,resumable_max,min_slice' (bytes, integers)."""
+        parts = text.split(",")
+        if len(parts) != 3:
+            raise ValueError(
+                "size policy must be 'single_shot_max,resumable_max,min_slice'"
+            )
+        single, resumable, min_slice = (int(p) for p in parts)
+        return cls(
+            single_shot_max=single, resumable_max=resumable,
+            min_slice=min_slice, max_components=32,
+        )
+
 
 def choose_method(
     size_bytes: int, *, policy: SizePolicy | None = None
