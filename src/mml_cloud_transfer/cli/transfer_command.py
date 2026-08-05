@@ -93,7 +93,41 @@ def _finish_via_service(client: ApiClient, job_id: int, status: JobStatus) -> in
     report = client.report(job_id)
     print(f"Job {job_id}: {status.value.upper()}")
     print(f"Report: {report['report_html']}")
+    # A COMPLETE verdict only means every PLANNED file transferred — a scan
+    # that silently skipped files never gets them into the manifest, so the
+    # report alone can't reveal the gap. scan_error events are persisted
+    # even in service mode; surface them here the same way direct mode does.
+    scan_errors = [e for e in client.events(job_id, after_id=0) if e["kind"] == "scan_error"]
+    if scan_errors:
+        print(
+            f"{len(scan_errors)} scan error(s) — some files were never"
+            " planned; see the report"
+        )
+        return 1
     return 0 if status is JobStatus.COMPLETE else 1
+
+
+_SERVICE_TERMINAL_STATUSES = {
+    JobStatus.COMPLETE.value, JobStatus.INCOMPLETE.value,
+    JobStatus.PAUSED.value, JobStatus.CANCELLED.value,
+}
+
+
+def _watch_until_settled(client: ApiClient, job_id: int) -> JobStatus:
+    """`_watch` can return INCOMPLETE for a job the service is about to mark
+    STALLED and quietly retry: the SSE stream always emits the terminal
+    INCOMPLETE tick before the stall is decided (see service/sse.py), so an
+    in-flight watcher sees it first. Re-check the job once the stream
+    closes and keep watching if it actually moved on rather than settled."""
+    while True:
+        _watch(client, job_id)
+        current = client.get_job(job_id)["status"]
+        if current in _SERVICE_TERMINAL_STATUSES:
+            return JobStatus(current)
+        print(
+            f"job moved to {current} — still being retried by the service;"
+            " watching..."
+        )
 
 
 def run_transfer_via_service(args) -> int:
@@ -114,7 +148,7 @@ def run_transfer_via_service(args) -> int:
         print(f"Scheduled to start at {args.scheduled_at}; check progress with"
               f" 'mmlct status --service-url {args.service_url}'")
         return 0
-    return _finish_via_service(client, job_id, _watch(client, job_id))
+    return _finish_via_service(client, job_id, _watch_until_settled(client, job_id))
 
 
 def run_transfer(args) -> int:
@@ -172,7 +206,9 @@ def run_resume(args) -> int:
     if args.service_url:
         client = _api_client(args)
         client.resume(args.job_id)
-        return _finish_via_service(client, args.job_id, _watch(client, args.job_id))
+        return _finish_via_service(
+            client, args.job_id, _watch_until_settled(client, args.job_id)
+        )
     conn = connect(args.db)
     try:
         repo = JobRepository(conn)

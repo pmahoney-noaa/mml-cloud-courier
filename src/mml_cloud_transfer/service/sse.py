@@ -7,6 +7,18 @@ The generator owns one read-only SQLite connection for its lifetime (ticks
 run sequentially but may execute on different worker threads) and closes
 it on the way out — including when the client disconnects and the generator
 is garbage-collected mid-yield.
+
+A subtlety this creates: the worker always writes the terminal INCOMPLETE
+status before it decides (separately, afterward) whether sustained network
+failure means the job should be parked STALLED. An in-flight watcher — one
+that was already connected when the run ended — therefore receives the
+INCOMPLETE terminal tick and the stream closes, even though the job goes on
+to STALLED (and gets retried) a moment later. A watcher that connects late,
+after the job is already STALLED, does see `stalled` ticks correctly (it
+just never sees them as terminal). The CLI compensates for the in-flight
+case by re-checking the job's status once the stream closes and resuming
+the watch if it moved on (see cli/transfer_command.py's
+`_watch_until_settled`).
 """
 
 from __future__ import annotations

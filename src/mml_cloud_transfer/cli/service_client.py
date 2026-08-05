@@ -71,6 +71,14 @@ class ApiClient:
             self._session.post(f"{self._base}/jobs/{job_id}/report", timeout=600)
         )
 
+    def events(self, job_id: int, after_id: int = 0) -> list[dict]:
+        return self._check(
+            self._session.get(
+                f"{self._base}/jobs/{job_id}/events",
+                params={"after_id": after_id}, timeout=30,
+            )
+        )
+
     def stream(self, job_id: int) -> Iterator[dict]:
         """Yield each SSE progress payload until the server closes the
         stream (which it does after a terminal tick)."""
