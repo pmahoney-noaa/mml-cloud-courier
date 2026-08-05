@@ -6,6 +6,7 @@ both drive ServiceHost; tests run it in-process on an ephemeral port.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
@@ -15,6 +16,8 @@ from mml_cloud_transfer.service.app import create_app
 from mml_cloud_transfer.service.config import ServiceConfig
 from mml_cloud_transfer.service.controller import JobController
 from mml_cloud_transfer.service.worker import QueueWorker
+
+_log = logging.getLogger(__name__)
 
 
 class ServiceHost:
@@ -54,13 +57,27 @@ class ServiceHost:
                 )
             time.sleep(0.05)
 
-    def stop(self, timeout: float = 30.0) -> None:
+    def stop(self, timeout: float = 30.0) -> bool:
         """Graceful: the running job winds down via should_stop within one
-        chunk and lands on the recovery path. Safe to call twice."""
+        chunk and lands on the recovery path. Safe to call twice.
+
+        An incomplete stop is survivable — the threads are daemons and
+        startup recovery self-heals on the next launch — but the caller is
+        told the truth rather than being left to assume a clean shutdown.
+        Returns True if every thread joined within `timeout`, else False.
+        """
         self.controller.service_stop.set()
         self._server.should_exit = True
         for thread in self.threads:
             thread.join(timeout=timeout)
+        stragglers = [t.name for t in self.threads if t.is_alive()]
+        if stragglers:
+            _log.warning(
+                "service stop incomplete: %s still alive after %.0fs",
+                ", ".join(stragglers), timeout,
+            )
+            return False
+        return True
 
 
 def run_console(config: ServiceConfig) -> None:

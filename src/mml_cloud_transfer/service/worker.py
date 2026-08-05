@@ -281,7 +281,7 @@ class QueueWorker:
         finally:
             conn.close()
         while not (stop_event.is_set() or self._controller.service_stop.is_set()):
-            self._sleep(self._config.stall_probe_interval)
+            self._stall_wait(stop_event)
             if stop_event.is_set() or self._controller.service_stop.is_set():
                 return  # intent (if any) is applied by run_once's finally
             conn = connect(self._config.db_path)
@@ -297,6 +297,17 @@ class QueueWorker:
                     return
             finally:
                 conn.close()
+
+    def _stall_wait(self, stop_event) -> None:
+        """Sleep stall_probe_interval in small steps so a stop request
+        interrupts within ~a second instead of a full probe interval."""
+        waited = 0.0
+        step = min(1.0, self._config.stall_probe_interval)
+        while waited < self._config.stall_probe_interval:
+            if stop_event.is_set() or self._controller.service_stop.is_set():
+                return
+            self._sleep(step)
+            waited += step
 
     def _apply_intent(self, job_id: int, intent: str | None) -> None:
         if intent not in _INTENTS:

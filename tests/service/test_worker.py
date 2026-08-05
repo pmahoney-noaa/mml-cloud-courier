@@ -1,6 +1,8 @@
 """Worker unit tests: every engine collaborator is injected, no network.
 The injected run_job_fn writes DB state exactly as the real one would."""
 
+import threading
+
 import pytest
 import requests
 
@@ -383,8 +385,12 @@ def test_incomplete_with_unreachable_network_stalls_then_requeues(config):
     assert job["status"] == JobStatus.PENDING.value   # re-queued, ready to re-run
     assert "job_stalled" in kinds
     assert "job_unstalled" in kinds
-    assert slept                                      # it waited between probes
-    assert all(s == config.stall_probe_interval for s in slept)
+    # _stall_wait sleeps in <=1s steps so a stop request can interrupt it
+    # quickly; here nothing interrupts, so each of the two full waits (one
+    # before each probe: the first still-down probe, then the successful
+    # one) accumulates to exactly stall_probe_interval.
+    assert slept and all(s <= 1.0 for s in slept)
+    assert sum(slept) == 2 * config.stall_probe_interval
 
 
 def test_incomplete_with_reachable_network_does_not_stall(config):
@@ -434,3 +440,11 @@ def test_cancel_during_stall_wins(config):
     )
     worker.run_once()
     assert _status(config, job_id) == JobStatus.CANCELLED.value
+
+
+def test_stall_wait_interrupts_on_service_stop(config):
+    slept = []
+    worker, controller = _worker(config, sleep=slept.append)
+    controller.service_stop.set()
+    worker._stall_wait(threading.Event())
+    assert slept == []
