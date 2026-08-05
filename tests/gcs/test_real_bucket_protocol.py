@@ -10,6 +10,7 @@ import random
 import pytest
 
 from mml_cloud_transfer.core.crc32c_combine import combine_all
+from mml_cloud_transfer.core.errors import ErrorCategory, classify
 from mml_cloud_transfer.core.hashing import crc32c_from_base64, hash_file
 from mml_cloud_transfer.core.slicing import SizePolicy, plan_slices
 from mml_cloud_transfer.gcs.objects import delete_object, get_meta, list_prefix
@@ -22,6 +23,7 @@ from mml_cloud_transfer.gcs.uploader import (
     compose_slices,
     slice_temp_name,
     upload_resumable,
+    upload_single_shot,
     upload_slice,
 )
 
@@ -149,3 +151,35 @@ def test_compose_preserves_slice_order(real_bucket_ctx, composable):
     leftovers = [m.name for m in list_prefix(ctx, f"{name}.mmlct.tmp/")]
     assert leftovers == [], f"compose left temp objects behind: {leftovers}"
     assert slice_temp_name(name, 0) == f"{name}.mmlct.tmp/0000"
+
+
+@pytest.mark.real_bucket
+def test_stale_precondition_is_a_conflict_on_real_gcs(real_bucket_ctx, tmp_path):
+    ctx, run_prefix = real_bucket_ctx
+    name = f"{run_prefix}precondition.bin"
+
+    first = tmp_path / "first.bin"
+    first.write_bytes(b"the original content")
+    second = tmp_path / "second.bin"
+    # Different content, or the skip rule fires before any precondition does.
+    second.write_bytes(b"entirely different content")
+
+    created = upload_single_shot(ctx, str(first), name, precondition_generation=0)
+    assert created.state == "verified"
+
+    # precondition_generation=0 means "this object must not exist". It does.
+    with pytest.raises(Exception) as excinfo:
+        upload_single_shot(ctx, str(second), name, precondition_generation=0)
+    assert classify(excinfo.value).category is ErrorCategory.CONFLICT
+
+    # The rejected write must not have replaced anything.
+    meta = get_meta(ctx, name)
+    assert meta is not None
+    assert meta.generation == created.generation
+
+    # Under the correct generation the same write succeeds.
+    replaced = upload_single_shot(
+        ctx, str(second), name, precondition_generation=created.generation
+    )
+    assert replaced.state == "verified"
+    assert replaced.generation != created.generation
