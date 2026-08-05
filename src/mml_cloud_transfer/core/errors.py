@@ -14,6 +14,16 @@ import errno
 from dataclasses import dataclass
 from enum import Enum
 
+
+class TransferStopped(Exception):
+    """Cooperative stop: the caller's should_stop() returned True mid-run.
+
+    Not part of the error taxonomy — never passed to classify(), never
+    recorded against a file. The interrupted state is identical to a crash,
+    so the ordinary resume path is the only recovery path.
+    """
+
+
 # Windows error codes worth naming.
 _ERROR_SHARING_VIOLATION = 32
 _ERROR_LOCK_VIOLATION = 33

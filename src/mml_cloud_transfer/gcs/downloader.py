@@ -18,6 +18,7 @@ from urllib.parse import quote
 import google_crc32c
 
 from mml_cloud_transfer.core.crc32c_combine import combine_all
+from mml_cloud_transfer.core.errors import TransferStopped
 from mml_cloud_transfer.core.hashing import hash_file
 from mml_cloud_transfer.core.slicing import SliceSpec
 from mml_cloud_transfer.gcs.client import GcsContext
@@ -75,6 +76,7 @@ def _fetch_range(
     on_progress: RangeProgressFn | None,
     *,
     progress_interval_bytes: int,
+    should_stop: Callable[[], bool] | None = None,
 ) -> int:
     """Stream one range into the part file; returns the range CRC32C."""
     crc = google_crc32c.Checksum()
@@ -91,6 +93,8 @@ def _fetch_range(
     with part_path.open("r+b") as fp:
         fp.seek(spec.offset)
         for chunk in response.iter_content(chunk_size=1024 * 1024):
+            if should_stop is not None and should_stop():
+                raise TransferStopped(f"range {spec.index}")
             fp.write(chunk)
             crc.update(chunk)
             done += len(chunk)
@@ -119,6 +123,7 @@ def download_file(
     with_sha256: bool = False,
     on_progress: RangeProgressFn | None = None,
     progress_interval_bytes: int = DOWNLOAD_PROGRESS_INTERVAL,
+    should_stop: Callable[[], bool] | None = None,
 ) -> DownloadResult:
     range_states = range_states or {}
     meta = get_meta(ctx, object_name)
@@ -164,6 +169,7 @@ def download_file(
             pool.submit(
                 _fetch_range, ctx, url, part, spec, on_progress,
                 progress_interval_bytes=progress_interval_bytes,
+                should_stop=should_stop,
             ): spec
             for spec in to_fetch
         }
