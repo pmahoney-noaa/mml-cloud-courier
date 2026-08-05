@@ -49,10 +49,31 @@ def test_run_prefix_is_unique_and_well_formed(real_bucket_ctx):
 
 
 @pytest.mark.real_bucket
-def test_the_run_prefix_starts_empty(real_bucket_ctx):
+def test_a_dirty_prefix_would_be_detected(real_bucket_ctx):
+    """Prove the fixture's virgin-prefix check discriminates dirty from clean.
+
+    The check itself lives in real_bucket_ctx's setup (tests/conftest.py),
+    not here -- run_prefix is session-scoped, so a test asserting global
+    emptiness would only ever be sound for whichever test happened to run
+    first. That was the previous version of this test
+    (test_the_run_prefix_starts_empty), and it broke the moment another
+    real_bucket test collected earlier in the session and wrote under the
+    shared prefix before this one ran. This version instead proves the
+    listing mechanism the fixture's check relies on actually sees objects
+    when they exist and does not see them where they do not -- a property
+    that holds regardless of collection order, because it only reasons
+    about sub-paths this test itself owns.
+    """
     ctx, run_prefix = real_bucket_ctx
-    # Anything here would mean a prefix collision with another run.
-    assert [m.name for m in list_prefix(ctx, run_prefix)] == []
+    written = f"{run_prefix}collision-check/probe.bin"
+    absent = f"{run_prefix}collision-check-absent/"
+
+    ctx.client.bucket(ctx.bucket).blob(written).upload_from_string(b"probe")
+
+    # Deliberately not deleted here -- left for the fixture's teardown to
+    # remove, same as test_objects_written_under_the_prefix_are_reachable.
+    assert [m.name for m in list_prefix(ctx, f"{run_prefix}collision-check/")] == [written]
+    assert [m.name for m in list_prefix(ctx, absent)] == []
 
 
 @pytest.mark.real_bucket

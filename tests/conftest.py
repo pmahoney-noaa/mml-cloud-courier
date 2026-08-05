@@ -142,6 +142,16 @@ def real_bucket_ctx():
 
     run_prefix = _gate_run_prefix(os.environ.get("MMLCT_TEST_PREFIX", ""))
     ctx = make_context(bucket)
+    # Collision check, before any test can write: a fresh <stamp>-<uuid8>/
+    # prefix must be virgin. Anything here means we collided with a
+    # concurrent or abandoned run, and teardown would delete objects that
+    # are not ours. This CANNOT live in a test -- the prefix is session
+    # scoped, so only the first test to run would ever see it empty.
+    existing = [
+        f"{b.name}#{b.generation}"
+        for b in ctx.client.list_blobs(bucket, prefix=run_prefix, versions=True)
+    ]
+    assert not existing, f"run prefix {run_prefix!r} is not virgin: {existing}"
     try:
         yield ctx, run_prefix
     finally:
