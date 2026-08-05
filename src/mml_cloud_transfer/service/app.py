@@ -196,11 +196,11 @@ def create_app(config: ServiceConfig, controller: JobController) -> FastAPI:
         try:
             job = _job_or_404(repo, job_id)
             status = job["status"]
-            if status == JobStatus.RUNNING.value:
+            if status in (JobStatus.RUNNING.value, JobStatus.SCANNING.value):
                 if controller.request(job_id, "pause"):
                     return {"status": "stopping"}
                 raise HTTPException(status_code=409, detail=(
-                    "job is marked running but nothing is active;"
+                    "job is marked running or scanning but nothing is active;"
                     " restart the service to recover it"
                 ))
             if status == JobStatus.STALLED.value:
@@ -246,11 +246,11 @@ def create_app(config: ServiceConfig, controller: JobController) -> FastAPI:
         try:
             job = _job_or_404(repo, job_id)
             status = job["status"]
-            if status == JobStatus.RUNNING.value:
+            if status in (JobStatus.RUNNING.value, JobStatus.SCANNING.value):
                 if controller.request(job_id, "cancel"):
                     return {"status": "stopping"}
                 raise HTTPException(status_code=409, detail=(
-                    "job is marked running but nothing is active;"
+                    "job is marked running or scanning but nothing is active;"
                     " restart the service to recover it"
                 ))
             if status == JobStatus.STALLED.value and controller.request(

@@ -116,6 +116,31 @@ def test_lifecycle_on_a_running_job_goes_through_the_controller(api, tmp_path):
     assert controller.job_finished() == "pause"
 
 
+def test_lifecycle_on_a_scanning_job_goes_through_the_controller(api, tmp_path):
+    """The worker arms the controller before running the scan, so a job
+    stuck in a slow scan must be pauseable/cancellable the same way a
+    running job is (Task 6 review finding)."""
+    client, config, controller = api
+    job_id = _submit(client, tmp_path)
+    conn = connect(config.db_path)
+    JobRepository(conn).set_job_status(job_id, JobStatus.SCANNING)
+    conn.close()
+    stop = controller.job_started(job_id)
+    assert client.post(f"/jobs/{job_id}/pause").json()["status"] == "stopping"
+    assert stop.is_set()
+    assert controller.job_finished() == "pause"
+
+
+def test_pause_and_cancel_on_a_scanning_job_with_nothing_active_conflict(api, tmp_path):
+    client, config, _ = api
+    job_id = _submit(client, tmp_path)
+    conn = connect(config.db_path)
+    JobRepository(conn).set_job_status(job_id, JobStatus.SCANNING)
+    conn.close()
+    assert client.post(f"/jobs/{job_id}/pause").status_code == 409
+    assert client.post(f"/jobs/{job_id}/cancel").status_code == 409
+
+
 def test_report_endpoint_writes_the_three_files(api, tmp_path):
     client, _, _ = api
     job_id = _submit(client, tmp_path)
