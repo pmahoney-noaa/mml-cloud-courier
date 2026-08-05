@@ -6,7 +6,6 @@ import os
 import subprocess
 import sys
 import time
-import uuid
 
 import pytest
 
@@ -106,47 +105,36 @@ def test_kill_and_resume_reaches_complete(emulator, emulator_client, big_tree, t
 
 
 @pytest.mark.real_bucket
-def test_real_bucket_round_trip(tmp_path):
-    bucket = os.environ.get("MMLCT_TEST_BUCKET")
-    if not bucket:
-        pytest.skip("set MMLCT_TEST_BUCKET (and ADC credentials) to run")
+def test_real_bucket_round_trip(real_bucket_ctx, tmp_path):
+    ctx, run_prefix = real_bucket_ctx
+    bucket = ctx.bucket
 
-    run_prefix = f"mmlct-test/{uuid.uuid4().hex[:12]}"
+    prefix = f"{run_prefix}round-trip"
     src = tmp_path / "src"
     src.mkdir()
     (src / "a.bin").write_bytes(os.urandom(100 * 1024))
     (src / "b.bin").write_bytes(os.urandom(400 * 1024))
     db = tmp_path / "jobs.db"
 
-    ctx = make_context(bucket)
-    try:
-        up = subprocess.run(
-            _cli(
-                "transfer", "--db", str(db), "--bucket", bucket, "--name", "real-up",
-                "--source", str(src), "--prefix", run_prefix,
-                "--size-policy", POLICY,
-            ),
-            capture_output=True, text=True, timeout=600,
-        )
-        assert up.returncode == 0, up.stdout + up.stderr
+    up = subprocess.run(
+        _cli(
+            "transfer", "--db", str(db), "--bucket", bucket, "--name", "real-up",
+            "--source", str(src), "--prefix", prefix,
+            "--size-policy", POLICY,
+        ),
+        capture_output=True, text=True, timeout=600,
+    )
+    assert up.returncode == 0, up.stdout + up.stderr
 
-        dest = tmp_path / "restored"
-        down = subprocess.run(
-            _cli(
-                "transfer", "--db", str(db), "--bucket", bucket, "--name", "real-down",
-                "--direction", "download", "--source", str(dest), "--prefix", run_prefix,
-                "--size-policy", POLICY,
-            ),
-            capture_output=True, text=True, timeout=600,
-        )
-        assert down.returncode == 0, down.stdout + down.stderr
-        assert (dest / "a.bin").read_bytes() == (src / "a.bin").read_bytes()
-        assert (dest / "b.bin").read_bytes() == (src / "b.bin").read_bytes()
-    finally:
-        # Clean up the run's objects, even if an assertion above failed —
-        # otherwise a failed real-bucket run leaks billable objects that the
-        # *.mmlct.tmp/ lifecycle rule does not cover.
-        from mml_cloud_transfer.gcs.objects import delete_object, list_prefix
-
-        for meta in list_prefix(ctx, f"{run_prefix}/"):
-            delete_object(ctx, meta.name)
+    dest = tmp_path / "restored"
+    down = subprocess.run(
+        _cli(
+            "transfer", "--db", str(db), "--bucket", bucket, "--name", "real-down",
+            "--direction", "download", "--source", str(dest), "--prefix", prefix,
+            "--size-policy", POLICY,
+        ),
+        capture_output=True, text=True, timeout=600,
+    )
+    assert down.returncode == 0, down.stdout + down.stderr
+    assert (dest / "a.bin").read_bytes() == (src / "a.bin").read_bytes()
+    assert (dest / "b.bin").read_bytes() == (src / "b.bin").read_bytes()
