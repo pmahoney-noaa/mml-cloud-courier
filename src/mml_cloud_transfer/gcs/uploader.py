@@ -1,6 +1,6 @@
 """Upload paths. This task: single-shot plus the shared skip/verify rules.
 
-Tasks 7 and 8 extend this module with the resumable and sliced paths.
+Task 8 extends this module with the sliced path.
 """
 
 from __future__ import annotations
@@ -9,6 +9,7 @@ import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 
 import google_crc32c
 
@@ -129,7 +130,7 @@ def stamp_sha256(ctx: GcsContext, object_name: str, sha256: str) -> None:
     blob.patch()
 
 
-def _hash_prefix(fp, hashes: _StreamHashes, length: int, chunk_size: int) -> None:
+def _hash_prefix(fp: BinaryIO, hashes: _StreamHashes, length: int, chunk_size: int) -> None:
     """Feed the first ``length`` bytes into ``hashes`` (used on resume)."""
     remaining = length
     while remaining > 0:
@@ -179,7 +180,6 @@ def upload_resumable(
 
     hashes = _StreamHashes(with_sha256)
     committed = 0
-    restart_without_precondition = False
 
     if session_uri is not None:
         try:
@@ -188,42 +188,33 @@ def upload_resumable(
             session_uri = None
         else:
             if status.finalized is not None:
-                # Finished before the crash was noticed — verify and return,
-                # but only if it's actually complete. Otherwise treat as session expired.
-                if status.finalized.size == size_bytes:
-                    local = hash_file(source_path, with_sha256=with_sha256)
-                    verify_layer2(status.finalized, size_bytes, local.crc32c)
-                    return UploadResult(
-                        state="verified",
-                        local_crc32c=local.crc32c,
-                        remote_crc32c=status.finalized.crc32c,
-                        generation=status.finalized.generation,
-                        sha256=local.sha256,
-                        bytes_sent=0,
+                # Finished before the crash was noticed — verify and return.
+                # If the size doesn't match, this object is not our upload.
+                if status.finalized.size != size_bytes:
+                    raise ChecksumMismatch(
+                        f"{object_name}: resuming query returned finalized object "
+                        f"with size={status.finalized.size} but expected {size_bytes}"
                     )
-                else:
-                    # Session returned finalized but incomplete; restart without precondition
-                    # since the object already exists with a different generation.
-                    # Preserve the committed bytes so we only send the remainder.
-                    committed = status.finalized.size
-                    session_uri = None
-                    restart_without_precondition = True
+                local = hash_file(source_path, with_sha256=with_sha256)
+                verify_layer2(status.finalized, size_bytes, local.crc32c)
+                return UploadResult(
+                    state="verified",
+                    local_crc32c=local.crc32c,
+                    remote_crc32c=status.finalized.crc32c,
+                    generation=status.finalized.generation,
+                    sha256=local.sha256,
+                    bytes_sent=0,
+                )
             else:
                 committed = status.committed
 
     if session_uri is None:
-        restart_precondition = None if restart_without_precondition else precondition_generation
         session_uri = initiate_upload(
             ctx, object_name, size_bytes,
-            precondition_generation=restart_precondition,
+            precondition_generation=precondition_generation,
         )
-        # Only reset committed if this is a fresh start, not a restart from incomplete.
-        if not restart_without_precondition:
-            committed = 0
-            report(session_uri, 0)
-        else:
-            # Restart: report the committed bytes we already have on the server.
-            report(session_uri, committed)
+        committed = 0
+        report(session_uri, 0)
 
     bytes_sent = 0
     with Path(source_path).open("rb") as fp:
