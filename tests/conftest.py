@@ -113,10 +113,20 @@ def real_bucket_ctx():
     """The release gate's context: a real bucket and a unique run prefix.
 
     Session-scoped so one prefix covers the whole gate run. Teardown deletes
-    everything under the prefix -- including <name>.mmlct.tmp/<nnnn> slice
-    temps, which live under it by construction (gcs.uploader.slice_temp_name)
-    -- and fails the session if anything survives, so a leak surfaces as a red
-    test rather than a surprise bill.
+    every version -- live and noncurrent alike -- of every object under the
+    prefix, including <name>.mmlct.tmp/<nnnn> slice temps (which live under
+    it by construction, gcs.uploader.slice_temp_name), and fails the session
+    if anything survives, so a leak surfaces as a red test rather than a
+    surprise bill.
+
+    This matters because the target bucket has object versioning enabled
+    (proven empirically against afsc_mml_ccep on 2026-08-05: a deleted object
+    still shows up under `gcloud storage ls --all-versions`). Deleting only
+    the live object -- or checking emptiness with a live-only listing --
+    would leave a noncurrent version behind while reporting "clean". Teardown
+    therefore lists and deletes with versions=True and an explicit generation
+    per blob; a plain delete on a versioning-enabled bucket only creates
+    another noncurrent version rather than removing the one just listed.
 
     MMLCT_TEST_PREFIX confines the run to a scratch folder, so an in-use
     bucket is a valid target.
@@ -129,7 +139,6 @@ def real_bucket_ctx():
         )
 
     from mml_cloud_transfer.gcs.client import make_context
-    from mml_cloud_transfer.gcs.objects import delete_object, list_prefix
 
     run_prefix = _gate_run_prefix(os.environ.get("MMLCT_TEST_PREFIX", ""))
     ctx = make_context(bucket)
@@ -143,17 +152,26 @@ def real_bucket_ctx():
         assert f"/{GATE_SEGMENT}/" in f"/{run_prefix}", (
             f"refusing to delete under {run_prefix!r} — it is not a gate prefix"
         )
+        bucket_handle = ctx.client.bucket(ctx.bucket)
         delete_errors: list[str] = []
-        for meta in list(list_prefix(ctx, run_prefix)):
+        # versions=True is what makes this correct on a versioning-enabled
+        # bucket: without it we would delete only live objects and then
+        # "verify" emptiness against a listing that cannot see what survived.
+        for blob in list(
+            ctx.client.list_blobs(ctx.bucket, prefix=run_prefix, versions=True)
+        ):
             # One failed delete (transient 503, 403, an object hold, ...) must
             # not abort the sweep -- that would leak every remaining object
             # and skip the emptiness re-check below. Accumulate instead, and
             # let the final assertion report everything at once.
             try:
-                delete_object(ctx, meta.name)
+                bucket_handle.delete_blob(blob.name, generation=blob.generation)
             except Exception as exc:
-                delete_errors.append(f"{meta.name}: {exc!r}")
-        survivors = [m.name for m in list_prefix(ctx, run_prefix)]
+                delete_errors.append(f"{blob.name}#{blob.generation}: {exc}")
+        survivors = [
+            f"{b.name}#{b.generation}"
+            for b in ctx.client.list_blobs(ctx.bucket, prefix=run_prefix, versions=True)
+        ]
         assert not survivors and not delete_errors, (
             f"release gate leaked objects: {survivors}; delete errors: {delete_errors}"
         )
