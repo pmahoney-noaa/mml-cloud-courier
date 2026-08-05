@@ -159,3 +159,43 @@ def test_a_400_about_anything_else_stays_unknown():
         code = 400
 
     assert classify(BadRequest("Invalid argument.")).category is ErrorCategory.UNKNOWN
+
+
+def test_a_400_naming_md5_is_a_checksum_mismatch():
+    """The MD5 wording of the same JSON API rejection must classify too."""
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "Provided MD5 hash 'AAAAAA==' doesn't match calculated MD5 hash 'zzzzzz=='."
+    )
+    assert classify(exc).category is ErrorCategory.CHECKSUM_MISMATCH
+
+
+def test_a_400_with_xml_api_digest_wording_is_a_checksum_mismatch():
+    """The XML API (InvalidDigest/BadDigest) phrases the rejection differently."""
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest("The Content-MD5 you specified did not match what we received.")
+    assert classify(exc).category is ErrorCategory.CHECKSUM_MISMATCH
+
+
+def test_a_400_with_hash_token_in_object_name_but_no_mismatch_phrase_stays_unknown():
+    """Regression test: a hash token in the URL/object path is not a mismatch.
+
+    google-api-core error strings lead with the request URL, so an unrelated
+    400 against a path like checksums/manifest.txt would also contain
+    "checksum" -- that must not be reclassified as a corrupted transfer.
+    """
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "400 PATCH https://storage.googleapis.com/storage/v1/b/b/o/2024%2Fchecksums%2Fmanifest.txt: "
+        "Invalid argument."
+    )
+    assert classify(exc).category is ErrorCategory.UNKNOWN

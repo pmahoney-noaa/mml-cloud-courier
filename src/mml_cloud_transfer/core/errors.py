@@ -145,12 +145,16 @@ def _from_http_status(code: int, message: str = "") -> ErrorCategory | None:
         return ErrorCategory.NETWORK
     if 500 <= code <= 599:
         return ErrorCategory.NETWORK
-    # GCS reports a rejected checksum as a 400 whose message names the hash.
-    # Only that shape is reclassified — a plain 400 is still UNKNOWN, because
-    # a malformed request is not a corrupted transfer.
+    # GCS reports a rejected checksum as a 400 whose message names the hash
+    # AND says it didn't match. The hash token alone is not enough: every
+    # google-api-core error string leads with the request URL, so an
+    # unrelated 400 against an object path like checksums/manifest.txt or
+    # md5sums.txt would also contain "checksum"/"md5" and must not be
+    # reclassified — a malformed request is not a corrupted transfer.
+    lowered = message.lower()
     if code == 400 and any(
-        token in message.lower() for token in ("crc32c", "checksum", "md5")
-    ):
+        token in lowered for token in ("crc32c", "checksum", "md5")
+    ) and ("match" in lowered or "mismatch" in lowered):
         return ErrorCategory.CHECKSUM_MISMATCH
     return None
 
