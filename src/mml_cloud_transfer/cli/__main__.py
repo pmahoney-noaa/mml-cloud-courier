@@ -102,10 +102,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _dispatch_via_service(dispatch, args) -> int:
-    """Run a subcommand's dispatch function, turning the two ways the
-    service can fail to answer into a friendly message and exit code 1.
-    ValueError (e.g. --scheduled-at without --service-url) is left to
-    propagate to the caller's own handler."""
+    """Run a subcommand's dispatch function. When --service-url is not set,
+    direct-engine mode is untouched: call straight through, so a genuine
+    ConnectionError from the GCS client (AuthorizedSession is itself a
+    requests.Session subclass) propagates exactly as before. Only when
+    --service-url is set do the two ways the service can fail to answer
+    turn into a friendly message and exit code 1. ValueError (e.g.
+    --scheduled-at without --service-url, or a bad --workers) is left to
+    propagate to the caller's own handler in both modes."""
+    if not args.service_url:
+        return dispatch(args)
     try:
         return dispatch(args)
     except requests.exceptions.ConnectionError:

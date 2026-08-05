@@ -7,6 +7,7 @@ import os
 from contextlib import redirect_stdout
 
 import pytest
+import requests
 
 from mml_cloud_transfer.cli.__main__ import main
 from mml_cloud_transfer.cli.service_client import ApiClient, ServiceError
@@ -14,7 +15,7 @@ from mml_cloud_transfer.core.models import JobStatus
 from mml_cloud_transfer.store.db import connect
 from mml_cloud_transfer.store.repository import JobRepository
 
-from tests.service.conftest import running_host  # noqa: F401
+from tests.service.conftest import free_port, running_host  # noqa: F401
 
 
 def _run(argv):
@@ -81,6 +82,38 @@ def test_transfer_over_the_service_api(emulator, emulator_client, running_host, 
     ])
     assert code == 0
     assert "api-job" in out
+
+
+def test_service_unreachable_prints_friendly_error(tmp_path):
+    token_file = tmp_path / "token"
+    token_file.write_text("tok", encoding="utf-8")
+    code, out = _run([
+        "status", "--db", "unused",
+        "--service-url", f"http://127.0.0.1:{free_port()}",
+        "--token-file", str(token_file),
+    ])
+    assert code == 1
+    assert "not reachable" in out
+
+
+def test_direct_mode_connection_errors_are_not_masked(monkeypatch, tmp_path):
+    """A genuine direct-mode GCS ConnectionError (AuthorizedSession is
+    itself a requests.Session subclass) must propagate untouched — it is
+    not the service's ConnectionError and must not be reported as
+    'service not reachable'."""
+    monkeypatch.setattr(
+        "mml_cloud_transfer.cli.__main__.run_transfer",
+        lambda args: (_ for _ in ()).throw(
+            requests.exceptions.ConnectionError("gcs down")
+        ),
+    )
+    src = tmp_path / "src"
+    src.mkdir()
+    with pytest.raises(requests.exceptions.ConnectionError):
+        main([
+            "transfer", "--db", str(tmp_path / "jobs.db"),
+            "--name", "j", "--source", str(src), "--bucket", "b",
+        ])
 
 
 def test_scheduled_at_is_rejected_in_direct_mode(tmp_path):
