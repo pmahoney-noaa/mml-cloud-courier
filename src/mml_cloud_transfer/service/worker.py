@@ -157,6 +157,19 @@ class QueueWorker:
 
     def _handle(self, job, profile, stop_event) -> None:
         job_id = job["id"]
+        # A pause/cancel can land in the window between _pick (job read as
+        # PENDING) and this call (controller.job_started marks it active).
+        # If the app flipped the row in that window, the flip must win —
+        # re-read before doing anything the flip would otherwise be
+        # silently overwritten by.
+        conn = connect(self._config.db_path)
+        try:
+            if JobRepository(conn).get_job(job_id)["status"] != JobStatus.PENDING.value:
+                return  # flipped (paused/cancelled) between pickup and start
+        finally:
+            conn.close()
+        if stop_event.is_set() or self._controller.service_stop.is_set():
+            return
         if profile is None:
             return  # _pick already paused it
         try:

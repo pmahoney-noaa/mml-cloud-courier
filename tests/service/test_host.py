@@ -2,9 +2,9 @@ import socket
 import threading
 import time
 
+import pytest
 import requests
 
-from mml_cloud_transfer.core.models import JobStatus
 from mml_cloud_transfer.service.config import load_config
 from mml_cloud_transfer.service.host import ServiceHost
 
@@ -44,3 +44,26 @@ def test_host_stop_reports_false_when_a_thread_outlives_timeout(tmp_path):
     straggler.start()
     host.threads = [straggler]
     assert host.stop(timeout=0.1) is False
+
+
+def test_second_instance_lock_is_refused_until_the_first_releases(tmp_path):
+    """CRITICAL 1: a second service host on the same data dir must never be
+    allowed to run startup_recovery against a live first instance — that
+    resets the first instance's in-flight transfers out from under it. The
+    byte-range lock is crash-safe: killing the first host's process (not
+    exercised here, but true on Windows) releases it without any cleanup
+    code running, so a retry after a crash always succeeds too."""
+    data_dir = tmp_path / "data"
+    config1 = load_config(data_dir, port=_free_port())
+    host1 = ServiceHost(config1)
+    host1._acquire_instance_lock()
+
+    config2 = load_config(data_dir, port=_free_port())
+    host2 = ServiceHost(config2)
+    with pytest.raises(RuntimeError, match="second instance"):
+        host2._acquire_instance_lock()
+
+    assert host1.stop() is True  # releases the lock even though start() never ran
+
+    host2._acquire_instance_lock()  # retry succeeds now that the first is gone
+    assert host2.stop() is True

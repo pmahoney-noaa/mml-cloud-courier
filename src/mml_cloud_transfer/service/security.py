@@ -24,17 +24,29 @@ def _current_account() -> str:
     return f"{domain}\\{user}" if domain else user
 
 
+def _acl_grants() -> list[str]:
+    """icacls /grant:r arguments: always SYSTEM and Administrators, plus the
+    current account — unless it's already covered by the SYSTEM SID. Under
+    LocalSystem/virtual service accounts, USERNAME can be empty or literally
+    "SYSTEM"; granting it again is redundant at best and an unresolvable
+    account name (CalledProcessError) at worst, which would make the token
+    write — and therefore service startup — fail outright."""
+    grants = [
+        "/grant:r", f"{_SYSTEM_SID}:(F)",
+        "/grant:r", f"{_ADMINISTRATORS_SID}:(F)",
+    ]
+    username = os.environ.get("USERNAME", "")
+    if username and username.upper() != "SYSTEM":
+        grants += ["/grant:r", f"{_current_account()}:(F)"]
+    return grants
+
+
 def restrict_acl(path: Path) -> None:
     """Drop inherited ACEs; grant only SYSTEM, Administrators, this account."""
     if sys.platform != "win32":
         return  # ACLs are Windows-only; POSIX dev runs skip this
     subprocess.run(
-        [
-            "icacls", str(path), "/inheritance:r",
-            "/grant:r", f"{_SYSTEM_SID}:(F)",
-            "/grant:r", f"{_ADMINISTRATORS_SID}:(F)",
-            "/grant:r", f"{_current_account()}:(F)",
-        ],
+        ["icacls", str(path), "/inheritance:r", *_acl_grants()],
         check=True, capture_output=True, text=True,
     )
 

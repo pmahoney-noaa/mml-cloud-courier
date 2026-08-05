@@ -59,6 +59,29 @@ def test_submit_upload_validates_the_source_folder(api, tmp_path):
     assert "not found" in response.json()["detail"]
 
 
+def test_submit_rejects_a_relative_source_root(api, tmp_path):
+    """IMPORTANT 6 regression: a relative path resolves against the
+    service's own CWD (System32 when installed), not the caller's — must
+    be rejected outright rather than silently escalated against."""
+    client, _, _ = api
+    response = client.post("/jobs", json={
+        "name": "j", "direction": "upload",
+        "source_root": "relative/dir", "bucket": "b",
+    })
+    assert response.status_code == 400
+    assert "absolute path" in response.json()["detail"]
+
+
+def test_submit_rejects_a_raw_device_path(api, tmp_path):
+    client, _, _ = api
+    response = client.post("/jobs", json={
+        "name": "j", "direction": "download",
+        "source_root": r"\\.\PhysicalDrive0", "bucket": "b",
+    })
+    assert response.status_code == 400
+    assert "absolute path" in response.json()["detail"]
+
+
 def test_submit_creates_job_and_profile(api, tmp_path):
     client, config, _ = api
     job_id = _submit(client, tmp_path, emulator_endpoint="http://127.0.0.1:1")
@@ -129,6 +152,30 @@ def test_lifecycle_on_a_scanning_job_goes_through_the_controller(api, tmp_path):
     assert client.post(f"/jobs/{job_id}/pause").json()["status"] == "stopping"
     assert stop.is_set()
     assert controller.job_finished() == "pause"
+
+
+def test_pause_on_a_claimed_pending_job_goes_through_the_controller(api, tmp_path):
+    """IMPORTANT 2 regression: a pause can land in the worker's window
+    between _pick (job still PENDING in the DB) and job_started (controller
+    marks it active). Once the controller has claimed the job, pause must
+    route through request()/the stop event rather than flip the row
+    directly — a direct flip here would be silently overwritten once
+    run_job/run_scan starts."""
+    client, config, controller = api
+    job_id = _submit(client, tmp_path)
+    stop = controller.job_started(job_id)
+    assert client.post(f"/jobs/{job_id}/pause").json()["status"] == "stopping"
+    assert stop.is_set()
+    assert controller.job_finished() == "pause"
+
+
+def test_cancel_on_a_claimed_pending_job_goes_through_the_controller(api, tmp_path):
+    client, config, controller = api
+    job_id = _submit(client, tmp_path)
+    stop = controller.job_started(job_id)
+    assert client.post(f"/jobs/{job_id}/cancel").json()["status"] == "stopping"
+    assert stop.is_set()
+    assert controller.job_finished() == "cancel"
 
 
 def test_pause_and_cancel_on_a_scanning_job_with_nothing_active_conflict(api, tmp_path):

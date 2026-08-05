@@ -161,6 +161,35 @@ def test_pause_intent_lands_after_the_stopped_run(config):
     assert _status(config, job_id) == JobStatus.PAUSED.value
 
 
+def test_pending_job_flipped_between_pickup_and_start_is_never_run(config):
+    """IMPORTANT 2 regression: a pause/cancel can land in the window between
+    _pick (job read as PENDING) and job_started (controller marks it
+    active) — the app flips the row directly in that case. `_handle` must
+    notice the flip and refuse to run/scan a job that is no longer PENDING,
+    or the direct flip would be silently overwritten."""
+    job_id = _submit(config)
+    conn = connect(config.db_path)
+    try:
+        repo = JobRepository(conn)
+        job = dict(repo.get_job(job_id))
+        profile = dict(repo.get_profile(job["profile_id"]))
+        repo.set_job_status(job_id, JobStatus.PAUSED)  # the race: flipped here
+    finally:
+        conn.close()
+
+    run_job_calls = []
+
+    def fake_run_job(db_path, job_id, ctx, *, options):
+        run_job_calls.append(job_id)
+        return JobStatus.COMPLETE
+
+    worker, _ = _worker(config, run_job_fn=fake_run_job)
+    worker._handle(job, profile, threading.Event())
+
+    assert run_job_calls == []
+    assert _status(config, job_id) == JobStatus.PAUSED.value
+
+
 def test_intent_never_downgrades_a_finished_job(config):
     job_id = _submit(config)
 

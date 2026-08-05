@@ -61,7 +61,7 @@ def _require_token(request: Request) -> None:
     header = request.headers.get("authorization", "")
     token = request.app.state.token
     if not header.startswith("Bearer ") or not secrets.compare_digest(
-        header[len("Bearer "):], token
+        header[len("Bearer "):].encode("utf-8"), token.encode("utf-8")
     ):
         raise HTTPException(status_code=401, detail="missing or invalid bearer token")
 
@@ -100,6 +100,12 @@ def create_app(config: ServiceConfig, controller: JobController) -> FastAPI:
 
     @router.post("/jobs", status_code=201)
     def submit_job(submission: JobSubmission) -> dict:
+        root = submission.source_root
+        if not os.path.isabs(root) or root.startswith("\\\\.\\"):
+            raise HTTPException(status_code=400, detail=(
+                "source_root must be an absolute path (drive or UNC),"
+                f" not {root!r}"
+            ))
         if submission.direction == "upload":
             if not os.path.isdir(submission.source_root):
                 raise HTTPException(status_code=400, detail=(
@@ -214,6 +220,12 @@ def create_app(config: ServiceConfig, controller: JobController) -> FastAPI:
                 repo.record_event(job_id, "paused_by_user")
                 return {"status": JobStatus.PAUSED.value}
             if status == JobStatus.PENDING.value:
+                # A pause can land in the worker's window between _pick and
+                # job_started — try the controller first so a job that has
+                # already been claimed stops cleanly instead of racing a
+                # direct DB flip the worker would silently overwrite.
+                if controller.request(job_id, "pause"):
+                    return {"status": "stopping"}
                 repo.set_job_status(job_id, JobStatus.PAUSED)
                 repo.record_event(job_id, "paused_by_user")
                 return {"status": JobStatus.PAUSED.value}
@@ -255,14 +267,16 @@ def create_app(config: ServiceConfig, controller: JobController) -> FastAPI:
                     "job is marked running or scanning but nothing is active;"
                     " restart the service to recover it"
                 ))
-            if status == JobStatus.STALLED.value and controller.request(
-                job_id, "cancel"
-            ):
-                return {"status": "stopping"}
             if status in (
                 JobStatus.PENDING.value, JobStatus.PAUSED.value,
                 JobStatus.STALLED.value,
             ):
+                # Same race as pause: try the controller first (covers a
+                # STALLED job the worker still owns, and a PENDING job
+                # claimed but not yet marked active) before flipping the
+                # row directly.
+                if controller.request(job_id, "cancel"):
+                    return {"status": "stopping"}
                 repo.set_job_status(job_id, JobStatus.CANCELLED)
                 repo.record_event(job_id, "cancelled_by_user")
                 return {"status": JobStatus.CANCELLED.value}

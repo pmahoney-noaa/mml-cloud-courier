@@ -32,9 +32,28 @@ class ServiceHost:
             )
         )
         self.threads: list[threading.Thread] = []
+        self._lock_file = None
+
+    def _acquire_instance_lock(self) -> None:
+        """One service instance per data directory. The byte-range lock (not
+        file existence) is the lock, so the OS releases it on process death
+        — a crashed service never leaves a stale lock behind."""
+        import msvcrt
+        self.config.data_dir.mkdir(parents=True, exist_ok=True)
+        self._lock_file = open(self.config.data_dir / "service.lock", "a")
+        try:
+            msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            self._lock_file.close()
+            self._lock_file = None
+            raise RuntimeError(
+                f"another MML Cloud Transfer service already owns"
+                f" {self.config.data_dir} — refusing to start a second instance"
+            ) from exc
 
     def start(self) -> None:
         """Recovery first, then worker and API threads. Non-blocking."""
+        self._acquire_instance_lock()
         self.worker.startup_recovery()
         self.threads = [
             threading.Thread(
@@ -71,6 +90,14 @@ class ServiceHost:
         for thread in self.threads:
             thread.join(timeout=timeout)
         stragglers = [t.name for t in self.threads if t.is_alive()]
+        if self._lock_file is not None:
+            import msvcrt
+            try:
+                msvcrt.locking(self._lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+            self._lock_file.close()
+            self._lock_file = None
         if stragglers:
             _log.warning(
                 "service stop incomplete: %s still alive after %.0fs",
