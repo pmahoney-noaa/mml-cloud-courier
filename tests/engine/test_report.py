@@ -106,3 +106,24 @@ def test_complete_job_reports_complete(tmp_path):
     summary = json.loads(paths.summary_json.read_text(encoding="utf-8"))
     assert summary["verdict"] == "COMPLETE"
     assert "COMPLETE" in paths.report_html.read_text(encoding="utf-8")
+
+
+def test_failure_groups_are_capped_at_fifty_with_overflow_line(tmp_path):
+    db = tmp_path / "jobs.db"
+    conn = connect(db)
+    repo = JobRepository(conn)
+    job_id = repo.create_job(
+        name="big-fail", direction=Direction.UPLOAD,
+        source_root=r"C:\x", dest_prefix="",
+    )
+    repo.add_planned_files(job_id, make_files(60, size=10))
+    for row in repo.get_files(job_id):
+        repo.mark_failed(row["id"], ErrorCategory.NETWORK, f"drop {row['id']}")
+    repo.finish_job(job_id, JobStatus.INCOMPLETE)
+    conn.close()
+
+    paths = write_report(db, job_id, tmp_path / "out")
+    html = paths.report_html.read_text(encoding="utf-8")
+    assert "network (60)" in html
+    assert html.count("<li>") == 50
+    assert "… and 10 more." in html
