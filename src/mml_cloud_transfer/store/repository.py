@@ -16,6 +16,7 @@ from mml_cloud_transfer.core.models import (
     FileState,
     JobStatus,
     PlannedFile,
+    SliceState,
 )
 from mml_cloud_transfer.core.paths import to_object_name
 from mml_cloud_transfer.core.slicing import SizePolicy, choose_method
@@ -77,6 +78,43 @@ class JobRepository:
         self._conn.execute(
             "UPDATE jobs SET status = ? WHERE id = ?", (status.value, job_id)
         )
+
+    def start_job(self, job_id: int) -> None:
+        now = _now()
+        self._conn.execute(
+            "UPDATE jobs SET status = ?, started_at = COALESCE(started_at, ?)"
+            " WHERE id = ?",
+            (JobStatus.RUNNING.value, now, job_id),
+        )
+
+    def finish_job(self, job_id: int, status: JobStatus) -> None:
+        self._conn.execute(
+            "UPDATE jobs SET status = ?, finished_at = ? WHERE id = ?",
+            (status.value, _now(), job_id),
+        )
+
+    def get_file(self, file_id: int) -> sqlite3.Row:
+        row = self._conn.execute(
+            "SELECT * FROM job_files WHERE id = ?", (file_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"no file with id {file_id}")
+        return row
+
+    def set_precondition(self, file_id: int, generation: int) -> None:
+        self._conn.execute(
+            "UPDATE job_files SET precondition_generation = ? WHERE id = ?",
+            (generation, file_id),
+        )
+
+    def get_precondition(self, file_id: int) -> int | None:
+        row = self._conn.execute(
+            "SELECT precondition_generation FROM job_files WHERE id = ?", (file_id,)
+        ).fetchone()
+        if row is None:
+            raise LookupError(f"no file with id {file_id}")
+        value = row["precondition_generation"]
+        return None if value is None else int(value)
 
     # ---- planning -------------------------------------------------------
 
@@ -271,3 +309,49 @@ class JobRepository:
         return self._conn.execute(
             "SELECT * FROM events WHERE job_id = ? ORDER BY id", (job_id,)
         ).fetchall()
+
+    # ---- slices ---------------------------------------------------------
+
+    def upsert_slice(
+        self,
+        file_id: int,
+        slice_index: int,
+        *,
+        offset: int,
+        length: int,
+        session_uri: str | None = None,
+        crc32c: int | None = None,
+        state: SliceState = SliceState.PENDING,
+        bytes_transferred: int = 0,
+    ) -> None:
+        self._conn.execute(
+            "INSERT INTO file_slices (file_id, slice_index, offset_bytes,"
+            " length_bytes, state, session_uri, crc32c, bytes_transferred)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (file_id, slice_index) DO UPDATE SET"
+            " offset_bytes = excluded.offset_bytes,"
+            " length_bytes = excluded.length_bytes,"
+            " state = excluded.state,"
+            " session_uri = excluded.session_uri,"
+            " crc32c = excluded.crc32c,"
+            " bytes_transferred = excluded.bytes_transferred",
+            (
+                file_id,
+                slice_index,
+                offset,
+                length,
+                state.value,
+                session_uri,
+                crc32c,
+                bytes_transferred,
+            ),
+        )
+
+    def get_slices(self, file_id: int) -> list[sqlite3.Row]:
+        return self._conn.execute(
+            "SELECT * FROM file_slices WHERE file_id = ? ORDER BY slice_index",
+            (file_id,),
+        ).fetchall()
+
+    def clear_slices(self, file_id: int) -> None:
+        self._conn.execute("DELETE FROM file_slices WHERE file_id = ?", (file_id,))
