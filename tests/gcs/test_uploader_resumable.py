@@ -35,6 +35,37 @@ class DyingSession:
         return self.real.put(*args, **kwargs)
 
 
+class _Answer308:
+    """Minimal 308 response for the shimmed status query."""
+
+    def __init__(self, committed):
+        self.status_code = 308
+        self.headers = {"Range": f"bytes=0-{committed - 1}"} if committed else {}
+        self.text = ""
+
+
+class StatusQueryShim:
+    """Answers the resumable status query locally; everything else is real.
+
+    fake-gcs-server's memory backend finalizes an incomplete upload when it
+    receives the 'bytes */total' probe (verified by direct protocol probe:
+    200 + truncated object instead of 308). Real GCS answers 308 with the
+    committed Range — our handling of the real protocol is covered by the
+    Task 6 stub tests, and the release gate's manual interrupt-and-resume
+    run covers it end-to-end against real GCS.
+    """
+
+    def __init__(self, real, committed):
+        self.real = real
+        self.committed = committed
+
+    def put(self, url, data=b"", headers=None):
+        headers = headers or {}
+        if headers.get("Content-Range", "").startswith("bytes */"):
+            return _Answer308(self.committed)
+        return self.real.put(url, data=data, headers=headers)
+
+
 @pytest.mark.emulator
 def test_uploads_and_verifies_in_one_pass(ctx, source):
     events = []
@@ -72,8 +103,12 @@ def test_resumes_from_the_committed_offset_after_a_crash(ctx, source):
     uri, committed = recorded[-1]
     assert 0 < committed < 1024 * 1024
 
+    resumed_ctx = type(ctx)(
+        client=ctx.client, session=StatusQueryShim(ctx.session, committed),
+        endpoint=ctx.endpoint, bucket=ctx.bucket,
+    )
     result = upload_resumable(
-        ctx, str(source), "r/resumed.bin", 1024 * 1024,
+        resumed_ctx, str(source), "r/resumed.bin", 1024 * 1024,
         precondition_generation=0, session_uri=uri, chunk_size=CHUNK,
     )
     assert result.state == "verified"
@@ -111,9 +146,13 @@ def test_sha256_survives_a_resume(ctx, source):
             precondition_generation=0, chunk_size=CHUNK, with_sha256=True,
             on_progress=lambda uri, committed: recorded.append((uri, committed)),
         )
-    uri, _ = recorded[-1]
+    uri, committed = recorded[-1]
+    resumed_ctx = type(ctx)(
+        client=ctx.client, session=StatusQueryShim(ctx.session, committed),
+        endpoint=ctx.endpoint, bucket=ctx.bucket,
+    )
     result = upload_resumable(
-        ctx, str(source), "r/sha.bin", 1024 * 1024,
+        resumed_ctx, str(source), "r/sha.bin", 1024 * 1024,
         precondition_generation=0, session_uri=uri, chunk_size=CHUNK, with_sha256=True,
     )
     assert result.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
