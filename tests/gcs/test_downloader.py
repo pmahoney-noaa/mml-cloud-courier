@@ -59,27 +59,48 @@ def test_progress_reports_completed_range_crcs(ctx, remote, tmp_path):
     assert finished == {0, 1, 2, 3}
 
 
+class DyingGetSession:
+    """Delegates to the real session but fails after N successful GETs."""
+
+    def __init__(self, real, live_gets):
+        self.real = real
+        self.remaining = live_gets
+
+    def get(self, *args, **kwargs):
+        if self.remaining == 0:
+            raise ConnectionResetError("injected mid-download failure")
+        self.remaining -= 1
+        return self.real.get(*args, **kwargs)
+
+    def put(self, *args, **kwargs):
+        return self.real.put(*args, **kwargs)
+
+
 @pytest.mark.emulator
 def test_completed_ranges_are_not_refetched_on_resume(ctx, remote, tmp_path):
     dest = tmp_path / "r.bin"
-    # First pass: fetch only ranges 0 and 1 by faking a prior run's states,
-    # then confirm the resumed run fetches just 2 and 3.
     first_events = []
-    download_file(
-        ctx, "d/big.bin", str(dest), range_bytes=RANGE,
-        on_progress=lambda idx, done, crc: first_events.append((idx, crc)),
+    dying_ctx = type(ctx)(
+        client=ctx.client, session=DyingGetSession(ctx.session, 2),
+        endpoint=ctx.endpoint, bucket=ctx.bucket,
     )
-    states = {idx: crc for idx, crc in first_events if crc is not None and idx < 2}
-    dest.unlink()  # remove the finished file; .part must be rebuilt
+    with pytest.raises(ConnectionResetError):
+        download_file(
+            dying_ctx, "d/big.bin", str(dest), range_bytes=RANGE, max_workers=1,
+            on_progress=lambda idx, done, crc: first_events.append((idx, crc)),
+        )
+    states = {idx: crc for idx, crc in first_events if crc is not None}
+    assert len(states) == 2, "two ranges must have completed before the crash"
+    assert (tmp_path / "r.bin.part").exists(), "part file must survive a crash"
 
     second_events = []
     result = download_file(
         ctx, "d/big.bin", str(dest), range_bytes=RANGE,
-        range_states=states,
+        range_states=states, max_workers=1,
         on_progress=lambda idx, done, crc: second_events.append(idx),
     )
     assert result.state == "verified"
-    assert set(second_events) <= {2, 3}
+    assert set(second_events) == {2, 3}
     assert result.bytes_received == 2 * RANGE
     assert dest.read_bytes() == remote
 

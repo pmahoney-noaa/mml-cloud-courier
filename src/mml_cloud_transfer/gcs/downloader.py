@@ -154,11 +154,17 @@ def download_file(
                 fp.write(b"\0")
 
     # Restore data from destination or part file if available (for resume scenarios).
+    # Destination: normal completion, part file persists (if reused).
+    # Part file: crash-interrupted download, part file survives with partial data.
     if dest.exists() and dest.stat().st_size == meta.size:
         with dest.open("rb") as src, part.open("r+b") as dst:
             src_data = src.read()
             dst.seek(0)
             dst.write(src_data)
+    elif part.exists() and part.stat().st_size == meta.size and range_states:
+        # Part file from previous (interrupted) download exists with partial data.
+        # Keep it as-is; fetched ranges will overwrite their portions.
+        pass
 
     url = _media_url(ctx, object_name, meta.generation)
     crcs: dict[int, int] = dict(range_states)
