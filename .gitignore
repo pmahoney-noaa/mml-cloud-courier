@@ -26,3 +26,6 @@ scratch/
 # Windows
 Thumbs.db
 desktop.ini
+
+# Claude Code session-local tooling state
+/.claude/
