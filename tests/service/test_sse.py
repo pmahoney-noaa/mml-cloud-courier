@@ -2,6 +2,7 @@
 endpoint test proves the HTTP wrapper streams and terminates."""
 
 import json
+import threading
 
 import pytest
 from fastapi.testclient import TestClient
@@ -97,3 +98,42 @@ def test_stream_endpoint_serves_one_terminal_event(tmp_path):
         body = "".join(response.iter_text())     # terminates: job is terminal
     assert "event: progress" in body
     assert '"status": "complete"' in body or '"status":"complete"' in body
+
+
+def test_generator_safe_with_concurrent_threads(db_with_job):
+    """Regression: verify generator works when each next() runs on a different thread.
+
+    Starlette's iterate_in_threadpool dispatches each next() to a worker thread.
+    SQLite connections are thread-bound by default, so the generator must be opened
+    with check_same_thread=False to allow sequential cross-thread calls."""
+    db, conn, repo, job_id = db_with_job
+    gen = progress_events(db, job_id, interval=0.0, sleep=lambda s: None)
+
+    results = []
+    exceptions = []
+
+    def call_next_in_thread():
+        try:
+            results.append(next(gen))
+        except (StopIteration, Exception) as e:
+            exceptions.append(e)
+
+    # First tick from thread 1
+    thread1 = threading.Thread(target=call_next_in_thread)
+    thread1.start()
+    thread1.join()
+
+    # Mark complete during sleep so the second tick terminates the generator
+    repo.set_job_status(job_id, JobStatus.COMPLETE)
+
+    # Second tick from thread 2 — should succeed and close the generator
+    thread2 = threading.Thread(target=call_next_in_thread)
+    thread2.start()
+    thread2.join()
+
+    # Both ticks should parse successfully with no exceptions
+    assert len(results) == 2, f"Expected 2 ticks, got {len(results)}"
+    assert not exceptions, f"Unexpected exceptions: {exceptions}"
+    ticks = [_parse(e) for e in results]
+    assert ticks[0]["status"] == "pending"
+    assert ticks[1]["status"] == "complete"

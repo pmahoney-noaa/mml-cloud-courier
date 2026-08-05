@@ -3,9 +3,10 @@
 Ticks continue while the client stays connected and the job is live; the
 tick that shows a terminal status is emitted and then the stream closes.
 `stalled` is deliberately NOT terminal so a watcher sees recovery happen.
-The generator owns one read-only SQLite connection for its lifetime (it
-runs on a single thread) and closes it on the way out — including when
-the client disconnects and the generator is garbage-collected mid-yield.
+The generator owns one read-only SQLite connection for its lifetime (ticks
+run sequentially but may execute on different worker threads) and closes
+it on the way out — including when the client disconnects and the generator
+is garbage-collected mid-yield.
 """
 
 from __future__ import annotations
@@ -52,7 +53,10 @@ def progress_events(
     max_ticks: int | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> Iterator[str]:
-    conn = connect(db_path)
+    # Starlette's iterate_in_threadpool may dispatch each next() call onto a
+    # different worker thread, but ticks are strictly sequential — the connection
+    # is never used by two threads concurrently, so check_same_thread=False is safe.
+    conn = connect(db_path, check_same_thread=False)
     try:
         repo = JobRepository(conn)
         last_event_id = 0
