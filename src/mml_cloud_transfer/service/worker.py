@@ -7,6 +7,7 @@ and the stalled slow-retry loop.
 
 from __future__ import annotations
 
+import logging
 import time
 from datetime import UTC, datetime
 
@@ -20,6 +21,8 @@ from mml_cloud_transfer.service.config import ServiceConfig
 from mml_cloud_transfer.service.controller import JobController
 from mml_cloud_transfer.store.db import connect
 from mml_cloud_transfer.store.repository import JobRepository
+
+_log = logging.getLogger(__name__)
 
 _INTENTS = {
     "pause": (JobStatus.PAUSED, "paused_by_user"),
@@ -61,12 +64,29 @@ class QueueWorker:
     # ---- loop -----------------------------------------------------------
 
     def run_forever(self) -> None:
+        """Loop `run_once()` until stopped. The survivability boundary: a
+        queue-level failure (e.g. a transient sqlite3.OperationalError from
+        `_pick`/`_apply_intent`) must not end the worker thread for the rest
+        of the service's life, so it is logged and the loop continues."""
         while not self._controller.service_stop.is_set():
-            if not self.run_once():
+            try:
+                worked = self.run_once()
+            except Exception:
+                _log.exception("queue worker iteration failed")
+                worked = False
+            if not worked:
                 self._sleep(self._config.poll_interval)
 
     def run_once(self) -> bool:
-        """Pick up and fully handle at most one job. Never raises."""
+        """Pick up and fully handle at most one job.
+
+        Exceptions inside job handling are contained per-job (see
+        `_handle`, which pauses the job and records a `worker_error` event
+        instead of raising). Queue-level errors — opening the DB, picking
+        the next eligible job, applying a pause/cancel intent — propagate
+        to the caller; `run_forever` is the survivability boundary that
+        contains those.
+        """
         picked = self._pick()
         if picked is None:
             return False
@@ -135,12 +155,21 @@ class QueueWorker:
                 self._config.db_path, job_id, ctx,
                 options=self._options(stop_event),
             )
-            if status in (
-                JobStatus.COMPLETE, JobStatus.INCOMPLETE, JobStatus.PAUSED
-            ):
-                self._report(job_id, profile)
         except Exception as exc:  # a worker crash must not kill the service
             self._record_failure(job_id, exc)
+            return
+
+        # Outside the guard above on purpose: by this point run_job has
+        # already committed a real COMPLETE/INCOMPLETE/PAUSED outcome. A
+        # report-write failure (disk full, permissions) here must not be
+        # allowed to fall into _record_failure and downgrade that verified
+        # outcome to PAUSED — the job would silently lose a real result and
+        # never get auto-retried. Surface it as an event only.
+        if status in (JobStatus.COMPLETE, JobStatus.INCOMPLETE, JobStatus.PAUSED):
+            try:
+                self._report(job_id, profile)
+            except Exception as exc:
+                self._record_report_failure(job_id, exc)
 
     def _context(self, profile):
         auth_type = profile["auth_type"]
@@ -194,5 +223,14 @@ class QueueWorker:
             repo = JobRepository(conn)
             repo.set_job_status(job_id, JobStatus.PAUSED)  # needs attention
             repo.record_event(job_id, "worker_error", str(exc)[:500])
+        finally:
+            conn.close()
+
+    def _record_report_failure(self, job_id: int, exc: Exception) -> None:
+        """No status change: the run's outcome already committed and is
+        real. Only the report artifact failed to write."""
+        conn = connect(self._config.db_path)
+        try:
+            JobRepository(conn).record_event(job_id, "report_error", str(exc)[:500])
         finally:
             conn.close()

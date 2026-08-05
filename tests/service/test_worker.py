@@ -207,3 +207,50 @@ def test_worker_crash_pauses_the_job_not_the_service(config):
     kinds = [e["kind"] for e in JobRepository(conn).events_after(job_id, 0)]
     conn.close()
     assert "worker_error" in kinds
+
+
+def test_report_failure_does_not_mask_a_real_outcome(config):
+    """A run that genuinely finished INCOMPLETE must keep that verdict even
+    if writing the report artifact afterward blows up (disk full, etc.) —
+    the outcome already committed and must not be downgraded to PAUSED."""
+    job_id = _submit(config)
+
+    def fake_run_job(db_path, job_id, ctx, *, options):
+        conn = connect(db_path)
+        try:
+            JobRepository(conn).finish_job(job_id, JobStatus.INCOMPLETE)
+        finally:
+            conn.close()
+        return JobStatus.INCOMPLETE
+
+    def exploding_report(*a, **k):
+        raise RuntimeError("disk full")
+
+    worker, _ = _worker(
+        config, run_job_fn=fake_run_job, write_report_fn=exploding_report
+    )
+    assert worker.run_once() is True
+    assert _status(config, job_id) == JobStatus.INCOMPLETE.value
+    conn = connect(config.db_path)
+    kinds = [e["kind"] for e in JobRepository(conn).events_after(job_id, 0)]
+    conn.close()
+    assert "report_error" in kinds
+
+
+def test_run_forever_survives_a_crashing_iteration(config):
+    """A transient queue-level failure (e.g. sqlite3.OperationalError from
+    _pick/_apply_intent) must not end the worker thread for good — the loop
+    logs it and keeps going."""
+    worker, controller = _worker(config, sleep=lambda seconds: None)
+    calls = []
+
+    def flaky_run_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        controller.service_stop.set()
+        return False
+
+    worker.run_once = flaky_run_once
+    worker.run_forever()          # would hang or raise if the guard were missing
+    assert len(calls) == 2
