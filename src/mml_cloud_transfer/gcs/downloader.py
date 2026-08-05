@@ -25,6 +25,7 @@ from mml_cloud_transfer.gcs.objects import GcsHttpError, get_meta, raise_for_sta
 from mml_cloud_transfer.gcs.uploader import ChecksumMismatch, should_skip
 
 DOWNLOAD_RANGE_BYTES = 128 * 1024 * 1024
+DOWNLOAD_PROGRESS_INTERVAL = 32 * 1024 * 1024
 
 RangeProgressFn = Callable[[int, int, int | None], None]
 
@@ -72,10 +73,13 @@ def _fetch_range(
     part_path: Path,
     spec: SliceSpec,
     on_progress: RangeProgressFn | None,
+    *,
+    progress_interval_bytes: int,
 ) -> int:
     """Stream one range into the part file; returns the range CRC32C."""
     crc = google_crc32c.Checksum()
     done = 0
+    last_reported = 0
     response = ctx.session.get(
         url,
         headers={"Range": f"bytes={spec.offset}-{spec.offset + spec.length - 1}"},
@@ -90,8 +94,12 @@ def _fetch_range(
             fp.write(chunk)
             crc.update(chunk)
             done += len(chunk)
-            if on_progress is not None:
+            if (
+                on_progress is not None
+                and done - last_reported >= progress_interval_bytes
+            ):
                 on_progress(spec.index, done, None)
+                last_reported = done
     if done != spec.length:
         raise GcsHttpError(500, f"range {spec.index}: got {done} of {spec.length} bytes")
     range_crc = int.from_bytes(crc.digest(), "big")
@@ -110,6 +118,7 @@ def download_file(
     max_workers: int = 4,
     with_sha256: bool = False,
     on_progress: RangeProgressFn | None = None,
+    progress_interval_bytes: int = DOWNLOAD_PROGRESS_INTERVAL,
 ) -> DownloadResult:
     range_states = range_states or {}
     meta = get_meta(ctx, object_name)
@@ -152,7 +161,10 @@ def download_file(
     bytes_received = 0
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(_fetch_range, ctx, url, part, spec, on_progress): spec
+            pool.submit(
+                _fetch_range, ctx, url, part, spec, on_progress,
+                progress_interval_bytes=progress_interval_bytes,
+            ): spec
             for spec in to_fetch
         }
         for future, spec in futures.items():

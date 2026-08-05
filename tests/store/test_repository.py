@@ -253,11 +253,11 @@ def test_heartbeat_updates_timestamp_and_bytes_transferred(repo):
     file_id = repo.get_files(job_id)[0]["id"]
     repo.mark_transferring(file_id)
 
-    repo.heartbeat(file_id, 12345)
+    repo.heartbeat(file_id)
 
     row = repo.get_files(job_id)[0]
     assert row["heartbeat_at"] is not None
-    assert row["bytes_transferred"] == 12345
+    assert row["bytes_transferred"] == 0
 
 
 def test_reset_stale_transfers_leaves_a_fresh_heartbeat_alone(repo):
@@ -268,7 +268,7 @@ def test_reset_stale_transfers_leaves_a_fresh_heartbeat_alone(repo):
     repo.add_planned_files(job_id, make_files(1))
     file_id = repo.get_files(job_id)[0]["id"]
     repo.mark_transferring(file_id)
-    repo.heartbeat(file_id, 10)
+    repo.heartbeat(file_id)
 
     recovered = repo.reset_stale_transfers(job_id, stale_after_seconds=300)
 
@@ -283,7 +283,7 @@ def test_mark_changed_resets_transfer_progress_and_is_retried(repo):
     repo.add_planned_files(job_id, make_files(1, size=100))
     file_id = repo.get_files(job_id)[0]["id"]
     repo.mark_transferring(file_id)
-    repo.heartbeat(file_id, 50)
+    repo.heartbeat(file_id)
 
     repo.mark_changed(file_id, 200, 1_800_000_000_000_000_000)
 

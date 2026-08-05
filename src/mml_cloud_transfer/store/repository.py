@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from mml_cloud_transfer.core.errors import ErrorCategory
@@ -31,6 +32,16 @@ _NOT_RETRIED = (
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+@dataclass(frozen=True, slots=True)
+class JobProgress:
+    files_total: int
+    files_done: int      # verified + skipped
+    files_failed: int    # failed + quarantined
+    bytes_total: int
+    bytes_done: int      # sizes of done files + in-flight slice bytes
+    state_counts: dict[str, int]
 
 
 class JobRepository:
@@ -205,10 +216,12 @@ class JobRepository:
             (FileState.TRANSFERRING.value, now, now, file_id),
         )
 
-    def heartbeat(self, file_id: int, bytes_transferred: int) -> None:
+    def heartbeat(self, file_id: int) -> None:
+        """Refresh the staleness timestamp. Byte progress lives in
+        file_slices — a whole-file number written from concurrent slice
+        callbacks flaps, so it is derived (job_progress), not stored."""
         self._conn.execute(
-            "UPDATE job_files SET heartbeat_at = ?, bytes_transferred = ? WHERE id = ?",
-            (_now(), bytes_transferred, file_id),
+            "UPDATE job_files SET heartbeat_at = ? WHERE id = ?", (_now(), file_id)
         )
 
     def mark_verified(
@@ -322,6 +335,38 @@ class JobRepository:
             (job_id, FileState.VERIFIED.value, FileState.SKIPPED.value),
         ).fetchone()
         return JobStatus.COMPLETE if row["n"] == 0 else JobStatus.INCOMPLETE
+
+    def job_progress(self, job_id: int) -> JobProgress:
+        job = self.get_job(job_id)
+        counts = {
+            r["state"]: r["n"]
+            for r in self._conn.execute(
+                "SELECT state, COUNT(*) AS n FROM job_files"
+                " WHERE job_id = ? GROUP BY state",
+                (job_id,),
+            )
+        }
+        done_bytes = self._conn.execute(
+            "SELECT COALESCE(SUM(size_bytes), 0) AS b FROM job_files"
+            " WHERE job_id = ? AND state IN (?, ?)",
+            (job_id, FileState.VERIFIED.value, FileState.SKIPPED.value),
+        ).fetchone()["b"]
+        inflight = self._conn.execute(
+            "SELECT COALESCE(SUM(s.bytes_transferred), 0) AS b FROM file_slices s"
+            " JOIN job_files f ON f.id = s.file_id"
+            " WHERE f.job_id = ? AND f.state = ?",
+            (job_id, FileState.TRANSFERRING.value),
+        ).fetchone()["b"]
+        return JobProgress(
+            files_total=job["planned_files"],
+            files_done=counts.get(FileState.VERIFIED.value, 0)
+            + counts.get(FileState.SKIPPED.value, 0),
+            files_failed=counts.get(FileState.FAILED.value, 0)
+            + counts.get(FileState.QUARANTINED.value, 0),
+            bytes_total=job["planned_bytes"],
+            bytes_done=done_bytes + inflight,
+            state_counts=counts,
+        )
 
     # ---- events ---------------------------------------------------------
 

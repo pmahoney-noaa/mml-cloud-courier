@@ -183,7 +183,7 @@ def _transfer_once(ctx, db_path, repo: JobRepository, job, row, options: EngineO
                         session_uri=session_uri, state=SliceState.UPLOADING,
                         bytes_transferred=committed,
                     )
-                    r.heartbeat(file_id, committed)
+                    r.heartbeat(file_id)
 
             result = upload_resumable(
                 ctx, row["source_path"], row["object_name"], row["size_bytes"],
@@ -211,7 +211,7 @@ def _transfer_once(ctx, db_path, repo: JobRepository, job, row, options: EngineO
                         state=SliceState.UPLOADED if crc is not None else SliceState.UPLOADING,
                         bytes_transferred=committed,
                     )
-                    r.heartbeat(file_id, committed)
+                    r.heartbeat(file_id)
 
             result = upload_sliced(
                 ctx, row["source_path"], row["object_name"], row["size_bytes"],
@@ -244,7 +244,7 @@ def _transfer_once(ctx, db_path, repo: JobRepository, job, row, options: EngineO
                         file_id, idx, offset=spec.offset, length=spec.length,
                         crc32c=crc, state=SliceState.UPLOADED, bytes_transferred=done,
                     )
-                r.heartbeat(file_id, done)
+                r.heartbeat(file_id)
 
         result = download_file(
             ctx, row["object_name"], dest,
