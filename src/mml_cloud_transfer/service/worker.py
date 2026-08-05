@@ -12,6 +12,7 @@ import time
 from datetime import UTC, datetime
 
 from mml_cloud_transfer.cli.scan_command import run_scan
+from mml_cloud_transfer.core.errors import ErrorCategory, classify
 from mml_cloud_transfer.core.models import Direction, JobStatus
 from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.engine.runner import EngineOptions, run_job, scan_remote
@@ -60,6 +61,42 @@ class QueueWorker:
         self._get_meta = get_meta_fn
         self._sleep = sleep
         self._now = now
+
+    # ---- startup recovery -------------------------------------------------
+
+    def startup_recovery(self) -> None:
+        """Jobs left running/stalled/scanning by a dead service become
+        pending (or paused when auto-resume is off). Zero staleness on the
+        heartbeat reset is correct here and only here: at startup, no
+        transfer can possibly be in flight.
+
+        SCANNING is recovered too (a controller amendment to the original
+        plan): a service killed mid-scan leaves the job stuck there, and
+        the queue only ever selects PENDING jobs, so without this it would
+        sit unpicked forever. This is safe because of the Task 8
+        rescan-for-safety rule: any job with started_at IS NULL is rescanned
+        at next pickup, and add_planned_files is INSERT OR IGNORE, so
+        re-walking the partial manifest is idempotent.
+        """
+        conn = connect(self._config.db_path)
+        try:
+            repo = JobRepository(conn)
+            for status in (JobStatus.RUNNING, JobStatus.STALLED, JobStatus.SCANNING):
+                for job in repo.jobs_with_status(status):
+                    repo.reset_stale_transfers(job["id"], stale_after_seconds=0)
+                    if self._config.auto_resume_on_startup:
+                        repo.set_job_status(job["id"], JobStatus.PENDING)
+                        repo.record_event(
+                            job["id"], "recovered_at_startup", "auto-resume"
+                        )
+                    else:
+                        repo.set_job_status(job["id"], JobStatus.PAUSED)
+                        repo.record_event(
+                            job["id"], "recovered_at_startup",
+                            "paused (auto-resume off)",
+                        )
+        finally:
+            conn.close()
 
     # ---- loop -----------------------------------------------------------
 
@@ -165,6 +202,18 @@ class QueueWorker:
         # allowed to fall into _record_failure and downgrade that verified
         # outcome to PAUSED — the job would silently lose a real result and
         # never get auto-retried. Surface it as an event only.
+        #
+        # The stalled check sits between the run and the report: a run that
+        # ended INCOMPLETE on sustained network failure is parked (not
+        # reported — it isn't done, it will re-run once the bucket answers).
+        if (
+            status is JobStatus.INCOMPLETE
+            and self._network_failed(job_id)
+            and not self._probe(ctx)
+        ):
+            self._stall(job_id, ctx, stop_event)
+            return
+
         if status in (JobStatus.COMPLETE, JobStatus.INCOMPLETE, JobStatus.PAUSED):
             try:
                 self._report(job_id, profile)
@@ -198,6 +247,56 @@ class QueueWorker:
             self._config.reports_dir / f"job-{job_id}",
             bucket=profile["bucket"],
         )
+
+    # ---- stalled ----------------------------------------------------------
+
+    def _network_failed(self, job_id: int) -> bool:
+        conn = connect(self._config.db_path)
+        try:
+            repo = JobRepository(conn)
+            return repo.count_failures(job_id, ErrorCategory.NETWORK) > 0
+        finally:
+            conn.close()
+
+    def _probe(self, ctx) -> bool:
+        """Can we reach the bucket at all? A 404 (get_meta -> None) is a
+        SUCCESSFUL probe — the server answered. Only network-class failures
+        mean unreachable; e.g. a credential failure is 'reachable', so the
+        re-run escalates it properly (the job pauses)."""
+        try:
+            self._get_meta(ctx, "mmlct-connectivity-probe")
+        except Exception as exc:
+            return classify(exc).category is not ErrorCategory.NETWORK
+        return True
+
+    def _stall(self, job_id: int, ctx, stop_event) -> None:
+        conn = connect(self._config.db_path)
+        try:
+            repo = JobRepository(conn)
+            repo.set_job_status(job_id, JobStatus.STALLED)
+            repo.record_event(
+                job_id, "job_stalled",
+                "sustained network failure; probing on slow cadence",
+            )
+        finally:
+            conn.close()
+        while not (stop_event.is_set() or self._controller.service_stop.is_set()):
+            self._sleep(self._config.stall_probe_interval)
+            if stop_event.is_set() or self._controller.service_stop.is_set():
+                return  # intent (if any) is applied by run_once's finally
+            conn = connect(self._config.db_path)
+            try:
+                repo = JobRepository(conn)
+                if repo.get_job(job_id)["status"] != JobStatus.STALLED.value:
+                    return  # paused/cancelled externally while we slept
+                if self._probe(ctx):
+                    repo.set_job_status(job_id, JobStatus.PENDING)
+                    repo.record_event(
+                        job_id, "job_unstalled", "network is back; re-queued"
+                    )
+                    return
+            finally:
+                conn.close()
 
     def _apply_intent(self, job_id: int, intent: str | None) -> None:
         if intent not in _INTENTS:

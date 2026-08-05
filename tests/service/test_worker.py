@@ -2,8 +2,10 @@
 The injected run_job_fn writes DB state exactly as the real one would."""
 
 import pytest
+import requests
 
-from mml_cloud_transfer.core.models import Direction, JobStatus, PlannedFile
+from mml_cloud_transfer.core.errors import ErrorCategory
+from mml_cloud_transfer.core.models import Direction, FileState, JobStatus, PlannedFile
 from mml_cloud_transfer.service.config import load_config
 from mml_cloud_transfer.service.controller import JobController
 from mml_cloud_transfer.service.worker import QueueWorker
@@ -254,3 +256,181 @@ def test_run_forever_survives_a_crashing_iteration(config):
     worker.run_once = flaky_run_once
     worker.run_forever()          # would hang or raise if the guard were missing
     assert len(calls) == 2
+
+
+def _fail_network(config, job_id):
+    conn = connect(config.db_path)
+    try:
+        repo = JobRepository(conn)
+        file_id = repo.get_files(job_id)[0]["id"]
+        repo.mark_failed(file_id, ErrorCategory.NETWORK, "conn reset")
+    finally:
+        conn.close()
+
+
+def test_startup_recovery_resumes_interrupted_jobs(config):
+    job_id = _submit(config)
+    conn = connect(config.db_path)
+    repo = JobRepository(conn)
+    repo.set_job_status(job_id, JobStatus.RUNNING)
+    file_id = repo.get_files(job_id)[0]["id"]
+    repo.mark_transferring(file_id)          # fresh heartbeat — a crash relic
+    conn.close()
+
+    worker, _ = _worker(config)
+    worker.startup_recovery()
+
+    conn = connect(config.db_path)
+    repo = JobRepository(conn)
+    job = repo.get_job(job_id)
+    state = repo.get_files(job_id)[0]["state"]
+    kinds = [e["kind"] for e in repo.events_after(job_id, 0)]
+    conn.close()
+    assert job["status"] == JobStatus.PENDING.value
+    assert state == FileState.PENDING.value  # 0s staleness beat the heartbeat
+    assert "recovered_at_startup" in kinds
+
+
+def test_startup_recovery_resumes_interrupted_scanning_jobs(config):
+    """A service killed mid-scan leaves the job SCANNING. The queue only
+    ever picks up PENDING jobs, so without recovering SCANNING too, such a
+    job would sit unpicked forever."""
+    job_id = _submit(config)
+    conn = connect(config.db_path)
+    JobRepository(conn).set_job_status(job_id, JobStatus.SCANNING)
+    conn.close()
+
+    worker, _ = _worker(config)
+    worker.startup_recovery()
+
+    conn = connect(config.db_path)
+    repo = JobRepository(conn)
+    job = repo.get_job(job_id)
+    kinds = [e["kind"] for e in repo.events_after(job_id, 0)]
+    conn.close()
+    assert job["status"] == JobStatus.PENDING.value
+    assert "recovered_at_startup" in kinds
+
+
+def test_startup_recovery_honours_auto_resume_off_for_scanning_jobs(config):
+    (config.data_dir).mkdir(parents=True, exist_ok=True)
+    import json as jsonlib
+    config.settings_path.write_text(
+        jsonlib.dumps({"auto_resume_on_startup": False}), encoding="utf-8"
+    )
+    from mml_cloud_transfer.service.config import load_config as reload
+    config = reload(config.data_dir)
+    job_id = _submit(config)
+    conn = connect(config.db_path)
+    JobRepository(conn).set_job_status(job_id, JobStatus.SCANNING)
+    conn.close()
+
+    worker, _ = _worker(config)
+    worker.startup_recovery()
+    assert _status(config, job_id) == JobStatus.PAUSED.value
+
+
+def test_startup_recovery_honours_auto_resume_off(config, tmp_path):
+    import json as jsonlib
+    (config.data_dir).mkdir(parents=True, exist_ok=True)
+    config.settings_path.write_text(
+        jsonlib.dumps({"auto_resume_on_startup": False}), encoding="utf-8"
+    )
+    from mml_cloud_transfer.service.config import load_config as reload
+    config = reload(config.data_dir)
+    job_id = _submit(config)
+    conn = connect(config.db_path)
+    JobRepository(conn).set_job_status(job_id, JobStatus.RUNNING)
+    conn.close()
+
+    worker, _ = _worker(config)
+    worker.startup_recovery()
+    assert _status(config, job_id) == JobStatus.PAUSED.value
+
+
+def test_incomplete_with_unreachable_network_stalls_then_requeues(config):
+    job_id = _submit(config)
+    probes = {"n": 0}
+    slept = []
+
+    def fake_run_job(db_path, job_id, ctx, *, options):
+        _fail_network(config, job_id)
+        conn = connect(db_path)
+        try:
+            JobRepository(conn).finish_job(job_id, JobStatus.INCOMPLETE)
+        finally:
+            conn.close()
+        return JobStatus.INCOMPLETE
+
+    def fake_get_meta(ctx, name):
+        probes["n"] += 1
+        if probes["n"] <= 2:
+            # A REAL transport exception type — never builtin ConnectionResetError.
+            raise requests.exceptions.ConnectionError("network is down")
+        return None                       # 404 == server answered == reachable
+
+    worker, _ = _worker(
+        config, run_job_fn=fake_run_job, get_meta_fn=fake_get_meta,
+        sleep=slept.append,
+    )
+    worker.run_once()
+
+    conn = connect(config.db_path)
+    repo = JobRepository(conn)
+    job = repo.get_job(job_id)
+    kinds = [e["kind"] for e in repo.events_after(job_id, 0)]
+    conn.close()
+    assert job["status"] == JobStatus.PENDING.value   # re-queued, ready to re-run
+    assert "job_stalled" in kinds
+    assert "job_unstalled" in kinds
+    assert slept                                      # it waited between probes
+    assert all(s == config.stall_probe_interval for s in slept)
+
+
+def test_incomplete_with_reachable_network_does_not_stall(config):
+    job_id = _submit(config)
+    reported = []
+
+    def fake_run_job(db_path, job_id, ctx, *, options):
+        _fail_network(config, job_id)
+        conn = connect(db_path)
+        try:
+            JobRepository(conn).finish_job(job_id, JobStatus.INCOMPLETE)
+        finally:
+            conn.close()
+        return JobStatus.INCOMPLETE
+
+    worker, _ = _worker(
+        config, run_job_fn=fake_run_job,
+        get_meta_fn=lambda ctx, name: None,           # probe succeeds
+        write_report_fn=lambda db, job_id, out, bucket=None: reported.append(job_id),
+    )
+    worker.run_once()
+    assert _status(config, job_id) == JobStatus.INCOMPLETE.value
+    assert reported == [job_id]
+
+
+def test_cancel_during_stall_wins(config):
+    job_id = _submit(config)
+
+    def fake_run_job(db_path, job_id, ctx, *, options):
+        _fail_network(config, job_id)
+        conn = connect(db_path)
+        try:
+            JobRepository(conn).finish_job(job_id, JobStatus.INCOMPLETE)
+        finally:
+            conn.close()
+        return JobStatus.INCOMPLETE
+
+    def sleeping_cancel(seconds):
+        worker_controller.request(job_id, "cancel")   # user cancels mid-stall
+
+    worker, worker_controller = _worker(
+        config, run_job_fn=fake_run_job,
+        get_meta_fn=lambda ctx, name: (_ for _ in ()).throw(
+            requests.exceptions.ConnectionError("still down")
+        ),
+        sleep=sleeping_cancel,
+    )
+    worker.run_once()
+    assert _status(config, job_id) == JobStatus.CANCELLED.value
