@@ -41,6 +41,11 @@ def test_run_prefix_is_unique_and_well_formed(real_bucket_ctx):
     ctx, run_prefix = real_bucket_ctx
     assert PREFIX_SHAPE.match(run_prefix), run_prefix
     assert ctx.bucket, "the context must name the bucket under test"
+    # A hard-coded constant prefix would satisfy every assertion above.
+    # Uniqueness is what stops two concurrent gate sessions from deleting
+    # each other's in-flight objects. This line is bucket-free -- it calls
+    # _gate_run_prefix directly rather than going through the fixture.
+    assert _gate_run_prefix("scratch") != _gate_run_prefix("scratch")
 
 
 @pytest.mark.real_bucket
@@ -58,5 +63,9 @@ def test_objects_written_under_the_prefix_are_reachable(real_bucket_ctx):
     meta = get_meta(ctx, name)
     assert meta is not None
     assert meta.size == 5
-    # Deliberately not deleted — the fixture's teardown must remove it. If
-    # teardown is broken, the next session's emptiness check fails loudly.
+    # Deliberately not deleted here -- left for the fixture's teardown to
+    # remove. The proof of cleanup is teardown's own post-delete emptiness
+    # assertion in real_bucket_ctx (tests/conftest.py), not the next session:
+    # every session gets a fresh <stamp>-<uuid8>/ run_prefix, so the next
+    # session's test_the_run_prefix_starts_empty would pass identically even
+    # if this teardown left this object behind.

@@ -399,8 +399,11 @@ def test_objects_written_under_the_prefix_are_reachable(real_bucket_ctx):
     meta = get_meta(ctx, name)
     assert meta is not None
     assert meta.size == 5
-    # Deliberately not deleted — the fixture's teardown must remove it. If
-    # teardown is broken, the next session's emptiness check fails loudly.
+    # Deliberately not deleted: teardown must remove it, and teardown's own
+    # post-delete emptiness assertion is what proves it did. Note this cannot
+    # be proven by a later session — every session gets a fresh
+    # <stamp>-<uuid8>/ prefix, so the emptiness check above is satisfied by
+    # construction and would pass even if teardown deleted nothing.
 ```
 
 - [ ] **Step 3: Run to verify it skips, then fails**
@@ -494,10 +497,14 @@ $env:MMLCT_TEST_PREFIX = "<your-scratch-folder>"   # omit if the bucket is dedic
 ```
 Expected: 5 passed.
 
-Then run it a **second** time. Expected: 5 passed again — `test_the_run_prefix_starts_empty` passing on the second run is the proof that the first run's teardown actually deleted `reachable.bin`.
+Run it a **second** time as a smoke check on repeatability. Expected: 5 passed again. Note what this does *not* prove: each session builds a fresh `<stamp>-<uuid8>/` prefix, so `test_the_run_prefix_starts_empty` is satisfied by construction and would pass even if teardown deleted nothing. The real proof that teardown works is its own post-delete emptiness assertion, plus the listing below.
 
-Confirm by eye that the objects appeared under your scratch folder and nowhere else:
-`gcloud storage ls --recursive "gs://$env:MMLCT_TEST_BUCKET/$env:MMLCT_TEST_PREFIX/"`
+Confirm by eye that the objects were removed and that nothing landed outside your scratch folder:
+
+```powershell
+gcloud storage ls --recursive "gs://$env:MMLCT_TEST_BUCKET/$env:MMLCT_TEST_PREFIX/"
+gcloud storage ls "gs://$env:MMLCT_TEST_BUCKET/mmlct-gate/"   # catches an unprefixed run
+```
 
 - [ ] **Step 7: Confirm the default suite is unaffected**
 

@@ -124,7 +124,7 @@ def real_bucket_ctx():
     bucket = os.environ.get("MMLCT_TEST_BUCKET")
     if not bucket:
         pytest.skip(
-            "set MMLCT_TEST_BUCKET (and ADC credentials) to run the release gate — "
+            "set MMLCT_TEST_BUCKET (and ADC credentials) to run the release gate - "
             "see docs/superpowers/gates/2026-08-05-plan2-release-gate.md"
         )
 
@@ -143,7 +143,17 @@ def real_bucket_ctx():
         assert f"/{GATE_SEGMENT}/" in f"/{run_prefix}", (
             f"refusing to delete under {run_prefix!r} — it is not a gate prefix"
         )
+        delete_errors: list[str] = []
         for meta in list(list_prefix(ctx, run_prefix)):
-            delete_object(ctx, meta.name)
+            # One failed delete (transient 503, 403, an object hold, ...) must
+            # not abort the sweep -- that would leak every remaining object
+            # and skip the emptiness re-check below. Accumulate instead, and
+            # let the final assertion report everything at once.
+            try:
+                delete_object(ctx, meta.name)
+            except Exception as exc:
+                delete_errors.append(f"{meta.name}: {exc!r}")
         survivors = [m.name for m in list_prefix(ctx, run_prefix)]
-        assert not survivors, f"release gate leaked objects: {survivors}"
+        assert not survivors and not delete_errors, (
+            f"release gate leaked objects: {survivors}; delete errors: {delete_errors}"
+        )
