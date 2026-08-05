@@ -183,9 +183,14 @@ if ($code -ne 0) {
     # 7. Retention policy / bucket lock — this one is fatal rather than costly:
     #    deletes are refused, so the fixture's teardown cannot clean up and its
     #    emptiness assertion fails the whole session.
+    # NOTE: gcloud snake_cases only TOP-LEVEL Bucket fields (retention_policy,
+    # lifecycle_config, versioning_enabled, default_storage_class). Fields of
+    # NESTED submessages keep their raw camelCase names, because they pass
+    # through MessageToDict unmodified. Hence retentionPeriod, not
+    # retention_period, below — and matchesPrefix in check 8.
     if ($meta.retention_policy) {
         Report-Fail ("bucket has a retention policy " +
-                     "($($meta.retention_policy.retention_period)s) — the gate cannot " +
+                     "($($meta.retention_policy.retentionPeriod)s) — the gate cannot " +
                      "delete what it writes") `
                     "run the gate against a bucket without a retention policy"
     } else {
@@ -196,8 +201,8 @@ if ($code -ne 0) {
     $rules = $meta.lifecycle_config.rule
     $hasTmpRule = $false
     foreach ($rule in $rules) {
-        if ($rule.condition.matches_prefix -and
-            ($rule.condition.matches_prefix -join " ") -match "mmlct") { $hasTmpRule = $true }
+        if ($rule.condition.matchesPrefix -and
+            ($rule.condition.matchesPrefix -join " ") -match "mmlct") { $hasTmpRule = $true }
     }
     if (-not $hasTmpRule) {
         Report-Warn "no lifecycle rule covering mmlct-gate/ orphans — see the gate record for the JSON"
@@ -225,15 +230,23 @@ if (-not $script:Failed) {
         } else {
             $wrote = $true
             Report-Ok "write succeeded"
-            $code, $null = Invoke-Gcloud storage cp $tmp "gs://$Bucket/$probePrefix/b.bin"
-            $code, $out = Invoke-Gcloud storage objects compose `
-                "gs://$Bucket/$probePrefix/a.bin" "gs://$Bucket/$probePrefix/b.bin" `
-                "gs://$Bucket/$probePrefix/composed.bin"
+            # Check this write too. compose needs b.bin to exist, so a silent
+            # failure here would surface as "compose is not permitted" and send
+            # the operator chasing an IAM problem that isn't there.
+            $code, $out = Invoke-Gcloud storage cp $tmp "gs://$Bucket/$probePrefix/b.bin"
             if ($code -ne 0) {
-                Report-Fail "compose is not permitted" `
-                            "grant roles/storage.objectAdmin (compose needs create + get)"
+                Report-Fail "second probe write failed — $($out -split "`n" | Select-Object -First 1)" `
+                            "retry; if it persists, check for a transient outage or quota limit"
             } else {
-                Report-Ok "compose succeeded"
+                $code, $out = Invoke-Gcloud storage objects compose `
+                    "gs://$Bucket/$probePrefix/a.bin" "gs://$Bucket/$probePrefix/b.bin" `
+                    "gs://$Bucket/$probePrefix/composed.bin"
+                if ($code -ne 0) {
+                    Report-Fail "compose is not permitted" `
+                                "grant roles/storage.objectAdmin (compose needs create + get)"
+                } else {
+                    Report-Ok "compose succeeded"
+                }
             }
         }
     } finally {
