@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO
 
 import google_crc32c
 
-from mml_cloud_transfer.core.hashing import crc32c_to_base64, hash_file
+from mml_cloud_transfer.core.crc32c_combine import combine_all
+from mml_cloud_transfer.core.hashing import crc32c_to_base64, hash_file, hash_range
+from mml_cloud_transfer.core.slicing import SizePolicy, SliceSpec, plan_slices
 from mml_cloud_transfer.gcs.client import GcsContext
-from mml_cloud_transfer.gcs.objects import ObjectMeta, get_meta
+from mml_cloud_transfer.gcs.objects import ObjectMeta, delete_object, get_meta, list_prefix
 from mml_cloud_transfer.gcs.resumable import (
     CHUNK_ALIGN,
     SessionExpired,
@@ -246,5 +249,195 @@ def upload_resumable(
         remote_crc32c=finalized.crc32c,
         generation=finalized.generation,
         sha256=hashes.sha256,
+        bytes_sent=bytes_sent,
+    )
+
+
+SliceProgressFn = Callable[[int, str | None, int, int | None], None]
+
+
+def slice_temp_name(object_name: str, index: int) -> str:
+    return f"{object_name}.mmlct.tmp/{index:04d}"
+
+
+def upload_slice(
+    ctx: GcsContext,
+    source_path: str,
+    object_name: str,
+    spec: SliceSpec,
+    *,
+    session_uri: str | None = None,
+    chunk_size: int = 8 * 1024 * 1024,
+    on_progress: SliceProgressFn | None = None,
+) -> tuple[int, ObjectMeta]:
+    """Upload one slice to its temp object; returns (slice_crc32c, temp meta)."""
+    temp_name = slice_temp_name(object_name, spec.index)
+
+    def report(uri: str | None, committed: int, crc: int | None) -> None:
+        if on_progress is not None:
+            on_progress(spec.index, uri, committed, crc)
+
+    hashes = _StreamHashes(with_sha256=False)
+    committed = 0
+
+    if session_uri is not None:
+        try:
+            status = query_offset(ctx.session, session_uri, spec.length)
+        except SessionExpired:
+            session_uri = None
+        else:
+            if status.finalized is not None:
+                crc = hash_range(source_path, spec.offset, spec.length).crc32c
+                verify_layer2(status.finalized, spec.length, crc)
+                report(session_uri, spec.length, crc)
+                return crc, status.finalized
+            committed = status.committed
+
+    if session_uri is None:
+        session_uri = initiate_upload(ctx, temp_name, spec.length)
+        committed = 0
+        report(session_uri, 0, None)
+
+    with Path(source_path).open("rb") as fp:
+        fp.seek(spec.offset)
+        if committed:
+            _hash_prefix(fp, hashes, committed, chunk_size)
+
+        offset = committed
+        finalized = None
+        while offset < spec.length:
+            data = fp.read(min(chunk_size, spec.length - offset))
+            hashes.update(data)
+            result = put_chunk(ctx.session, session_uri, data, offset, spec.length)
+            offset += len(data)
+            report(session_uri, result.committed, None)
+            if result.finalized is not None:
+                finalized = result.finalized
+                break
+
+    if finalized is None:
+        raise ChecksumMismatch(f"{temp_name}: slice session ended without finalizing")
+    verify_layer2(finalized, spec.length, hashes.crc32c)
+    report(session_uri, spec.length, hashes.crc32c)
+    return hashes.crc32c, finalized
+
+
+def compose_slices(
+    ctx: GcsContext,
+    object_name: str,
+    slice_metas: list[ObjectMeta],
+    expected_crc32c: int,
+    total_size: int,
+    *,
+    precondition_generation: int | None,
+) -> UploadResult:
+    """Compose temp objects (in list order) into the destination and verify."""
+    bucket = ctx.client.bucket(ctx.bucket)
+    destination = bucket.blob(object_name)
+    sources = [bucket.blob(meta.name) for meta in slice_metas]
+    destination.compose(sources, if_generation_match=precondition_generation)
+
+    meta = get_meta(ctx, object_name)
+    if meta is None:
+        raise ChecksumMismatch(f"{object_name}: object missing after compose")
+    verify_layer2(meta, total_size, expected_crc32c)
+
+    for slice_meta in slice_metas:
+        delete_object(ctx, slice_meta.name)
+
+    return UploadResult(
+        state="verified",
+        local_crc32c=expected_crc32c,
+        remote_crc32c=meta.crc32c,
+        generation=meta.generation,
+        sha256=None,
+        bytes_sent=0,
+    )
+
+
+def upload_sliced(
+    ctx: GcsContext,
+    source_path: str,
+    object_name: str,
+    size_bytes: int,
+    *,
+    precondition_generation: int | None,
+    policy: SizePolicy | None = None,
+    slice_states: dict[int, tuple[str | None, int | None]] | None = None,
+    max_workers: int = 4,
+    chunk_size: int = 8 * 1024 * 1024,
+    with_sha256: bool = False,
+    on_progress: SliceProgressFn | None = None,
+) -> UploadResult:
+    slice_states = slice_states or {}
+    specs = plan_slices(size_bytes, policy=policy)
+
+    # Skip rule: one full local read only when the destination looks plausible.
+    existing = get_meta(ctx, object_name)
+    if existing is not None and existing.size == size_bytes:
+        local = hash_file(source_path, with_sha256=with_sha256)
+        if should_skip(existing, size_bytes, local.crc32c):
+            return UploadResult(
+                state="skipped",
+                local_crc32c=local.crc32c,
+                remote_crc32c=existing.crc32c,
+                generation=existing.generation,
+                sha256=local.sha256,
+                bytes_sent=0,
+            )
+
+    results: dict[int, tuple[int, ObjectMeta]] = {}
+    to_upload: list[SliceSpec] = []
+    for spec in specs:
+        uri, known_crc = slice_states.get(spec.index, (None, None))
+        if known_crc is not None:
+            temp_meta = get_meta(ctx, slice_temp_name(object_name, spec.index))
+            if temp_meta is not None and temp_meta.crc32c == known_crc:
+                results[spec.index] = (known_crc, temp_meta)
+                continue
+        to_upload.append(spec)
+
+    bytes_sent = 0
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(
+                upload_slice,
+                ctx,
+                source_path,
+                object_name,
+                spec,
+                session_uri=slice_states.get(spec.index, (None, None))[0],
+                chunk_size=chunk_size,
+                on_progress=on_progress,
+            ): spec
+            for spec in to_upload
+        }
+        for future, spec in futures.items():
+            crc, temp_meta = future.result()  # re-raises worker failures
+            results[spec.index] = (crc, temp_meta)
+            bytes_sent += spec.length
+
+    ordered = [results[spec.index] for spec in specs]
+    whole_crc = combine_all([(crc, spec.length) for (crc, _), spec in zip(ordered, specs)])
+    composed = compose_slices(
+        ctx,
+        object_name,
+        [meta for _, meta in ordered],
+        whole_crc,
+        size_bytes,
+        precondition_generation=precondition_generation,
+    )
+
+    sha256 = None
+    if with_sha256:
+        sha256 = hash_file(source_path, with_sha256=True).sha256
+        stamp_sha256(ctx, object_name, sha256)
+
+    return UploadResult(
+        state="verified",
+        local_crc32c=whole_crc,
+        remote_crc32c=composed.remote_crc32c,
+        generation=composed.generation,
+        sha256=sha256,
         bytes_sent=bytes_sent,
     )
