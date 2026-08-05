@@ -1,0 +1,84 @@
+"""HTTP client for the service API — the CLI's transport when --service-url
+is given, and the GUI's transport in Plan 5. SSE parsing is hand-rolled:
+the stream carries one event type with a single data: line per event."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+
+import requests
+
+
+class ServiceError(Exception):
+    """The API said no: carries the HTTP status and the server's detail."""
+
+    def __init__(self, status_code: int, detail: str):
+        super().__init__(f"{status_code}: {detail}")
+        self.status_code = status_code
+        self.detail = detail
+
+
+class ApiClient:
+    def __init__(
+        self, base_url: str, token: str, *, session: requests.Session | None = None
+    ):
+        self._base = base_url.rstrip("/")
+        self._session = session if session is not None else requests.Session()
+        self._session.headers["Authorization"] = f"Bearer {token}"
+
+    def _check(self, response):
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("detail", "")
+            except ValueError:
+                detail = getattr(response, "text", "")
+            raise ServiceError(response.status_code, str(detail))
+        return response.json()
+
+    def health(self) -> dict:
+        return self._check(self._session.get(f"{self._base}/health", timeout=10))
+
+    def submit_job(self, payload: dict) -> int:
+        response = self._session.post(f"{self._base}/jobs", json=payload, timeout=30)
+        return int(self._check(response)["job_id"])
+
+    def list_jobs(self) -> list[dict]:
+        return self._check(self._session.get(f"{self._base}/jobs", timeout=30))
+
+    def get_job(self, job_id: int) -> dict:
+        return self._check(
+            self._session.get(f"{self._base}/jobs/{job_id}", timeout=30)
+        )
+
+    def pause(self, job_id: int) -> dict:
+        return self._check(
+            self._session.post(f"{self._base}/jobs/{job_id}/pause", timeout=30)
+        )
+
+    def resume(self, job_id: int) -> dict:
+        return self._check(
+            self._session.post(f"{self._base}/jobs/{job_id}/resume", timeout=30)
+        )
+
+    def cancel(self, job_id: int) -> dict:
+        return self._check(
+            self._session.post(f"{self._base}/jobs/{job_id}/cancel", timeout=30)
+        )
+
+    def report(self, job_id: int) -> dict:
+        return self._check(
+            self._session.post(f"{self._base}/jobs/{job_id}/report", timeout=600)
+        )
+
+    def stream(self, job_id: int) -> Iterator[dict]:
+        """Yield each SSE progress payload until the server closes the
+        stream (which it does after a terminal tick)."""
+        response = self._session.get(
+            f"{self._base}/jobs/{job_id}/stream", stream=True, timeout=(10, 65)
+        )
+        if response.status_code >= 400:
+            raise ServiceError(response.status_code, "stream refused")
+        for line in response.iter_lines(decode_unicode=True):
+            if line and line.startswith("data:"):
+                yield json.loads(line[len("data:"):].strip())

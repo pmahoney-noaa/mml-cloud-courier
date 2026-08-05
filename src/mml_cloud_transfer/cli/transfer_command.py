@@ -15,6 +15,9 @@ from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.engine.runner import EngineOptions, run_job, scan_remote
 from mml_cloud_transfer.gcs.client import make_context
 from mml_cloud_transfer.cli.scan_command import run_scan
+from mml_cloud_transfer.cli.service_client import ApiClient, ServiceError
+from mml_cloud_transfer.service.security import read_token
+from mml_cloud_transfer.service.config import load_config
 from mml_cloud_transfer.store.db import connect
 from mml_cloud_transfer.store.repository import JobRepository
 
@@ -55,7 +58,72 @@ def _finish(args, db, job_id: int, status: JobStatus) -> int:
     return 0 if status is JobStatus.COMPLETE else 1
 
 
+def _api_client(args) -> ApiClient:
+    token_path = (
+        Path(args.token_file) if args.token_file else load_config().token_path
+    )
+    return ApiClient(args.service_url, read_token(token_path))
+
+
+def _watch(client: ApiClient, job_id: int) -> JobStatus:
+    """Print progress lines until the server closes the stream, then
+    return the job's final status."""
+    last_line = ""
+    final_status = None
+    for event in client.stream(job_id):
+        final_status = event["status"]
+        progress = event["progress"]
+        line = (
+            f"[{event['status']}] "
+            f"{progress['files_done']}/{progress['files_total']} files, "
+            f"{progress['bytes_done']}/{progress['bytes_total']} bytes"
+        )
+        if line != last_line:
+            print(line)
+            last_line = line
+        for entry in event["events"]:
+            if entry["kind"] in ("job_stalled", "job_unstalled", "run_paused"):
+                print(f"  ! {entry['kind']}: {entry['detail'] or ''}")
+    if final_status is None:
+        raise ServiceError(0, "stream ended without any event")
+    return JobStatus(final_status)
+
+
+def _finish_via_service(client: ApiClient, job_id: int, status: JobStatus) -> int:
+    report = client.report(job_id)
+    print(f"Job {job_id}: {status.value.upper()}")
+    print(f"Report: {report['report_html']}")
+    return 0 if status is JobStatus.COMPLETE else 1
+
+
+def run_transfer_via_service(args) -> int:
+    client = _api_client(args)
+    job_id = client.submit_job({
+        "name": args.name,
+        "direction": args.direction,
+        "source_root": args.source,
+        "dest_prefix": args.prefix,
+        "bucket": args.bucket,
+        "credentials_path": args.credentials,
+        "emulator_endpoint": args.emulator_endpoint,
+        "audit_hash": args.audit_hash,
+        "scheduled_start_at": args.scheduled_at,
+    })
+    print(f"Job {job_id} submitted")
+    if args.scheduled_at:
+        print(f"Scheduled to start at {args.scheduled_at}; check progress with"
+              f" 'mmlct status --service-url {args.service_url}'")
+        return 0
+    return _finish_via_service(client, job_id, _watch(client, job_id))
+
+
 def run_transfer(args) -> int:
+    if args.scheduled_at and not args.service_url:
+        raise ValueError(
+            "--scheduled-at requires the service; pass --service-url"
+        )
+    if args.service_url:
+        return run_transfer_via_service(args)
     options = _options(args)
     ctx = _context(args)
     direction = Direction(args.direction)
@@ -101,6 +169,10 @@ def run_transfer(args) -> int:
 
 
 def run_resume(args) -> int:
+    if args.service_url:
+        client = _api_client(args)
+        client.resume(args.job_id)
+        return _finish_via_service(client, args.job_id, _watch(client, args.job_id))
     conn = connect(args.db)
     try:
         repo = JobRepository(conn)
@@ -121,6 +193,19 @@ def run_resume(args) -> int:
 
 
 def run_status(args) -> int:
+    if args.service_url:
+        client = _api_client(args)
+        jobs = client.list_jobs()
+        if not jobs:
+            print("No jobs.")
+            return 0
+        for job in jobs:
+            print(
+                f"#{job['id']} {job['name']} [{job['direction']}] {job['status']}"
+                f" — {display_path(job['source_root'])} ->"
+                f" {job['dest_prefix'] or '(root)'}"
+            )
+        return 0
     conn = connect(args.db)
     try:
         jobs = conn.execute("SELECT * FROM jobs ORDER BY id").fetchall()
@@ -142,6 +227,10 @@ def run_status(args) -> int:
 
 
 def run_report_cmd(args) -> int:
+    if args.service_url:
+        client = _api_client(args)
+        print(f"Report: {client.report(args.job_id)['report_html']}")
+        return 0
     conn = connect(args.db)
     try:
         JobRepository(conn).get_job(args.job_id)

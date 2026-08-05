@@ -7,16 +7,32 @@ Later phases add transfer, resume, and report subcommands here.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 
+import requests
+
 from mml_cloud_transfer.cli.scan_command import run_scan
+from mml_cloud_transfer.cli.service_client import ServiceError
 from mml_cloud_transfer.cli.transfer_command import (
     run_report_cmd,
     run_resume,
     run_status,
     run_transfer,
 )
+
+
+def add_service_options(sub):
+    sub.add_argument(
+        "--service-url",
+        default=os.environ.get("MMLCT_SERVICE_URL"),
+        help="Drive this command through the service API at this URL",
+    )
+    sub.add_argument(
+        "--token-file", default=None,
+        help="Bearer-token file (default: the service data directory's api_token)",
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -58,14 +74,21 @@ def _build_parser() -> argparse.ArgumentParser:
     transfer.add_argument("--audit-hash", action="store_true",
                           help="Also compute SHA-256 per file")
     add_gcs_options(transfer)
+    transfer.add_argument(
+        "--scheduled-at", default=None,
+        help="Queue the job to start at this ISO-8601 time (requires --service-url)",
+    )
+    add_service_options(transfer)
 
     resume = subparsers.add_parser("resume", help="Resume an interrupted job")
     resume.add_argument("--db", required=True)
     resume.add_argument("--job-id", type=int, required=True)
     add_gcs_options(resume)
+    add_service_options(resume)
 
     status = subparsers.add_parser("status", help="List jobs and their state")
     status.add_argument("--db", required=True)
+    add_service_options(status)
 
     report = subparsers.add_parser("report", help="Re-export a job's report")
     report.add_argument("--db", required=True)
@@ -73,8 +96,24 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument("--out", default=None)
     report.add_argument("--bucket", default=None)
     report.add_argument("--report-dir", default=None, help=argparse.SUPPRESS)
+    add_service_options(report)
 
     return parser
+
+
+def _dispatch_via_service(dispatch, args) -> int:
+    """Run a subcommand's dispatch function, turning the two ways the
+    service can fail to answer into a friendly message and exit code 1.
+    ValueError (e.g. --scheduled-at without --service-url) is left to
+    propagate to the caller's own handler."""
+    try:
+        return dispatch(args)
+    except requests.exceptions.ConnectionError:
+        print(f"service not reachable at {args.service_url} — is it running?")
+        return 1
+    except ServiceError as exc:
+        print(str(exc))
+        return 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -108,14 +147,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command in ("transfer", "resume"):
         dispatch = run_transfer if args.command == "transfer" else run_resume
         try:
-            return dispatch(args)
+            return _dispatch_via_service(dispatch, args)
         except ValueError as exc:
             print(str(exc))
             return 2
     if args.command == "status":
-        return run_status(args)
+        return _dispatch_via_service(run_status, args)
     if args.command == "report":
-        return run_report_cmd(args)
+        return _dispatch_via_service(run_report_cmd, args)
 
     return 2
 
