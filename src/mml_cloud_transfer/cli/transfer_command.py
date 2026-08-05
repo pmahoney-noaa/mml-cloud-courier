@@ -20,16 +20,7 @@ from mml_cloud_transfer.store.repository import JobRepository
 
 
 def parse_size_policy(text: str) -> SizePolicy:
-    parts = text.split(",")
-    if len(parts) != 3:
-        raise ValueError(
-            "size policy must be 'single_shot_max,resumable_max,min_slice'"
-        )
-    single, resumable, min_slice = (int(p) for p in parts)
-    return SizePolicy(
-        single_shot_max=single, resumable_max=resumable,
-        min_slice=min_slice, max_components=32,
-    )
+    return SizePolicy.parse(text)
 
 
 def _options(args) -> EngineOptions:

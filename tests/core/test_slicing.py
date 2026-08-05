@@ -107,3 +107,22 @@ def test_omitting_policy_behaves_exactly_as_before():
 
     assert choose_method(8 * MIB) is TransferMethod.SINGLE_SHOT
     assert plan_slices(2 * GIB)[0].length == GIB
+
+
+def test_size_policy_parse_round_trips():
+    from mml_cloud_transfer.core.slicing import SizePolicy
+
+    policy = SizePolicy.parse("65536,262144,262144")
+    assert policy.single_shot_max == 65536
+    assert policy.resumable_max == 262144
+    assert policy.min_slice == 262144
+    assert policy.max_components == 32
+
+
+def test_size_policy_parse_rejects_garbage():
+    from mml_cloud_transfer.core.slicing import SizePolicy
+
+    with pytest.raises(ValueError):
+        SizePolicy.parse("1,2")
+    with pytest.raises(ValueError):
+        SizePolicy.parse("a,b,c")
