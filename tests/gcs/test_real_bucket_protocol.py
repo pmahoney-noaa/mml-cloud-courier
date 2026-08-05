@@ -9,14 +9,21 @@ import random
 
 import pytest
 
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.gcs.objects import get_meta
+from mml_cloud_transfer.core.crc32c_combine import combine_all
+from mml_cloud_transfer.core.hashing import crc32c_from_base64, hash_file
+from mml_cloud_transfer.core.slicing import SizePolicy, plan_slices
+from mml_cloud_transfer.gcs.objects import delete_object, get_meta, list_prefix
 from mml_cloud_transfer.gcs.resumable import (
     initiate_upload,
     put_chunk,
     query_offset,
 )
-from mml_cloud_transfer.gcs.uploader import upload_resumable
+from mml_cloud_transfer.gcs.uploader import (
+    compose_slices,
+    slice_temp_name,
+    upload_resumable,
+    upload_slice,
+)
 
 CHUNK = 256 * 1024
 TOTAL = 1024 * 1024
@@ -79,3 +86,66 @@ def test_status_query_returns_the_servers_committed_offset(real_bucket_ctx, sour
     assert meta is not None
     assert meta.size == TOTAL
     assert meta.crc32c == hash_file(source).crc32c
+
+
+#: 3 MiB under this policy -> exactly three 1 MiB components.
+COMPOSE_POLICY = SizePolicy(
+    single_shot_max=64 * 1024,
+    resumable_max=1024 * 1024,
+    min_slice=1024 * 1024,
+    max_components=32,
+)
+THREE_MIB = 3 * 1024 * 1024
+
+
+@pytest.fixture
+def composable(tmp_path):
+    path = tmp_path / "composable.bin"
+    path.write_bytes(blocks(12, seed=2))  # 3 MiB of distinct 256 KiB blocks
+    return path
+
+
+@pytest.mark.real_bucket
+def test_compose_preserves_slice_order(real_bucket_ctx, composable):
+    ctx, run_prefix = real_bucket_ctx
+    name = f"{run_prefix}composed.bin"
+    reversed_name = f"{run_prefix}composed-reversed.bin"
+
+    specs = plan_slices(THREE_MIB, policy=COMPOSE_POLICY)
+    assert len(specs) == 3, "the policy must produce three components"
+
+    crcs = []
+    metas = []
+    for spec in specs:
+        crc, meta = upload_slice(ctx, str(composable), name, spec, chunk_size=CHUNK)
+        crcs.append(crc)
+        metas.append(meta)
+
+    combined = combine_all([(c, s.length) for c, s in zip(crcs, specs)])
+    assert combined == hash_file(composable).crc32c, (
+        "crc32c_combine over the slices must equal a straight whole-file hash"
+    )
+
+    bucket = ctx.client.bucket(ctx.bucket)
+    try:
+        # Compose the SAME components in the wrong order. If this produced the
+        # same CRC, the correct-order assertion below would be vacuous and
+        # Layer 2 could not detect a mis-stitched object at all.
+        wrong = bucket.blob(reversed_name)
+        wrong.compose([bucket.blob(m.name) for m in reversed(metas)])
+        wrong.reload()
+        assert crc32c_from_base64(wrong.crc32c) != combined, (
+            "reversed compose produced the expected CRC — Layer 2 cannot detect order"
+        )
+    finally:
+        delete_object(ctx, reversed_name)
+
+    result = compose_slices(
+        ctx, name, metas, combined, THREE_MIB, precondition_generation=0
+    )
+    assert result.state == "verified"
+    assert result.remote_crc32c == combined
+
+    leftovers = [m.name for m in list_prefix(ctx, f"{name}.mmlct.tmp/")]
+    assert leftovers == [], f"compose left temp objects behind: {leftovers}"
+    assert slice_temp_name(name, 0) == f"{name}.mmlct.tmp/0000"
