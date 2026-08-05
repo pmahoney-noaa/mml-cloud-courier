@@ -3,7 +3,13 @@ import sys
 
 import pytest
 
-from mml_cloud_transfer.service.security import _acl_grants, ensure_token, read_token
+from mml_cloud_transfer.service import security
+from mml_cloud_transfer.service.security import (
+    _acl_grants,
+    _current_sid,
+    ensure_token,
+    read_token,
+)
 
 
 def test_ensure_token_is_stable_and_round_trips(tmp_path):
@@ -21,27 +27,47 @@ def test_read_token_rejects_empty_file(tmp_path):
         read_token(path)
 
 
-def test_acl_grants_skip_the_current_account_under_a_system_service_account(
-    monkeypatch,
-):
-    """IMPORTANT 5 regression: under LocalSystem/virtual service accounts the
-    current-account grant is either redundant with the SYSTEM SID grant or
-    an unresolvable account name — either way icacls must not be asked to
-    grant it, or a CalledProcessError there would make token creation (and
-    therefore service startup) fail outright."""
-    monkeypatch.setenv("USERNAME", "SYSTEM")
-    monkeypatch.setenv("USERDOMAIN", "NT AUTHORITY")
-    grants = _acl_grants()
-    assert grants.count("/grant:r") == 2
-    assert not any("SYSTEM\\" in g or "\\SYSTEM" in g for g in grants)
+def test_ensure_token_regenerates_a_half_created_empty_file(tmp_path):
+    """A start that dies between touch() and the token write leaves an
+    empty file; the next start must regenerate it, not crash-loop on
+    read_token's ValueError (observed live in the Phase 3 gate)."""
+    path = tmp_path / "api_token"
+    path.write_text("", encoding="utf-8")
+    token = ensure_token(path)
+    assert token
+    assert read_token(path) == token
 
 
-def test_acl_grants_include_the_current_account_normally(monkeypatch):
-    monkeypatch.setenv("USERNAME", "alice")
-    monkeypatch.setenv("USERDOMAIN", "CONTOSO")
+def test_acl_grants_use_the_process_sid_never_account_names(monkeypatch):
+    """Gate finding: on a workgroup machine LocalSystem presents
+    WORKGROUP\\MACHINE$, which icacls cannot map (error 1332) — so grants
+    must be raw SIDs, which need no name mapping at all."""
+    monkeypatch.setattr(
+        security, "_current_sid", lambda: "S-1-5-21-111-222-333-1001"
+    )
     grants = _acl_grants()
     assert grants.count("/grant:r") == 3
-    assert "CONTOSO\\alice:(F)" in grants
+    assert "*S-1-5-21-111-222-333-1001:(F)" in grants
+    assert not any("\\" in g for g in grants)
+
+
+def test_acl_grants_skip_the_sid_when_running_as_system(monkeypatch):
+    monkeypatch.setattr(security, "_current_sid", lambda: "S-1-5-18")
+    grants = _acl_grants()
+    assert grants.count("/grant:r") == 2
+
+
+def test_acl_grants_survive_sid_resolution_failure(monkeypatch):
+    monkeypatch.setattr(security, "_current_sid", lambda: None)
+    grants = _acl_grants()
+    assert grants.count("/grant:r") == 2
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="whoami is Windows-only")
+def test_current_sid_resolves_a_real_sid():
+    sid = _current_sid()
+    assert sid is not None
+    assert sid.startswith("S-1-")
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="ACLs are Windows-only")

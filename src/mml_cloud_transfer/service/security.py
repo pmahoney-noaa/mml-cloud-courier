@@ -8,7 +8,6 @@ is an installer decision (Phase 6), not made here.
 
 from __future__ import annotations
 
-import os
 import secrets
 import subprocess
 import sys
@@ -18,26 +17,39 @@ _SYSTEM_SID = "*S-1-5-18"
 _ADMINISTRATORS_SID = "*S-1-5-32-544"
 
 
-def _current_account() -> str:
-    domain = os.environ.get("USERDOMAIN", "")
-    user = os.environ.get("USERNAME", "")
-    return f"{domain}\\{user}" if domain else user
+def _current_sid() -> str | None:
+    """The process token's SID, via whoami (stdlib-only). None if unknown.
+
+    Env-var account names (USERDOMAIN\\USERNAME) are NOT a substitute: on a
+    workgroup machine LocalSystem presents WORKGROUP\\MACHINE$, which icacls
+    cannot map to a SID (error 1332) — a failure observed live during the
+    Phase 3 gate. The token SID needs no mapping at all."""
+    try:
+        out = subprocess.run(
+            ["whoami", "/user", "/fo", "csv"],
+            check=True, capture_output=True, text=True,
+        ).stdout
+        sid = out.strip().splitlines()[-1].rsplit(",", 1)[-1].strip().strip('"')
+    except (OSError, subprocess.CalledProcessError, IndexError):
+        return None
+    return sid if sid.upper().startswith("S-1-") else None
 
 
 def _acl_grants() -> list[str]:
-    """icacls /grant:r arguments: always SYSTEM and Administrators, plus the
-    current account — unless it's already covered by the SYSTEM SID. Under
-    LocalSystem/virtual service accounts, USERNAME can be empty or literally
-    "SYSTEM"; granting it again is redundant at best and an unresolvable
-    account name (CalledProcessError) at worst, which would make the token
-    write — and therefore service startup — fail outright."""
+    """icacls /grant:r arguments: always SYSTEM and Administrators (by SID),
+    plus the current process's SID unless SYSTEM already covers it. Raw SIDs
+    (`*S-...`) resolve without any account-name mapping, so this behaves
+    identically for domain users, workgroup machines, and virtual service
+    accounts. If the SID cannot be resolved, the base grants stand alone —
+    the service account is then SYSTEM or an Administrator in every
+    supported deployment, so startup still succeeds."""
     grants = [
         "/grant:r", f"{_SYSTEM_SID}:(F)",
         "/grant:r", f"{_ADMINISTRATORS_SID}:(F)",
     ]
-    username = os.environ.get("USERNAME", "")
-    if username and username.upper() != "SYSTEM":
-        grants += ["/grant:r", f"{_current_account()}:(F)"]
+    sid = _current_sid()
+    if sid and f"*{sid}" not in (_SYSTEM_SID, _ADMINISTRATORS_SID):
+        grants += ["/grant:r", f"*{sid}:(F)"]
     return grants
 
 
@@ -58,7 +70,12 @@ def ensure_token(path: Path) -> str:
     token bytes never exist under a permissive ACL.
     """
     if path.exists():
-        return read_token(path)
+        try:
+            return read_token(path)
+        except ValueError:
+            # Half-created by a start that failed between touch() and the
+            # token write — regenerate rather than crash-loop on it.
+            path.unlink()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch()
     restrict_acl(path)
