@@ -14,6 +14,7 @@ import subprocess
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -86,3 +87,63 @@ def emulator_client(emulator):
     bucket_name = f"mmlct-{uuid.uuid4().hex[:12]}"
     client.create_bucket(bucket_name)
     yield client, bucket_name
+
+
+#: The one path segment an operator can never supply. Teardown deletes
+#: everything under the run prefix, so this segment is what makes that
+#: deletion safe -- see _gate_run_prefix and the guard in real_bucket_ctx.
+GATE_SEGMENT = "mmlct-gate"
+
+
+def _gate_run_prefix(base: str) -> str:
+    """Build a unique run prefix under `base`, always inside GATE_SEGMENT.
+
+    `base` is the operator's MMLCT_TEST_PREFIX -- a scratch folder inside a
+    bucket that may hold real data. It is normalised, never trusted, and can
+    never displace the gate segment.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    run = f"{GATE_SEGMENT}/{stamp}-{uuid.uuid4().hex[:8]}/"
+    base = base.strip().strip("/")
+    return f"{base}/{run}" if base else run
+
+
+@pytest.fixture(scope="session")
+def real_bucket_ctx():
+    """The release gate's context: a real bucket and a unique run prefix.
+
+    Session-scoped so one prefix covers the whole gate run. Teardown deletes
+    everything under the prefix -- including <name>.mmlct.tmp/<nnnn> slice
+    temps, which live under it by construction (gcs.uploader.slice_temp_name)
+    -- and fails the session if anything survives, so a leak surfaces as a red
+    test rather than a surprise bill.
+
+    MMLCT_TEST_PREFIX confines the run to a scratch folder, so an in-use
+    bucket is a valid target.
+    """
+    bucket = os.environ.get("MMLCT_TEST_BUCKET")
+    if not bucket:
+        pytest.skip(
+            "set MMLCT_TEST_BUCKET (and ADC credentials) to run the release gate — "
+            "see docs/superpowers/gates/2026-08-05-plan2-release-gate.md"
+        )
+
+    from mml_cloud_transfer.gcs.client import make_context
+    from mml_cloud_transfer.gcs.objects import delete_object, list_prefix
+
+    run_prefix = _gate_run_prefix(os.environ.get("MMLCT_TEST_PREFIX", ""))
+    ctx = make_context(bucket)
+    try:
+        yield ctx, run_prefix
+    finally:
+        # The guard. Everything below deletes recursively, and MMLCT_TEST_PREFIX
+        # points into a bucket that may hold real data -- so refuse to delete
+        # anything whose path is not demonstrably ours. A typo fails a test
+        # instead of destroying data.
+        assert f"/{GATE_SEGMENT}/" in f"/{run_prefix}", (
+            f"refusing to delete under {run_prefix!r} — it is not a gate prefix"
+        )
+        for meta in list(list_prefix(ctx, run_prefix)):
+            delete_object(ctx, meta.name)
+        survivors = [m.name for m in list_prefix(ctx, run_prefix)]
+        assert not survivors, f"release gate leaked objects: {survivors}"
