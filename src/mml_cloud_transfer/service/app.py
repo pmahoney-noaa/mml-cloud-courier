@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from mml_cloud_transfer.core.models import Direction, JobStatus
@@ -21,6 +22,7 @@ from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.service.config import ServiceConfig
 from mml_cloud_transfer.service.controller import JobController
 from mml_cloud_transfer.service.security import ensure_token
+from mml_cloud_transfer.service.sse import progress_events
 from mml_cloud_transfer.store.db import connect
 from mml_cloud_transfer.store.repository import JobRepository
 
@@ -289,6 +291,18 @@ def create_app(config: ServiceConfig, controller: JobController) -> FastAPI:
             "manifest_csv": str(paths.manifest_csv),
             "report_html": str(paths.report_html),
         }
+
+    @router.get("/jobs/{job_id}/stream")
+    def stream_job(job_id: int) -> StreamingResponse:
+        conn, repo = _open()
+        try:
+            _job_or_404(repo, job_id)
+        finally:
+            conn.close()
+        return StreamingResponse(
+            progress_events(config.db_path, job_id, interval=config.sse_interval),
+            media_type="text/event-stream",
+        )
 
     app.include_router(router)
     return app
