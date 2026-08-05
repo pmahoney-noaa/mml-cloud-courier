@@ -98,7 +98,8 @@ def test_job_survives_service_kill(emulator, emulator_client, tmp_path):
         "SELECT status FROM jobs WHERE id = ?", (job_id,)
     ).fetchone()
     done_before = conn.execute(
-        "SELECT COUNT(*) AS n FROM job_files WHERE state IN ('verified', 'skipped')"
+        "SELECT COUNT(*) AS n FROM job_files WHERE job_id = ? AND state IN ('verified', 'skipped')",
+        (job_id,),
     ).fetchone()["n"]
     conn.close()
     assert row["status"] != JobStatus.COMPLETE.value
@@ -126,6 +127,17 @@ def test_job_survives_service_kill(emulator, emulator_client, tmp_path):
         else:
             pytest.fail("job did not reach a terminal status after restart")
         assert job["status"] == JobStatus.COMPLETE.value
+
+        # The worker commits COMPLETE before it finishes writing the report,
+        # so wait for it here — while the service is still alive — rather
+        # than asserting once after it's already been killed.
+        report_html = data_dir / "reports" / f"job-{job_id}" / "report.html"
+        report_deadline = time.monotonic() + 30
+        while time.monotonic() < report_deadline and not report_html.exists():
+            time.sleep(0.2)
+        # Written by the worker after the terminal status commits — never by
+        # a client call.
+        assert report_html.exists()
     finally:
         proc.kill()
         proc.wait(timeout=15)
@@ -143,6 +155,3 @@ def test_job_survives_service_kill(emulator, emulator_client, tmp_path):
     meta = get_meta(ctx, "night/big.bin")
     assert meta is not None
     assert meta.crc32c == hash_file(src / "big.bin").crc32c
-
-    # The report was written by the worker, not by any client call.
-    assert (data_dir / "reports" / f"job-{job_id}" / "report.html").exists()
