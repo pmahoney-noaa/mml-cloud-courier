@@ -12,8 +12,23 @@ import time
 import pytest
 
 from mml_cloud_transfer.core.models import JobStatus
-from mml_cloud_transfer.engine.joblock import JobAlreadyRunning, job_run_lock
+from mml_cloud_transfer.engine.joblock import (
+    JobAlreadyRunning,
+    JobLockUnavailable,
+    job_run_lock,
+)
 from mml_cloud_transfer.engine.runner import run_job
+
+# The lock is msvcrt.locking-based and Windows-only by design (see
+# joblock.py); msvcrt itself is imported lazily so the module still
+# *imports* fine everywhere (and runner.py, which imports it, keeps
+# importing fine on non-Windows hosts too) — only actually calling
+# job_run_lock needs Windows. Match the guard style used elsewhere in this
+# repo (test_paths.py, test_scanner.py, test_security.py) for tests that
+# exercise Windows-only behavior.
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32", reason="msvcrt byte-range locks are Windows-only"
+)
 
 
 def test_second_acquisition_in_same_process_raises(tmp_path):
@@ -24,7 +39,9 @@ def test_second_acquisition_in_same_process_raises(tmp_path):
     that behavior against regression."""
     db = tmp_path / "jobs.db"
     with job_run_lock(db, 7):
-        with pytest.raises(JobAlreadyRunning, match=r"job 7 is already running"):
+        with pytest.raises(
+            JobAlreadyRunning, match=r"could not acquire the run lock for job 7"
+        ):
             with job_run_lock(db, 7):
                 pass
 
@@ -45,6 +62,10 @@ def test_lock_is_released_on_exit(tmp_path):
 
 
 def test_error_message_names_job_and_lock_path(tmp_path):
+    """I2: the message must name the job, the lock path, and be honest that
+    the same errno covers both genuine contention and a lock file that is
+    simply unusable (e.g. no byte-range locking on the filesystem) —
+    it must NOT claim certainty it doesn't have."""
     db = tmp_path / "jobs.db"
     lock_path = db.parent / f"{db.name}.job-7.lock"
     with job_run_lock(db, 7):
@@ -54,7 +75,8 @@ def test_error_message_names_job_and_lock_path(tmp_path):
     message = str(exc_info.value)
     assert "job 7" in message
     assert str(lock_path) in message
-    assert "retry" in message.lower()
+    assert "probably running" in message.lower()  # soft, not certain
+    assert "\\\\?\\" not in message  # M6: never leak the extended-path form
 
 
 _HOLD_SCRIPT = """
@@ -115,6 +137,57 @@ def test_run_job_raises_job_already_running_when_lock_is_held(tmp_path):
     with job_run_lock(db, 7):
         with pytest.raises(JobAlreadyRunning):
             run_job(db, 7, ctx=None)
+    # M2: the docstring's claim ("fail before any DB mutation") was
+    # previously untested — run_job's own connect() call would create the
+    # sqlite file, so its absence is direct evidence no DB work happened.
+    assert not db.exists()
+
+
+def test_lock_is_released_even_when_the_with_block_raises(tmp_path):
+    """M1: the highest-consequence release path. In the long-lived service
+    process, if release were broken here, a run_job that raises would
+    strand the lock for the rest of the process's life and drive every
+    later attempt at this job straight into JobAlreadyRunning (and, via
+    the service, PAUSED)."""
+    db = tmp_path / "jobs.db"
+    with pytest.raises(RuntimeError, match="boom"):
+        with job_run_lock(db, 7):
+            raise RuntimeError("boom")
+    with job_run_lock(db, 7):  # re-acquirable: the lock was released
+        pass
+
+
+def test_job_id_is_coerced_to_int(tmp_path):
+    """M5: sqlite treats job id `3` and `3.0` as the same row, so an
+    uncoerced float job_id must not silently point at a different,
+    uncontended lock file (``jobs.db.job-3.0.lock`` vs.
+    ``jobs.db.job-3.lock``)."""
+    db = tmp_path / "jobs.db"
+    with job_run_lock(db, 3):
+        with pytest.raises(JobAlreadyRunning):
+            with job_run_lock(db, 3.0):
+                pass
+
+
+def test_lock_path_is_a_directory_raises_job_lock_unavailable(tmp_path):
+    """I1(c): a directory sitting at the lock path can never be opened as a
+    file — that's a permanent condition, not contention, so it must raise
+    JobLockUnavailable (not JobAlreadyRunning) with a message naming the
+    remedy, not a bare traceback. Uses a zero-length retry schedule so the
+    test doesn't pay the production ~3s retry budget for a failure that
+    retrying can never fix."""
+    db = tmp_path / "jobs.db"
+    lock_path = db.parent / f"{db.name}.job-7.lock"
+    lock_path.mkdir(parents=True)
+
+    with pytest.raises(JobLockUnavailable) as exc_info:
+        with job_run_lock(db, 7, open_retry_delays=()):
+            pass
+    message = str(exc_info.value)
+    assert "job 7" in message
+    assert str(lock_path) in message
+    assert "attrib" in message  # names the remedy for the common (b) case
+    assert "\\\\?\\" not in message  # M6: never leak the extended-path form
 
 
 def test_run_job_succeeds_normally_once_no_one_holds_the_lock(tmp_path):

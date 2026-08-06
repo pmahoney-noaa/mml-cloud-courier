@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from mml_cloud_transfer.cli.scan_command import run_scan
 from mml_cloud_transfer.core.errors import ErrorCategory, classify
 from mml_cloud_transfer.core.models import Direction, JobStatus
+from mml_cloud_transfer.engine.joblock import JobLockError
 from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.engine.runner import EngineOptions, run_job, scan_remote
 from mml_cloud_transfer.gcs.client import make_context
@@ -205,6 +206,17 @@ class QueueWorker:
                 self._config.db_path, job_id, ctx,
                 options=self._options(stop_event),
             )
+        except JobLockError as exc:
+            # Catches both JobAlreadyRunning (genuine contention) and
+            # JobLockUnavailable (couldn't even open the lock file, e.g. a
+            # transient AV/backup hold — see joblock.py). Both are usually
+            # transient: the operator's own resume finishing, or a scanner
+            # window passing. _record_failure would PAUSE the job, and
+            # next_eligible_job never re-picks a PAUSED job without a human
+            # — turning a transient conflict into a permanent stop. Leave
+            # it PENDING so the next poll simply retries.
+            self._record_lock_contention(job_id, exc)
+            return
         except Exception as exc:  # a worker crash must not kill the service
             self._record_failure(job_id, exc)
             return
@@ -346,6 +358,20 @@ class QueueWorker:
             repo = JobRepository(conn)
             repo.set_job_status(job_id, JobStatus.PAUSED)  # needs attention
             repo.record_event(job_id, "worker_error", str(exc)[:500])
+        finally:
+            conn.close()
+
+    def _record_lock_contention(self, job_id: int, exc: Exception) -> None:
+        """Explicitly (re-)set PENDING rather than assuming the row is
+        still PENDING from `_pick`: `run_job` raises before it ever writes
+        job state, so nothing should have moved it, but this keeps the
+        invariant true by construction rather than by that fact staying
+        accidentally true forever."""
+        conn = connect(self._config.db_path)
+        try:
+            repo = JobRepository(conn)
+            repo.set_job_status(job_id, JobStatus.PENDING)
+            repo.record_event(job_id, "job_lock_contended", str(exc)[:500])
         finally:
             conn.close()
 

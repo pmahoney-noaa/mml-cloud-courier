@@ -1,4 +1,5 @@
 import json
+import sys
 
 import pytest
 
@@ -47,6 +48,39 @@ def test_resume_reports_job_already_running_as_a_clean_error(tmp_path, monkeypat
     out = capsys.readouterr().out
     assert code == 3
     assert f"job {job_id} is already running" in out
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32", reason="msvcrt byte-range locks are Windows-only"
+)
+def test_resume_against_a_genuinely_held_lock_exits_3_with_a_clear_message(
+    tmp_path, capsys
+):
+    """M3: the test above only proves the CLI is *wired* to JobAlreadyRunning
+    (run_job is faked). This drives the real code path — a REAL lock, held
+    by this same test process, contending against the real `job_run_lock`
+    inside the real `run_job` — end to end through `main()`."""
+    from mml_cloud_transfer.engine.joblock import job_run_lock
+
+    db = tmp_path / "jobs.db"
+    conn = connect(db)
+    try:
+        job_id = JobRepository(conn).create_job(
+            name="locked", direction=Direction.UPLOAD,
+            source_root=str(tmp_path), dest_prefix="p",
+        )
+    finally:
+        conn.close()
+
+    with job_run_lock(db, job_id):
+        code = main([
+            "resume", "--db", str(db), "--job-id", str(job_id),
+            "--bucket", "irrelevant", "--emulator-endpoint", "http://127.0.0.1:1",
+        ])
+    out = capsys.readouterr().out
+    assert code == 3
+    assert f"job {job_id}" in out
+    assert "could not acquire the run lock" in out
 
 
 class _StubReportEventsClient:

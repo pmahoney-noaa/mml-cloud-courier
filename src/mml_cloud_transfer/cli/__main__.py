@@ -21,7 +21,7 @@ from mml_cloud_transfer.cli.transfer_command import (
     run_status,
     run_transfer,
 )
-from mml_cloud_transfer.engine.joblock import JobAlreadyRunning
+from mml_cloud_transfer.engine.joblock import JobLockError
 
 
 def add_service_options(sub):
@@ -158,7 +158,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError as exc:
             print(str(exc))
             return 2
-        except JobAlreadyRunning as exc:
+        except JobLockError as exc:
+            # Catches both JobAlreadyRunning (genuine contention) and
+            # JobLockUnavailable (couldn't even open the lock file) — both
+            # are "this run did not happen; here is why" for the operator.
             print(str(exc))
             return 3
     if args.command == "status":

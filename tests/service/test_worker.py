@@ -8,6 +8,7 @@ import requests
 
 from mml_cloud_transfer.core.errors import ErrorCategory
 from mml_cloud_transfer.core.models import Direction, FileState, JobStatus, PlannedFile
+from mml_cloud_transfer.engine.joblock import JobAlreadyRunning
 from mml_cloud_transfer.service.config import load_config
 from mml_cloud_transfer.service.controller import JobController
 from mml_cloud_transfer.service.worker import QueueWorker
@@ -240,6 +241,45 @@ def test_worker_crash_pauses_the_job_not_the_service(config):
     kinds = [e["kind"] for e in JobRepository(conn).events_after(job_id, 0)]
     conn.close()
     assert "worker_error" in kinds
+
+
+def test_lock_contention_leaves_job_pending_for_retry(config):
+    """I3: a held run lock (I1's transient scanner/backup window, or the
+    operator's own `mmlct resume` finishing in 20 minutes) must not pause
+    the job the way a genuine crash does — next_eligible_job never
+    re-picks a PAUSED job without a human, turning a transient conflict
+    into a permanent stop. It must stay PENDING and be retried on the
+    worker's next poll."""
+    job_id = _submit(config)
+    calls = []
+
+    def fake_run_job(db_path, job_id, ctx, *, options):
+        calls.append(job_id)
+        if len(calls) == 1:
+            raise JobAlreadyRunning(
+                f"could not acquire the run lock for job {job_id}"
+            )
+        conn = connect(db_path)
+        try:
+            JobRepository(conn).finish_job(job_id, JobStatus.COMPLETE)
+        finally:
+            conn.close()
+        return JobStatus.COMPLETE
+
+    worker, _ = _worker(config, run_job_fn=fake_run_job)
+
+    assert worker.run_once() is True             # handled: did work, didn't raise
+    assert _status(config, job_id) == JobStatus.PENDING.value      # NOT paused
+    conn = connect(config.db_path)
+    kinds = [e["kind"] for e in JobRepository(conn).events_after(job_id, 0)]
+    conn.close()
+    assert "job_lock_contended" in kinds
+    assert "worker_error" not in kinds
+
+    # Retried on the very next poll, exactly like any other PENDING job.
+    assert worker.run_once() is True
+    assert calls == [job_id, job_id]
+    assert _status(config, job_id) == JobStatus.COMPLETE.value
 
 
 def test_report_failure_does_not_mask_a_real_outcome(config):
