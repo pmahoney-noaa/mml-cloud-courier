@@ -206,6 +206,12 @@ def classify(exc: BaseException) -> Classification:
         "google.auth"
     ):
         return _build(ErrorCategory.CREDENTIAL)
+    if type(exc).__name__ == "RetryError" and module.startswith("google.api_core"):
+        # The client library wraps exhausted retries of transient transport
+        # failures in RetryError, which carries no HTTP code (observed live
+        # during a network outage: DNS NameResolutionError under 120s of
+        # internal retries). The wrapped cause is transient by definition.
+        return _build(ErrorCategory.NETWORK)
 
     if isinstance(exc, OSError):
         return _build(_from_os_error(exc))

@@ -278,3 +278,17 @@ def test_a_400_xml_api_content_md5_wording_with_query_string_is_a_checksum_misma
         "The Content-MD5 you specified did not match what we received."
     )
     assert classify(exc).category is ErrorCategory.CHECKSUM_MISMATCH
+
+
+def test_google_api_core_retry_error_is_transient_network():
+    """Phase 3 gate finding (2026-08-06, job 5): during a network outage the
+    client library's single-shot upload path exhausts its internal retries
+    and raises google.api_core's RetryError — no .code, not a
+    requests/urllib3 type — which fell through to UNKNOWN (non-transient),
+    permanently failing the file after one attempt while every raw-session
+    path retried correctly. The wrapped cause is transient by definition."""
+    from google.api_core.exceptions import RetryError
+
+    cls = classify(RetryError("Timeout of 120.0s exceeded", ConnectionError("dns")))
+    assert cls.category is ErrorCategory.NETWORK
+    assert cls.transient
