@@ -121,7 +121,13 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
         return
     version = row[0]
     if version < 2:
-        # v1 -> v2: profiles.validated_at (when preflight last passed)
-        conn.execute("ALTER TABLE profiles ADD COLUMN validated_at TEXT")
+        # v1 -> v2: profiles.validated_at (when preflight last passed).
+        # Guarded by a column check so a crash between the ALTER and the
+        # version bump cannot brick the database: on the next connect the
+        # column already exists, the ALTER is skipped, and the version
+        # row catches up.
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
+        if "validated_at" not in columns:
+            conn.execute("ALTER TABLE profiles ADD COLUMN validated_at TEXT")
         conn.execute("UPDATE schema_version SET version = 2")
     conn.commit()

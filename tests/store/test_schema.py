@@ -133,3 +133,37 @@ def test_a_v1_database_is_migrated_in_place(tmp_path):
         assert row["validated_at"] is None  # new column, old row intact
     finally:
         conn.close()
+
+
+def test_an_interrupted_migration_recovers_on_the_next_connect(tmp_path):
+    """Killed between the ALTER and the version bump, a v1 database has
+    the column but still says version 1. The next connect() must finish
+    the migration, not die on 'duplicate column name'."""
+
+    db = tmp_path / "jobs.db"
+    raw = sqlite3.connect(db)
+    raw.executescript(
+        """
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (1);
+        CREATE TABLE profiles (
+            id             INTEGER PRIMARY KEY,
+            name           TEXT NOT NULL UNIQUE,
+            project_id     TEXT NOT NULL,
+            bucket         TEXT NOT NULL,
+            auth_type      TEXT NOT NULL,
+            credential_ref TEXT,
+            default_prefix TEXT NOT NULL DEFAULT '',
+            created_at     TEXT NOT NULL
+        );
+        """
+    )
+    raw.execute("ALTER TABLE profiles ADD COLUMN validated_at TEXT")  # crash point: version bump never ran
+    raw.commit()
+    raw.close()
+
+    conn = connect(db)
+    try:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+    finally:
+        conn.close()
