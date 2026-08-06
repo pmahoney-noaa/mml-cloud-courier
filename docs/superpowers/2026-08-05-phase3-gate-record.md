@@ -1,8 +1,18 @@
 # Phase 3 Manual Gate — Record
 
+**Status: CLOSED — ALL CHECKS PASS (2026-08-06)**
+
 **Date started:** 2026-08-05
-**Branch state:** master @ e150c0b (Plan 3 merged; suite 322 passed, 2 skipped)
+**Branch state:** master @ e150c0b (Plan 3 merged; suite 322 passed, 2 skipped) — gate fixes landed during execution: 676e9a0, 6e45d4a (service hosting/ACL), 669bb4b, b1a5d4b (engine, found by C4 cycles); suite at close: 354 passed, 12 skipped
 **Machine:** Windows 11 Pro, Python 3.12 venv at repo root
+**Configuration under test:** service registered auto-start with restart-on-failure, hosted by the venv's python.exe, running as `.\pmaho` (spec's named-account configuration) with user ADC; bucket `afsc_mml_ccep` (versioning ON), prefixes `scratch/phase3-gate/run1..run8`
+
+## Teardown (2026-08-06)
+
+- Bucket: 1,255 object versions / 15.08 GiB under `scratch/phase3-gate/` deleted by explicit generation via the version-aware client pattern (gcloud CLI token needed interactive reauth; ADC path used instead); verification listing with `versions=True`: **0 versions remain**.
+- Local: `C:\gate-data`, `C:\gate-data-small`, `C:\gate-data-tiny`, `C:\gate-logs` removed.
+- Jobs 1–8 all COMPLETE in the service DB; reports retained under `C:\ProgramData\MML Cloud Transfer\reports\`.
+- Service left installed, auto-start, RUNNING as `.\pmaho` — it is now a live install.
 
 | # | Check | Result | Notes |
 | --- | --- | --- | --- |
