@@ -349,7 +349,7 @@ needs either bucket-admin access or a request to whoever holds it.
 
 ### 5. `delete_object()` is a live-pointer delete, so sliced uploads double-bill storage indefinitely on a versioning-enabled destination — FIXED
 
-**Status: fixed**, commit `<PENDING_SHA>`. Recorded here because this record
+**Status: fixed**, commit `13c5a9344e29`. Recorded here because this record
 is what someone will consult to answer "can Plan 2 ship?" — this was a real
 product defect the run surfaced, not a gate artifact.
 
