@@ -225,10 +225,24 @@ def test_delete_object_generation_scoping_on_a_versioned_bucket(real_bucket_ctx,
 
     delete_object(ctx, live_name)
 
+    # The live pointer really must be gone -- a versions=True listing being
+    # non-empty is equally consistent with "archived as noncurrent" (the
+    # intended outcome) and "the delete never happened at all" (a no-op that
+    # would leave the live version still counted as one). This closes that
+    # ambiguity: no live object, but the original generation survives as a
+    # noncurrent version.
+    assert get_meta(ctx, live_name) is None, (
+        "the live pointer must be cleared by a generation-less delete"
+    )
+
     live_versions = list(ctx.client.list_blobs(ctx.bucket, prefix=live_name, versions=True))
     assert live_versions, (
         "a generation-less delete on a versioning-enabled bucket must leave a "
         "noncurrent version behind -- this is the defect the fix closes"
+    )
+    assert [v.generation for v in live_versions] == [live_result.generation], (
+        "the surviving noncurrent version must be the exact one originally "
+        "uploaded, not some other version"
     )
 
     # 2. Generation-scoped delete -- genuinely removes the version.

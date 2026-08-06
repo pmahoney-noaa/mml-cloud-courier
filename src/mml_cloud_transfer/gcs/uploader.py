@@ -341,7 +341,11 @@ def compose_slices(
     """Compose temp objects (in list order) into the destination and verify."""
     bucket = ctx.client.bucket(ctx.bucket)
     destination = bucket.blob(object_name)
-    sources = [bucket.blob(meta.name) for meta in slice_metas]
+    # Pin each source to the exact generation we verified, rather than a
+    # fresh, generation-less Blob (which would compose whatever happens to be
+    # live). This makes compose fail fast on a replaced temp instead of
+    # silently composing different bytes than the ones Layer 2 will verify.
+    sources = [bucket.blob(meta.name, generation=meta.generation) for meta in slice_metas]
     destination.compose(sources, if_generation_match=precondition_generation)
 
     meta = get_meta(ctx, object_name)
@@ -349,8 +353,19 @@ def compose_slices(
         raise ChecksumMismatch(f"{object_name}: object missing after compose")
     verify_layer2(meta, total_size, expected_crc32c)
 
-    for slice_meta in slice_metas:
-        delete_object(ctx, slice_meta.name, generation=slice_meta.generation)
+    # Sweep EVERY version under the temp prefix, not just the generations we
+    # happen to hold. Compose has succeeded and Layer 2 has verified, so
+    # anything still here is garbage. A generation-scoped loop would miss two
+    # cases: temps overwritten by an earlier failed attempt (whose prior
+    # generations are already noncurrent), and a generation mismatch that 404s
+    # and is silently swallowed. On a versioning-enabled bucket either one
+    # leaves billable bytes that no lifecycle rule can target, because
+    # `.mmlct.tmp/` is an infix and matchesPrefix has no wildcards.
+    temp_prefix = f"{object_name}.mmlct.tmp/"
+    for blob in list(
+        ctx.client.list_blobs(ctx.bucket, prefix=temp_prefix, versions=True)
+    ):
+        delete_object(ctx, blob.name, generation=blob.generation)
 
     return UploadResult(
         state="verified",

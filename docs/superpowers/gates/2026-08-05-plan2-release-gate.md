@@ -78,7 +78,7 @@ holds bucket-admin on `afsc_mml_ccep`.
 pwsh tests/tools/preflight-gcs.ps1 -Bucket <bucket> -Prefix <scratch-folder>   # must exit 0
 $env:MMLCT_TEST_BUCKET = "<bucket>"
 $env:MMLCT_TEST_PREFIX = "<scratch-folder>"                       # omit for a dedicated bucket
-.venv/Scripts/python -m pytest -m "real_bucket and not slow" -v   # 8 tests, ~1 min
+.venv/Scripts/python -m pytest -m "real_bucket and not slow" -v   # 10 tests, ~1 min
 .venv/Scripts/python -m pytest -m "real_bucket and slow" -v       # 1 test, uplink-bound
 ```
 
@@ -101,6 +101,9 @@ a result.
 | `test_stale_precondition_is_a_conflict_on_real_gcs` | Concurrent writers cannot silently clobber each other | emulator precondition enforcement is unverified |
 | `test_server_rejects_a_wrong_crc32c` | Layer 1 — GCS refuses a corrupted write | emulator does not validate CRC32C server-side |
 | `test_real_bucket_round_trip` (`tests/cli/test_interrupt_resume.py`) | An upload-then-download round-trip reproduces the source bytes against real GCS. **No resume**: the test runs `transfer` then `transfer --direction download` only — no kill, no `mmlct resume`, no `--job-id` | shrunken test-only size policy, not the scale claim below |
+| `test_delete_object_generation_scoping_on_a_versioned_bucket` (Finding 5) | A generation-less delete clears the live pointer (`get_meta()` returns `None`) but leaves a noncurrent version at the exact original generation; a generation-scoped delete removes the version outright; a mismatched generation touches nothing | fake-gcs-server ignores the `generation` query param on `DELETE` entirely, matched or not — only real GCS enforces it or shows the live/noncurrent split |
+| `test_compose_slices_leaves_no_noncurrent_temp_versions` (Finding 5) | The production `upload_slice` + `compose_slices` path, run end-to-end, leaves zero noncurrent versions of its slice temps on a versioning-enabled bucket | same reason — compose and versioned-delete semantics are not faithfully emulated |
+| `test_compose_slices_deletes_every_temp_with_an_explicit_generation` (`tests/gcs/test_compose_slices_generation_pinning.py`, Finding 5) | `compose_slices()` deletes every swept temp by an explicit, non-`None` generation and pins each compose source to its verified generation — a credential-free regression pin against silently reverting either half of the fix | — (no bucket needed; a stub client records calls. Exists precisely *because* the emulator and a live bucket both being unavailable in CI must not mean this regression goes unguarded) |
 
 The ninth test in the spec's original table, `test_multi_gigabyte_kill_and_resume`
 (the overnight promise at real 1 GiB slices), exists and is committed but was
@@ -181,7 +184,7 @@ gate today.
 | Versioning / retention policy | Versioning: **enabled**, confirmed empirically (write + delete + `gcloud storage ls --all-versions` still lists `name#generation`). Retention policy: unverified by metadata read; preflight's delete probe (the practical retention check) passed, so no retention lock is blocking deletes. |
 | Uplink (observed) | 0.12–0.15 MB/s (~1 Mbps), from the Task 7 attempt |
 | Preflight | Pass — exit 0, with expected metadata warnings (see Findings) |
-| Fast suite (`real_bucket and not slow`) | 8 passed, 0 failed, 0 skipped — run twice for repeatability: 62.62s then 39.94s (final, post-review-fix runs; see Finding 2) |
+| Fast suite (`real_bucket and not slow`) | **10 passed**, 0 failed, 0 skipped — run twice for repeatability: 42.08s then 41.33s (post-Finding-5-completion runs, this record; the earlier `8 passed … 62.62s then 39.94s` in Finding 2 was measured before `test_delete_object_generation_scoping_on_a_versioned_bucket` and `test_compose_slices_leaves_no_noncurrent_temp_versions` existed and is retained there for history, not as this gate's outcome) |
 | Scale test (`real_bucket and slow`) | **Not run — deferred.** See "Task 7 — deferred" above. |
 | Bytes re-sent on resume | 0 of the committed prefix — status-query test observed `put308 committed=262144`, then a resumed upload sending only `bytes_sent=786432` of 1048576 (i.e. the already-committed 262144 bytes were not re-sent) |
 | Run by | Claude (Task 8), operator account `peter.mahoney@noaa.gov`, project `ggn-nmfs-afscinf-infra-01` |
@@ -386,25 +389,49 @@ this, for two independent reasons:**
    it — same as the code path in question — so the underlying bytes would
    keep billing as a noncurrent version regardless.
 
-**The fix was one line.** `compose_slices()` already held each slice temp's
-`ObjectMeta` (which carries `.generation`) before calling `delete_object()`
-on it — the generation was already in hand, it just was not being passed
-through. `delete_object()` (`src/mml_cloud_transfer/gcs/objects.py`) now
-takes an optional `generation` keyword and calls
+**The first pass of the fix was one line.** `compose_slices()` already held
+each slice temp's `ObjectMeta` (which carries `.generation`) before calling
+`delete_object()` on it — the generation was already in hand, it just was
+not being passed through. `delete_object()` (`src/mml_cloud_transfer/gcs/objects.py`)
+now takes an optional `generation` keyword and calls
 `bucket.delete_blob(name, generation=generation)` instead of deleting through
 a fresh, generation-less `Blob` handle; the default (`generation=None`)
 remains a live-pointer delete, so existing callers are unaffected.
-`compose_slices()` (`src/mml_cloud_transfer/gcs/uploader.py`) now passes
-`generation=slice_meta.generation` when sweeping each temp.
+
+**A subsequent review found that pass incomplete and it was extended.**
+Sweeping only the generations captured in `slice_metas` misses two cases: a
+retry after `ChecksumMismatch` (the runner calls `repo.clear_slices(file_id)`
+and re-uploads every slice, overwriting each temp — the prior generations
+are already noncurrent by the time this run's sweep executes, and it never
+learns about them), and a generation mismatch on delete, which 404s and is
+silently swallowed by `ignore_missing=True`. `compose_slices()`
+(`src/mml_cloud_transfer/gcs/uploader.py`) now sweeps by listing, not by the
+handles it already held: after compose succeeds and Layer 2 verifies, it
+calls `ctx.client.list_blobs(ctx.bucket, prefix=f"{object_name}.mmlct.tmp/",
+versions=True)` and deletes every version it finds by that version's own
+generation. Everything under the temp prefix at that point is garbage by
+definition, so a total sweep is correct, not merely convenient. Separately,
+`compose_slices()` now also pins each compose *source* to the generation
+`ObjectMeta` recorded (`bucket.blob(meta.name, generation=meta.generation)`)
+rather than a fresh, generation-less handle that would read whatever
+happens to be live — so compose fails fast on a replaced temp instead of
+silently composing different bytes than the ones just verified.
 
 This is pinned by four tests:
 
 - `tests/gcs/test_objects.py::test_delete_object_with_explicit_generation_removes_it`
-  (emulator) — an explicit, matching generation deletes the object outright.
+  (emulator) — confirms the `generation` parameter is wired through
+  `delete_object()` and does not raise. It does **not** prove generation
+  semantics: fake-gcs-server ignores the `generation` query param on `DELETE`
+  entirely, matched or not, so this test passes identically whether the
+  kwarg is honored, ignored, or dropped. It is a wiring smoke test, nothing
+  more — the real-bucket tests below carry the actual proof.
 - `tests/gcs/test_real_bucket_protocol.py::test_delete_object_generation_scoping_on_a_versioned_bucket`
   (real bucket, the decisive test) — proves the actual contrast that
-  motivated the fix: a generation-less delete on `afsc_mml_ccep` leaves a
-  noncurrent version behind (`list_blobs(..., versions=True)` non-empty),
+  motivated the fix: a generation-less delete on `afsc_mml_ccep` clears the
+  live pointer (`get_meta()` returns `None`) but leaves a noncurrent version
+  behind at the exact generation originally uploaded (`list_blobs(...,
+  versions=True)` non-empty, and that version's `.generation` matches),
   while a generation-scoped delete of an equivalent object removes it outright
   (the same listing is empty). It also proves a mismatched generation leaves
   the object untouched. (The wrong-generation half of this proof could not be
@@ -417,12 +444,52 @@ This is pinned by four tests:
   listing of the swept `*.mmlct.tmp/` temps is empty. Before the fix this
   failed, showing the three temps surviving as noncurrent versions —
   reproducing the defect directly.
+- `tests/gcs/test_compose_slices_generation_pinning.py::test_compose_slices_deletes_every_temp_with_an_explicit_generation`
+  (credential-free, no bucket, no emulator) — the regression pin. A reviewer
+  mutation-tested the tree behind this fix and found that reverting
+  `compose_slices()`'s sweep to a generation-less delete, and separately
+  making `delete_object()` silently drop the `generation` kwarg, **both**
+  left the entire 338-test bucket-free suite green — meaning nothing short
+  of the real-bucket suite would have caught either regression, and CI does
+  not run the real-bucket suite. This test uses a stub `google.cloud.storage`
+  client that records every call and asserts `compose_slices()` deletes each
+  swept temp by its exact generation (never `None`) and pins each compose
+  source to its verified generation. Verified to go red under both mutations
+  described above, and green with the tree intact.
 
 **Severity was: does not block this branch**, but must be resolved before
 Plan 2 ships to any customer bucket with versioning enabled, since that is
 exactly the configuration this gate ran against (`afsc_mml_ccep`) and exactly
-the configuration under which the defect was both active and invisible. That
-condition is now satisfied.
+the configuration under which the defect was both active and invisible. Stated
+precisely: the systematic 2x storage cost on a clean run is eliminated — every
+run that reaches a successful compose now sweeps and hard-deletes every
+version under the temp prefix, which also closes the retry/overwrite and
+generation-mismatch gaps described above, not just the case where
+`slice_metas` still holds the live generation. What is **not** claimed: this
+sweep only runs after a successful compose, so temps orphaned by a crash
+*before* compose (process killed mid-upload, machine loss, etc.) are still
+uncleared by this code path — those still depend on the operator-owned
+lifecycle rule discussed above (and its documented limitation: `.mmlct.tmp/`
+is an infix, not a prefix, so no single `matchesPrefix` rule covers every
+file's temps). No test in this gate exercises that crash-before-compose case
+against real GCS.
+
+**Verification of the completed fix (totalizing sweep + pinned compose
+sources + regression pin), same date:**
+
+- `tests/gcs/test_compose_slices_generation_pinning.py` (the new unit test):
+  RED with `compose_slices()`'s sweep call reverted to drop the `generation`
+  kwarg (`AssertionError`, e.g. `('...0000', None) != ('...0000', 1001)`);
+  RED again, independently, with `delete_object()` edited to drop the kwarg
+  before it reaches `delete_blob()` (same assertion, same failure shape);
+  GREEN with the tree intact — `1 passed`.
+- Full suite, no bucket env vars: `339 passed, 12 skipped in 26.81s` (was
+  `338 passed, 12 skipped`; +1 is the new unit test above).
+- `-m "real_bucket and not slow" -v`, with `MMLCT_TEST_BUCKET`/`MMLCT_TEST_PREFIX`
+  set: `10 passed, 341 deselected` — run twice, `42.08s` then `41.33s`.
+- `gcloud storage ls --all-versions --recursive "gs://afsc_mml_ccep/scratch/**"`:
+  one object listed, the `scratch/` folder placeholder itself; zero objects
+  with `mmlct` in the name at any version.
 
 ## Follow-ups
 
