@@ -309,3 +309,82 @@ def test_workers_negative_is_rejected_on_resume_before_any_network(tmp_path, cap
     assert code == 2
     assert "--workers must be >= 1" in out
     assert "Traceback" not in out
+
+
+def test_transfer_profile_requires_service_url(tmp_path, capsys, monkeypatch):
+    # The env var default would silently turn this into service mode on a
+    # machine (like the dev box) where the live install exports it.
+    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)
+    code = main([
+        "transfer", "--db", str(tmp_path / "j.db"), "--name", "j",
+        "--source", str(tmp_path), "--profile", "lab",
+    ])
+    assert code == 2
+    assert "--service-url" in capsys.readouterr().out
+
+
+def test_direct_mode_reissue_after_crash_is_refused(tmp_path, capsys, monkeypatch):
+    """The release-gate residual, closed: re-issuing `transfer` (not
+    `resume`) for a destination an active job owns exits 3 with the
+    resume command — no second writer. The guard must fire before any
+    GCS context is built, so this needs no credentials and no network."""
+    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)  # force direct mode
+
+    db = tmp_path / "jobs.db"
+    src = tmp_path / "src"; src.mkdir()
+    (src / "f.bin").write_bytes(b"x")
+    conn = connect(db)
+    try:
+        repo = JobRepository(conn)
+        pid = repo.create_profile(name="p", bucket="bkt", auth_type="adc")
+        job_id = repo.create_job(name="j", direction=Direction.UPLOAD,
+                                 source_root=str(src), dest_prefix="pre",
+                                 profile_id=pid)
+    finally:
+        conn.close()
+
+    code = main([
+        "transfer", "--db", str(db), "--name", "j2", "--source", str(src),
+        "--prefix", "pre", "--bucket", "bkt",
+    ])
+    out = capsys.readouterr().out
+    assert code == 3
+    assert f"--job-id {job_id}" in out
+
+
+def test_service_submission_resolves_mapped_drives(tmp_path, monkeypatch, capsys):
+    """The CLI is the interactive side: it must hand the service a UNC
+    path, because the service cannot resolve the user's drive letters."""
+    from mml_cloud_transfer.cli import transfer_command
+
+    submitted = {}
+
+    class StubClient:
+        def submit_job(self, payload):
+            submitted.update(payload)
+            return 1
+
+    monkeypatch.setattr(transfer_command, "_api_client", lambda args: StubClient())
+    monkeypatch.setattr(
+        transfer_command, "resolve_mapped_drive",
+        lambda path, resolver=None: path.replace("Z:", r"\\server\share"),
+    )
+    monkeypatch.setattr(
+        transfer_command, "_watch_until_settled", lambda client, job_id: None
+    )
+    monkeypatch.setattr(
+        transfer_command, "_finish_via_service",
+        lambda client, job_id, status: 0,
+    )
+
+    import argparse
+    args = argparse.Namespace(
+        name="j", direction="upload", source=r"Z:\imaging\run47", prefix="",
+        profile=None, bucket="b", credentials=None, emulator_endpoint=None,
+        audit_hash=False, scheduled_at=None, service_url="http://x",
+        token_file=None,
+    )
+    code = transfer_command.run_transfer_via_service(args)
+    assert code == 0
+    assert submitted["source_root"] == r"\\server\share\imaging\run47"
+    assert "mapped" in capsys.readouterr().out

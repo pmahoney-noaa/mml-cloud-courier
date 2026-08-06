@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS profiles (
     auth_type      TEXT NOT NULL,
     credential_ref TEXT,
     default_prefix TEXT NOT NULL DEFAULT '',
+    validated_at   TEXT,
     created_at     TEXT NOT NULL
 );
 
@@ -104,9 +105,29 @@ CREATE INDEX IF NOT EXISTS idx_events_job ON events (job_id, id);
 
 
 def apply_migrations(conn: sqlite3.Connection) -> None:
-    """Create or upgrade the schema. Safe to call on every connect."""
+    """Create or upgrade the schema. Safe to call on every connect.
+
+    The DDL is CREATE IF NOT EXISTS, so a fresh database is born at the
+    current version; an existing database keeps its tables and gets the
+    per-version ALTERs below.
+    """
     conn.executescript(_DDL)
     row = conn.execute("SELECT version FROM schema_version").fetchone()
     if row is None:
-        conn.execute("INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,))
+        conn.execute(
+            "INSERT INTO schema_version (version) VALUES (?)", (SCHEMA_VERSION,)
+        )
+        conn.commit()
+        return
+    version = row[0]
+    if version < 2:
+        # v1 -> v2: profiles.validated_at (when preflight last passed).
+        # Guarded by a column check so a crash between the ALTER and the
+        # version bump cannot brick the database: on the next connect the
+        # column already exists, the ALTER is skipped, and the version
+        # row catches up.
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
+        if "validated_at" not in columns:
+            conn.execute("ALTER TABLE profiles ADD COLUMN validated_at TEXT")
+        conn.execute("UPDATE schema_version SET version = 2")
     conn.commit()

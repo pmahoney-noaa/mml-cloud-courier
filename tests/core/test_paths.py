@@ -84,3 +84,25 @@ def test_display_path_strips_the_extended_prefix():
     assert display_path("\\\\?\\UNC\\nas01\\imaging") == "\\\\nas01\\imaging"
     assert display_path(r"C:\data\run47") == "C:\\data\\run47"
     assert display_path("archive/run47/a.tif") == "archive/run47/a.tif"
+
+
+def test_canonical_source_key_equates_the_same_folder_spelled_differently():
+    from mml_cloud_transfer.core.paths import canonical_source_key
+
+    assert (
+        canonical_source_key(r"C:\Data\Run47")
+        == canonical_source_key(r"c:/data/run47/")
+        == canonical_source_key("\\\\?\\C:\\DATA\\RUN47")
+    )
+    assert canonical_source_key(r"C:\a") != canonical_source_key(r"C:\b")
+
+
+def test_canonical_source_key_resolves_mapped_drives():
+    from mml_cloud_transfer.core.paths import canonical_source_key
+
+    key = canonical_source_key(
+        r"Z:\imaging", resolver=lambda drive: r"\\server\share"
+    )
+    assert key == canonical_source_key(
+        r"\\server\share\imaging", resolver=lambda drive: None
+    )

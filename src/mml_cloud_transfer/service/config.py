@@ -49,6 +49,10 @@ class ServiceConfig:
         return self.data_dir / "api_token"
 
     @property
+    def credentials_dir(self) -> Path:
+        return self.data_dir / "credentials"
+
+    @property
     def settings_path(self) -> Path:
         return self.data_dir / "settings.json"
 

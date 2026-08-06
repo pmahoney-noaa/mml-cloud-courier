@@ -1,4 +1,5 @@
 import google.auth.exceptions
+import pytest
 import requests.exceptions
 import urllib3.exceptions
 
@@ -292,3 +293,129 @@ def test_google_api_core_retry_error_is_transient_network():
     cls = classify(RetryError("Timeout of 120.0s exceeded", ConnectionError("dns")))
     assert cls.category is ErrorCategory.NETWORK
     assert cls.transient
+
+
+# ---- refresh-failure classification (Plan 4 Task 1) -----------------------
+#
+# Gate lesson (fixes 669bb4b, b1a5d4b): classify() gaps only surface with
+# REAL exception types, so these tests drive google-auth's actual refresh
+# machinery instead of hand-building exceptions wherever possible.
+
+import json as _json
+import socket
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+def _harvest_refresh_exception(token_uri: str) -> BaseException:
+    """Run a real google.oauth2 refresh against token_uri; return what it raises."""
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    creds = Credentials(
+        None,
+        refresh_token="fake-refresh-token",
+        token_uri=token_uri,
+        client_id="fake-client",
+        client_secret="fake-secret",
+    )
+    with pytest.raises(Exception) as info:
+        creds.refresh(Request())
+    return info.value
+
+
+def _closed_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]  # freed on close; nothing listens
+
+
+@pytest.fixture
+def invalid_grant_endpoint():
+    """A local token endpoint answering exactly like Google does for a
+    revoked/expired refresh token: HTTP 400, error=invalid_grant."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = _json.dumps({
+                "error": "invalid_grant",
+                "error_description": "Token has been expired or revoked.",
+            }).encode("utf-8")
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):  # keep pytest output clean
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{server.server_address[1]}/token"
+    server.shutdown()
+    thread.join(timeout=5)
+
+
+def test_a_real_invalid_grant_refresh_is_credential_and_pauses(invalid_grant_endpoint):
+    exc = _harvest_refresh_exception(invalid_grant_endpoint)
+    assert type(exc).__name__ == "RefreshError"  # the real library type
+    result = classify(exc)
+    assert result.category is ErrorCategory.CREDENTIAL
+    assert result.pauses_job is True
+
+
+def test_a_real_transport_failure_during_refresh_is_network():
+    """Network down at refresh time: google-auth raises TransportError
+    chained from the requests exception. That is an outage, not a bad
+    credential — it must NOT pause the job."""
+    exc = _harvest_refresh_exception(f"http://127.0.0.1:{_closed_port()}/token")
+    result = classify(exc)
+    assert result.category is ErrorCategory.NETWORK
+    assert result.transient is True
+    assert result.pauses_job is False
+
+
+def test_a_refresh_error_chained_from_a_transport_error_is_network():
+    """Defends against a future google-auth that wraps transport failures
+    in RefreshError: the cause chain, not the outer type, decides."""
+    from google.auth.exceptions import RefreshError, TransportError
+    import requests
+
+    transport = TransportError(requests.exceptions.ConnectionError("boom"))
+    transport.__cause__ = requests.exceptions.ConnectionError("boom")
+    exc = RefreshError("refresh failed")
+    exc.__cause__ = transport
+    assert classify(exc).category is ErrorCategory.NETWORK
+
+
+def test_a_retryable_refresh_error_is_network():
+    """google-auth marks token-endpoint 5xx / server_error responses
+    retryable=True (google/oauth2/_client.py::_handle_error_response) —
+    the library itself says 'try again', so we must not pause the job.
+    Constructed directly with the real class and the real constructor
+    shape because driving the real path would spin the library's
+    multi-second exponential backoff."""
+    from google.auth.exceptions import RefreshError
+
+    exc = RefreshError(
+        "server_error: temporarily unavailable",
+        {"error": "server_error"},
+        retryable=True,
+    )
+    assert classify(exc).category is ErrorCategory.NETWORK
+
+
+def test_a_plain_refresh_error_stays_credential():
+    from google.auth.exceptions import RefreshError
+
+    result = classify(RefreshError("invalid_grant: Bad Request"))
+    assert result.category is ErrorCategory.CREDENTIAL
+    assert result.pauses_job is True
+
+
+def test_default_credentials_error_stays_credential():
+    from google.auth.exceptions import DefaultCredentialsError
+
+    assert classify(DefaultCredentialsError("no ADC")).category is ErrorCategory.CREDENTIAL

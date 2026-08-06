@@ -90,3 +90,26 @@ class ApiClient:
         for line in response.iter_lines(decode_unicode=True):
             if line and line.startswith("data:"):
                 yield json.loads(line[len("data:"):].strip())
+
+    def create_profile(self, payload: dict) -> dict:
+        return self._check(
+            self._session.post(f"{self._base}/profiles", json=payload, timeout=120)
+        )
+
+    def list_profiles(self) -> list[dict]:
+        return self._check(self._session.get(f"{self._base}/profiles", timeout=30))
+
+    def check_profile(
+        self, profile_id: int, *, direction: str | None = None, prefix: str | None = None
+    ) -> dict:
+        return self._check(
+            self._session.post(
+                f"{self._base}/profiles/{profile_id}/check",
+                json={"direction": direction, "prefix": prefix}, timeout=120,
+            )
+        )
+
+    def delete_profile(self, profile_id: int) -> dict:
+        return self._check(
+            self._session.delete(f"{self._base}/profiles/{profile_id}", timeout=30)
+        )

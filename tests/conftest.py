@@ -89,6 +89,30 @@ def emulator_client(emulator):
     yield client, bucket_name
 
 
+@pytest.fixture(scope="session")
+def sa_key_json() -> dict:
+    """A syntactically valid service-account key: real RSA PEM, fake
+    identity. Construction-only tests — nothing here talks to Google."""
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa as crypto_rsa
+
+    key = crypto_rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode("ascii")
+    return {
+        "type": "service_account",
+        "project_id": "mmlct-test",
+        "private_key_id": "0" * 40,
+        "private_key": pem,
+        "client_email": "probe@mmlct-test.iam.gserviceaccount.com",
+        "client_id": "0",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+
+
 #: The one path segment an operator can never supply. Teardown deletes
 #: everything under the run prefix, so this segment is what makes that
 #: deletion safe -- see _gate_run_prefix and the guard in real_bucket_ctx.

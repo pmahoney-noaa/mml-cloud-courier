@@ -19,7 +19,7 @@ from mml_cloud_transfer.core.models import (
     PlannedFile,
     SliceState,
 )
-from mml_cloud_transfer.core.paths import to_object_name
+from mml_cloud_transfer.core.paths import canonical_source_key, to_object_name
 from mml_cloud_transfer.core.slicing import SizePolicy, choose_method
 
 #: States that will never be retried by a resume.
@@ -34,6 +34,10 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+class ProfileInUse(Exception):
+    """Deleting a profile that jobs still reference."""
+
+
 @dataclass(frozen=True, slots=True)
 class JobProgress:
     files_total: int
@@ -45,10 +49,51 @@ class JobProgress:
 
 
 class JobRepository:
+    #: Statuses that can still write to (or be resumed onto) a destination.
+    _ACTIVE_STATUSES = (
+        JobStatus.PENDING.value, JobStatus.SCANNING.value,
+        JobStatus.RUNNING.value, JobStatus.PAUSED.value,
+        JobStatus.STALLED.value, JobStatus.INCOMPLETE.value,
+    )
+
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
     # ---- jobs -----------------------------------------------------------
+
+    def find_active_duplicate(
+        self, *, source_root: str, dest_prefix: str, bucket: str
+    ) -> sqlite3.Row | None:
+        """A not-finished job already targeting this destination, or None.
+
+        Two writers composing to one destination corrupt each other's slice
+        temps and precondition bookkeeping (release-gate follow-up 3). The
+        candidate set is filtered in SQL on active status only; destination
+        prefix and source equality both need normalization (to_object_name
+        strips slashes, so "p", "p/", and "/p" are the same GCS destination,
+        and source needs canonical_source_key), so both run in Python over
+        the handful of active rows. A job with no profile row (direct-CLI
+        history) has an unknowable bucket and matches conservatively —
+        blocking is safe, double-writing is not."""
+        placeholders = ", ".join("?" for _ in self._ACTIVE_STATUSES)
+        rows = self._conn.execute(
+            f"SELECT j.*, p.bucket AS profile_bucket FROM jobs j"
+            f" LEFT JOIN profiles p ON p.id = j.profile_id"
+            f" WHERE j.status IN ({placeholders})",
+            self._ACTIVE_STATUSES,
+        ).fetchall()
+        wanted_prefix = dest_prefix.strip("/")
+        wanted = canonical_source_key(source_root)
+        for row in rows:
+            if row["dest_prefix"].strip("/") != wanted_prefix:
+                continue  # "p", "p/", "/p" are one GCS destination; raw
+                          # string equality would let a spelling variant
+                          # slip a second writer past the guard
+            if row["profile_bucket"] not in (None, bucket):
+                continue
+            if canonical_source_key(row["source_root"]) == wanted:
+                return row
+        return None
 
     def create_job(
         self,
@@ -519,15 +564,54 @@ class JobRepository:
     def get_or_create_profile(
         self, *, bucket: str, auth_type: str, credential_ref: str | None = None
     ) -> int:
-        row = self.find_profile(
-            bucket=bucket, auth_type=auth_type, credential_ref=credential_ref
+        """Find-or-create without COUNT-based naming: the UNIQUE(name)
+        index is the arbiter, so two connections racing here converge on
+        one row instead of crashing (Plan 3 deferred fix). A name taken by
+        a *different* credential gets the next suffix; a name taken by our
+        twin is found on the next loop."""
+        base = f"{bucket} [{auth_type}]"
+        for attempt in range(1, 101):
+            row = self.find_profile(
+                bucket=bucket, auth_type=auth_type, credential_ref=credential_ref
+            )
+            if row is not None:
+                return int(row["id"])
+            candidate = base if attempt == 1 else f"{base} ({attempt})"
+            try:
+                return self.create_profile(
+                    name=candidate, bucket=bucket, auth_type=auth_type,
+                    credential_ref=credential_ref,
+                )
+            except sqlite3.IntegrityError:
+                continue
+        raise RuntimeError(f"could not allocate a profile name from {base!r}")
+
+    def find_profile_by_name(self, name: str) -> sqlite3.Row | None:
+        return self._conn.execute(
+            "SELECT * FROM profiles WHERE name = ?", (name,)
+        ).fetchone()
+
+    def list_profiles(self) -> list[sqlite3.Row]:
+        return self._conn.execute("SELECT * FROM profiles ORDER BY id").fetchall()
+
+    def set_profile_validated(self, profile_id: int) -> None:
+        self.get_profile(profile_id)  # LookupError on a bogus id
+        self._conn.execute(
+            "UPDATE profiles SET validated_at = ? WHERE id = ?",
+            (_now(), profile_id),
         )
-        if row is not None:
-            return int(row["id"])
-        count = self._conn.execute(
-            "SELECT COUNT(*) AS n FROM profiles"
+
+    def delete_profile(self, profile_id: int) -> None:
+        """Refuses while jobs reference the profile: jobs keep it for
+        report/bucket lookups, and the FK would reject the delete anyway —
+        this just says so in words."""
+        self.get_profile(profile_id)  # LookupError on a bogus id
+        used = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM jobs WHERE profile_id = ?", (profile_id,)
         ).fetchone()["n"]
-        return self.create_profile(
-            name=f"{bucket} [{auth_type} {count + 1}]",  # profiles.name is UNIQUE
-            bucket=bucket, auth_type=auth_type, credential_ref=credential_ref,
-        )
+        if used:
+            raise ProfileInUse(
+                f"profile {profile_id} is used by {used} job(s) and cannot be"
+                " deleted while they exist"
+            )
+        self._conn.execute("DELETE FROM profiles WHERE id = ?", (profile_id,))

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mml_cloud_transfer.core.models import Direction, JobStatus
-from mml_cloud_transfer.core.paths import display_path
+from mml_cloud_transfer.core.paths import display_path, resolve_mapped_drive
 from mml_cloud_transfer.core.slicing import SizePolicy
 from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.engine.runner import EngineOptions, run_job, scan_remote
@@ -38,6 +38,8 @@ def _options(args) -> EngineOptions:
 
 
 def _context(args):
+    if not args.bucket:
+        raise ValueError("--bucket is required in direct mode (no --service-url)")
     return make_context(
         args.bucket,
         credentials_path=args.credentials,
@@ -131,12 +133,20 @@ def _watch_until_settled(client: ApiClient, job_id: int) -> JobStatus:
 
 
 def run_transfer_via_service(args) -> int:
+    resolved = resolve_mapped_drive(args.source)
+    if resolved != args.source:
+        print(
+            f"{args.source} is a mapped drive -> submitting {resolved}"
+            " (the service cannot see your drive letters)"
+        )
+        args.source = resolved
     client = _api_client(args)
     job_id = client.submit_job({
         "name": args.name,
         "direction": args.direction,
         "source_root": args.source,
         "dest_prefix": args.prefix,
+        "profile": getattr(args, "profile", None),
         "bucket": args.bucket,
         "credentials_path": args.credentials,
         "emulator_endpoint": args.emulator_endpoint,
@@ -152,6 +162,13 @@ def run_transfer_via_service(args) -> int:
 
 
 def run_transfer(args) -> int:
+    if getattr(args, "profile", None) and not args.service_url:
+        raise ValueError(
+            "--profile needs the service (profiles live in the service"
+            " database); pass --service-url"
+        )
+    if not getattr(args, "profile", None) and not args.bucket:
+        raise ValueError("provide --bucket, or --profile with --service-url")
     if args.scheduled_at and not args.service_url:
         raise ValueError(
             "--scheduled-at requires the service; pass --service-url"
@@ -159,6 +176,23 @@ def run_transfer(args) -> int:
     if args.service_url:
         return run_transfer_via_service(args)
     options = _options(args)
+
+    conn = connect(args.db)
+    try:
+        duplicate = JobRepository(conn).find_active_duplicate(
+            source_root=args.source, dest_prefix=args.prefix, bucket=args.bucket,
+        )
+    finally:
+        conn.close()
+    if duplicate is not None:
+        print(
+            f"job {duplicate['id']} ({duplicate['status']}) already transfers"
+            f" this source to gs://{args.bucket}/{args.prefix or ''} — run:"
+            f" mmlct resume --db {args.db} --job-id {duplicate['id']}"
+            f" --bucket {args.bucket}"
+        )
+        return 3
+
     ctx = _context(args)
     direction = Direction(args.direction)
     scan_error_count = 0

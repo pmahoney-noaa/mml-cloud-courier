@@ -43,3 +43,10 @@ def test_settings_json_overrides(tmp_path):
 def test_port_argument_beats_settings(tmp_path):
     (tmp_path / "settings.json").write_text('{"port": 5555}', encoding="utf-8")
     assert load_config(tmp_path, port=6666).port == 6666
+
+
+def test_credentials_dir_lives_under_the_data_dir(tmp_path):
+    from mml_cloud_transfer.service.config import load_config
+
+    config = load_config(tmp_path / "data")
+    assert config.credentials_dir == (tmp_path / "data") / "credentials"

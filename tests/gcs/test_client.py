@@ -28,3 +28,41 @@ def test_endpoint_never_has_a_trailing_slash():
     # Pure string behavior — building the context makes no network calls.
     ctx = make_context("b", emulator_endpoint="http://127.0.0.1:1/")
     assert ctx.endpoint == "http://127.0.0.1:1"
+
+
+def test_make_context_from_service_account_info(sa_key_json):
+    from google.oauth2 import service_account
+
+    ctx = make_context("bkt", credentials_info=sa_key_json)
+    assert isinstance(ctx.client._credentials, service_account.Credentials)
+    assert ctx.client.project == "mmlct-test"
+    assert ctx.bucket == "bkt"
+
+
+def test_make_context_from_authorized_user_info():
+    from google.oauth2.credentials import Credentials as UserCredentials
+
+    info = {
+        "type": "authorized_user",
+        "client_id": "c", "client_secret": "s",
+        "refresh_token": "rt",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    ctx = make_context("bkt", credentials_info=info, project="real-project")
+    assert isinstance(ctx.client._credentials, UserCredentials)
+    assert ctx.client.project == "real-project"
+
+
+def test_make_context_authorized_user_without_project_uses_placeholder():
+    info = {
+        "type": "authorized_user",
+        "client_id": "c", "client_secret": "s", "refresh_token": "rt",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    ctx = make_context("bkt", credentials_info=info)
+    assert ctx.client.project == "mmlct"
+
+
+def test_make_context_rejects_an_unknown_credential_type():
+    with pytest.raises(ValueError, match="unsupported credential type"):
+        make_context("bkt", credentials_info={"type": "mystery"})

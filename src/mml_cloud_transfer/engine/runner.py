@@ -24,6 +24,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
+from mml_cloud_transfer.auth.preflight import PROBE_SEGMENT
 from mml_cloud_transfer.core.errors import ErrorCategory, TransferStopped, classify
 from mml_cloud_transfer.core.models import (
     Direction,
@@ -101,6 +102,11 @@ def scan_remote(ctx, db_path, job_id: int, *, policy: SizePolicy | None = None) 
                 # A zero-byte "directory" placeholder object (gsutil/Console
                 # create these for empty folders) — not a real file.
                 continue
+            if f"/{PROBE_SEGMENT}/" in f"/{meta.name}":
+                continue  # transient permission-probe objects (auth/preflight.py)
+                          # must never enter a manifest: they are deleted moments
+                          # after they are written, and a planned-then-deleted
+                          # row fails NOT_FOUND on every attempt and resume
             relative = meta.name[len(lead):]
             if not relative:
                 continue

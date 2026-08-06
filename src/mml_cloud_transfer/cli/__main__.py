@@ -54,7 +54,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     def add_gcs_options(sub):
-        sub.add_argument("--bucket", required=True, help="Destination bucket name")
+        sub.add_argument("--bucket", required=False, default=None,
+                         help="Destination bucket name (or use --profile)")
         sub.add_argument("--credentials", default=None,
                          help="Service-account key file (default: ADC)")
         sub.add_argument("--workers", type=int, default=None,
@@ -75,6 +76,10 @@ def _build_parser() -> argparse.ArgumentParser:
     transfer.add_argument("--audit-hash", action="store_true",
                           help="Also compute SHA-256 per file")
     add_gcs_options(transfer)
+    transfer.add_argument(
+        "--profile", default=None,
+        help="Use a named connection profile (requires --service-url)",
+    )
     transfer.add_argument(
         "--scheduled-at", default=None,
         help="Queue the job to start at this ISO-8601 time (requires --service-url)",
@@ -98,6 +103,46 @@ def _build_parser() -> argparse.ArgumentParser:
     report.add_argument("--bucket", default=None)
     report.add_argument("--report-dir", default=None, help=argparse.SUPPRESS)
     add_service_options(report)
+
+    profile = subparsers.add_parser("profile", help="Manage connection profiles")
+    profile_sub = profile.add_subparsers(dest="profile_command", required=True)
+
+    def add_profile_target_options(sub):
+        sub.add_argument("--name", required=True, help="Profile name")
+        sub.add_argument("--bucket", required=True, help="Bucket this profile targets")
+        sub.add_argument("--prefix", default="", help="Default object-name prefix")
+        sub.add_argument("--project", default=None, help="GCP project id (optional)")
+        sub.add_argument("--emulator-endpoint", default=None, help=argparse.SUPPRESS)
+
+    add_key = profile_sub.add_parser(
+        "add-key", help="Create a profile from a service-account key file"
+    )
+    add_profile_target_options(add_key)
+    add_key.add_argument("--key-file", required=True,
+                         help="Path to the service-account .json key")
+    add_service_options(add_key)
+
+    login = profile_sub.add_parser(
+        "login", help="Create a profile by signing in with Google"
+    )
+    add_profile_target_options(login)
+    login.add_argument("--client-config", default=None,
+                       help="OAuth desktop client JSON (default: MMLCT_OAUTH_CLIENT)")
+    add_service_options(login)
+
+    plist = profile_sub.add_parser("list", help="List profiles")
+    add_service_options(plist)
+
+    pcheck = profile_sub.add_parser("check", help="Re-run a profile's preflight")
+    pcheck.add_argument("--name", required=True)
+    pcheck.add_argument("--direction", choices=["upload", "download"], default=None)
+    pcheck.add_argument("--prefix", default=None,
+                        help="Check against this prefix (default: the profile's)")
+    add_service_options(pcheck)
+
+    premove = profile_sub.add_parser("remove", help="Delete a profile")
+    premove.add_argument("--name", required=True)
+    add_service_options(premove)
 
     return parser
 
@@ -168,6 +213,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _dispatch_via_service(run_status, args)
     if args.command == "report":
         return _dispatch_via_service(run_report_cmd, args)
+    if args.command == "profile":
+        from mml_cloud_transfer.cli.profile_command import run_profile
+        try:
+            return _dispatch_via_service(run_profile, args)
+        except ValueError as exc:  # e.g. no --client-config for login
+            print(str(exc))
+            return 2
 
     return 2
 

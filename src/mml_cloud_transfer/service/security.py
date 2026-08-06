@@ -35,7 +35,7 @@ def _current_sid() -> str | None:
     return sid if sid.upper().startswith("S-1-") else None
 
 
-def _acl_grants() -> list[str]:
+def _acl_grants(*, inheritable: bool = False) -> list[str]:
     """icacls /grant:r arguments: always SYSTEM and Administrators (by SID),
     plus the current process's SID unless SYSTEM already covers it. Raw SIDs
     (`*S-...`) resolve without any account-name mapping, so this behaves
@@ -43,22 +43,26 @@ def _acl_grants() -> list[str]:
     accounts. If the SID cannot be resolved, the base grants stand alone —
     the service account is then SYSTEM or an Administrator in every
     supported deployment, so startup still succeeds."""
+    suffix = "(OI)(CI)(F)" if inheritable else "(F)"
     grants = [
-        "/grant:r", f"{_SYSTEM_SID}:(F)",
-        "/grant:r", f"{_ADMINISTRATORS_SID}:(F)",
+        "/grant:r", f"{_SYSTEM_SID}:{suffix}",
+        "/grant:r", f"{_ADMINISTRATORS_SID}:{suffix}",
     ]
     sid = _current_sid()
     if sid and f"*{sid}" not in (_SYSTEM_SID, _ADMINISTRATORS_SID):
-        grants += ["/grant:r", f"*{sid}:(F)"]
+        grants += ["/grant:r", f"*{sid}:{suffix}"]
     return grants
 
 
-def restrict_acl(path: Path) -> None:
-    """Drop inherited ACEs; grant only SYSTEM, Administrators, this account."""
+def restrict_acl(path: Path, *, inheritable: bool = False) -> None:
+    """Drop inherited ACEs; grant only SYSTEM, Administrators, this account.
+
+    inheritable=True is for directories whose future children must inherit
+    the restriction (the credential store)."""
     if sys.platform != "win32":
         return  # ACLs are Windows-only; POSIX dev runs skip this
     subprocess.run(
-        ["icacls", str(path), "/inheritance:r", *_acl_grants()],
+        ["icacls", str(path), "/inheritance:r", *_acl_grants(inheritable=inheritable)],
         check=True, capture_output=True, text=True,
     )
 

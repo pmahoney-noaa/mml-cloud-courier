@@ -86,3 +86,84 @@ def test_duplicate_relative_path_in_one_job_is_rejected(conn):
     conn.execute(insert)
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(insert)
+
+
+def test_fresh_database_is_version_2_with_validated_at(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    try:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
+        assert "validated_at" in columns
+    finally:
+        conn.close()
+
+
+def test_a_v1_database_is_migrated_in_place(tmp_path):
+    """Build a database exactly as schema v1 wrote it (no validated_at,
+    version=1), then connect(): the column appears, the version bumps,
+    and existing rows survive."""
+
+    db = tmp_path / "jobs.db"
+    raw = sqlite3.connect(db)
+    raw.executescript(
+        """
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (1);
+        CREATE TABLE profiles (
+            id             INTEGER PRIMARY KEY,
+            name           TEXT NOT NULL UNIQUE,
+            project_id     TEXT NOT NULL,
+            bucket         TEXT NOT NULL,
+            auth_type      TEXT NOT NULL,
+            credential_ref TEXT,
+            default_prefix TEXT NOT NULL DEFAULT '',
+            created_at     TEXT NOT NULL
+        );
+        INSERT INTO profiles (name, project_id, bucket, auth_type, created_at)
+        VALUES ('legacy', '', 'b', 'adc', '2026-08-05T00:00:00+00:00');
+        """
+    )
+    raw.commit()
+    raw.close()
+
+    conn = connect(db)
+    try:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+        row = conn.execute("SELECT * FROM profiles WHERE name = 'legacy'").fetchone()
+        assert row["validated_at"] is None  # new column, old row intact
+    finally:
+        conn.close()
+
+
+def test_an_interrupted_migration_recovers_on_the_next_connect(tmp_path):
+    """Killed between the ALTER and the version bump, a v1 database has
+    the column but still says version 1. The next connect() must finish
+    the migration, not die on 'duplicate column name'."""
+
+    db = tmp_path / "jobs.db"
+    raw = sqlite3.connect(db)
+    raw.executescript(
+        """
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (1);
+        CREATE TABLE profiles (
+            id             INTEGER PRIMARY KEY,
+            name           TEXT NOT NULL UNIQUE,
+            project_id     TEXT NOT NULL,
+            bucket         TEXT NOT NULL,
+            auth_type      TEXT NOT NULL,
+            credential_ref TEXT,
+            default_prefix TEXT NOT NULL DEFAULT '',
+            created_at     TEXT NOT NULL
+        );
+        """
+    )
+    raw.execute("ALTER TABLE profiles ADD COLUMN validated_at TEXT")  # crash point: version bump never ran
+    raw.commit()
+    raw.close()
+
+    conn = connect(db)
+    try:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+    finally:
+        conn.close()

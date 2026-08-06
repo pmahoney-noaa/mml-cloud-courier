@@ -11,6 +11,8 @@ import logging
 import time
 from datetime import UTC, datetime
 
+from mml_cloud_transfer.auth.context import context_for_profile
+from mml_cloud_transfer.auth.credential_store import CredentialStore
 from mml_cloud_transfer.cli.scan_command import run_scan
 from mml_cloud_transfer.core.errors import ErrorCategory, classify
 from mml_cloud_transfer.core.models import Direction, JobStatus
@@ -246,16 +248,11 @@ class QueueWorker:
                 self._record_report_failure(job_id, exc)
 
     def _context(self, profile):
-        auth_type = profile["auth_type"]
-        if auth_type == "emulator":
-            return self._make_context(
-                profile["bucket"], emulator_endpoint=profile["credential_ref"]
-            )
-        if auth_type == "key_file":
-            return self._make_context(
-                profile["bucket"], credentials_path=profile["credential_ref"]
-            )
-        return self._make_context(profile["bucket"])
+        return context_for_profile(
+            profile,
+            CredentialStore(self._config.credentials_dir),
+            make_context_fn=self._make_context,
+        )
 
     def _options(self, stop_event) -> EngineOptions:
         return EngineOptions(
