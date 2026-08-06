@@ -147,3 +147,100 @@ def test_a_real_key_payload_is_dpapi_stored_and_loads_back(tmp_path, sa_key_json
     assert store.load(row["credential_ref"]) == sa_key_json
     raw = store.path_for(row["credential_ref"]).read_bytes()
     assert b"PRIVATE KEY" not in raw   # encrypted at rest
+
+
+@pytest.mark.emulator
+def test_submit_job_by_profile_name(emulator_api, tmp_path):
+    client, config, create = emulator_api
+    create(name="lab")  # default_prefix "data"
+    src = tmp_path / "src"; src.mkdir()
+    response = client.post("/jobs", json={
+        "name": "j", "direction": "upload", "source_root": str(src),
+        "profile": "lab",
+    })
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["profile_id"] is not None
+    assert "can list" in body["preflight_summary"]
+
+    conn = connect(config.db_path)
+    try:
+        job = JobRepository(conn).get_job(body["job_id"])
+        assert job["dest_prefix"] == "data"       # inherited default_prefix
+        assert job["profile_id"] == body["profile_id"]
+    finally:
+        conn.close()
+
+
+@pytest.mark.emulator
+def test_submit_with_explicit_prefix_overrides_the_default(emulator_api, tmp_path):
+    client, config, create = emulator_api
+    create(name="lab")
+    src = tmp_path / "src"; src.mkdir()
+    response = client.post("/jobs", json={
+        "name": "j", "direction": "upload", "source_root": str(src),
+        "profile": "lab", "dest_prefix": "elsewhere",
+    })
+    conn = connect(config.db_path)
+    try:
+        job = JobRepository(conn).get_job(response.json()["job_id"])
+        assert job["dest_prefix"] == "elsewhere"
+    finally:
+        conn.close()
+
+
+@pytest.mark.emulator
+def test_submit_by_unknown_profile_is_404(emulator_api, tmp_path):
+    client, _, _ = emulator_api
+    src = tmp_path / "src"; src.mkdir()
+    response = client.post("/jobs", json={
+        "name": "j", "direction": "upload", "source_root": str(src),
+        "profile": "ghost",
+    })
+    assert response.status_code == 404
+
+
+def test_submit_needs_exactly_one_of_profile_and_bucket(tmp_path):
+    client, _ = _make_client(tmp_path)
+    src = tmp_path / "src"; src.mkdir()
+    both = client.post("/jobs", json={
+        "name": "j", "direction": "upload", "source_root": str(src),
+        "profile": "lab", "bucket": "b",
+    })
+    neither = client.post("/jobs", json={
+        "name": "j", "direction": "upload", "source_root": str(src),
+    })
+    assert both.status_code == 422
+    assert neither.status_code == 422
+
+
+def test_an_upload_that_cannot_write_is_rejected_with_the_summary(tmp_path):
+    """Direction-appropriate preflight at submission: a read-only profile
+    can download but not upload."""
+    read_only = PreflightResult(
+        bucket="b", prefix="data", can_list=True, can_read=True,
+        can_write=False, can_compose=False, can_delete=False,
+        messages=("cannot write to gs://b/data: Access to this file was denied.",),
+    )
+    client, config = _make_client(tmp_path, preflight_fn=lambda ctx, prefix: read_only)
+    # An emulator profile so context building needs no real credentials.
+    conn = connect(config.db_path)
+    try:
+        JobRepository(conn).create_profile(
+            name="ro", bucket="b", auth_type="emulator",
+            credential_ref="http://127.0.0.1:9",
+        )
+    finally:
+        conn.close()
+    src = tmp_path / "src"; src.mkdir()
+    up = client.post("/jobs", json={
+        "name": "j", "direction": "upload", "source_root": str(src),
+        "profile": "ro",
+    })
+    assert up.status_code == 400
+    assert "cannot write" in up.json()["detail"]
+    down = client.post("/jobs", json={
+        "name": "j", "direction": "download",
+        "source_root": str(tmp_path / "dl"), "profile": "ro",
+    })
+    assert down.status_code == 201, down.text

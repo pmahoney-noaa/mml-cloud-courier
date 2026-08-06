@@ -309,3 +309,15 @@ def test_workers_negative_is_rejected_on_resume_before_any_network(tmp_path, cap
     assert code == 2
     assert "--workers must be >= 1" in out
     assert "Traceback" not in out
+
+
+def test_transfer_profile_requires_service_url(tmp_path, capsys, monkeypatch):
+    # The env var default would silently turn this into service mode on a
+    # machine (like the dev box) where the live install exports it.
+    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)
+    code = main([
+        "transfer", "--db", str(tmp_path / "j.db"), "--name", "j",
+        "--source", str(tmp_path), "--profile", "lab",
+    ])
+    assert code == 2
+    assert "--service-url" in capsys.readouterr().out

@@ -43,7 +43,8 @@ class JobSubmission(BaseModel):
     direction: Literal["upload", "download"]
     source_root: str = Field(min_length=1)
     dest_prefix: str = ""
-    bucket: str = Field(min_length=1)
+    profile: str | None = None
+    bucket: str | None = Field(default=None, min_length=1)
     credentials_path: str | None = None
     emulator_endpoint: str | None = None
     audit_hash: bool = False
@@ -165,24 +166,71 @@ def create_app(
             _normalize_schedule(submission.scheduled_start_at)
             if submission.scheduled_start_at else None
         )
-        if submission.emulator_endpoint:
-            auth_type, credential_ref = "emulator", submission.emulator_endpoint
-        elif submission.credentials_path:
-            auth_type, credential_ref = "key_file", submission.credentials_path
+
+        if (submission.profile is None) == (submission.bucket is None):
+            raise HTTPException(
+                status_code=422,
+                detail="provide exactly one of 'profile' or 'bucket'",
+            )
+
+        preflight_summary = None
+        if submission.profile is not None:
+            conn, repo = _open()
+            try:
+                row = repo.find_profile_by_name(submission.profile)
+            finally:
+                conn.close()
+            if row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"no profile named {submission.profile!r}",
+                )
+            profile_id = int(row["id"])
+            bucket = row["bucket"]
+            dest_prefix = submission.dest_prefix or row["default_prefix"]
+            # The spec's per-profile preflight, appropriate to the job
+            # direction, at the one moment a human is present to see it.
+            try:
+                ctx = context_for_profile(
+                    row, CredentialStore(config.credentials_dir)
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=400, detail=(
+                    f"stored credential could not be loaded:"
+                    f" {classify(exc).message}"
+                )) from exc
+            result = preflight_fn(ctx, dest_prefix)
+            if not result.ok_for(Direction(submission.direction)):
+                raise HTTPException(status_code=400, detail=result.summary())
+            preflight_summary = result.summary()
+            conn, repo = _open()
+            try:
+                repo.set_profile_validated(profile_id)
+            finally:
+                conn.close()
         else:
-            auth_type, credential_ref = "adc", None
+            profile_id = None
+            bucket = submission.bucket
+            dest_prefix = submission.dest_prefix
 
         conn, repo = _open()
         try:
-            profile_id = repo.get_or_create_profile(
-                bucket=submission.bucket, auth_type=auth_type,
-                credential_ref=credential_ref,
-            )
+            if profile_id is None:
+                if submission.emulator_endpoint:
+                    auth_type, credential_ref = "emulator", submission.emulator_endpoint
+                elif submission.credentials_path:
+                    auth_type, credential_ref = "key_file", submission.credentials_path
+                else:
+                    auth_type, credential_ref = "adc", None
+                profile_id = repo.get_or_create_profile(
+                    bucket=bucket, auth_type=auth_type,
+                    credential_ref=credential_ref,
+                )
             job_id = repo.create_job(
                 name=submission.name,
                 direction=Direction(submission.direction),
                 source_root=submission.source_root,
-                dest_prefix=submission.dest_prefix,
+                dest_prefix=dest_prefix,
                 profile_id=profile_id,
                 audit_hash=submission.audit_hash,
                 scheduled_start_at=scheduled,
@@ -192,7 +240,12 @@ def create_app(
             )
         finally:
             conn.close()
-        return {"job_id": job_id, "scheduled_start_at": scheduled}
+        return {
+            "job_id": job_id,
+            "scheduled_start_at": scheduled,
+            "profile_id": profile_id,
+            "preflight_summary": preflight_summary,
+        }
 
     @router.get("/jobs")
     def list_jobs() -> list[dict]:

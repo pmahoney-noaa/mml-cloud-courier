@@ -54,7 +54,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     def add_gcs_options(sub):
-        sub.add_argument("--bucket", required=True, help="Destination bucket name")
+        sub.add_argument("--bucket", required=False, default=None,
+                         help="Destination bucket name (or use --profile)")
         sub.add_argument("--credentials", default=None,
                          help="Service-account key file (default: ADC)")
         sub.add_argument("--workers", type=int, default=None,
@@ -75,6 +76,10 @@ def _build_parser() -> argparse.ArgumentParser:
     transfer.add_argument("--audit-hash", action="store_true",
                           help="Also compute SHA-256 per file")
     add_gcs_options(transfer)
+    transfer.add_argument(
+        "--profile", default=None,
+        help="Use a named connection profile (requires --service-url)",
+    )
     transfer.add_argument(
         "--scheduled-at", default=None,
         help="Queue the job to start at this ISO-8601 time (requires --service-url)",

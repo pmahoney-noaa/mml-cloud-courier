@@ -196,3 +196,20 @@ def test_report_endpoint_writes_the_three_files(api, tmp_path):
     assert Path(paths["report_html"]).exists()
     assert Path(paths["summary_json"]).exists()
     assert Path(paths["manifest_csv"]).exists()
+
+
+def test_bridge_config_submission_shape_is_pinned(api, tmp_path):
+    """Carried-over item 4: the live install submits with bucket + ADC and
+    no profile field. That shape must keep working verbatim — DPAPI
+    profiles replace it eventually; they do not break it."""
+    client, config, _ = api
+    job_id = _submit(client, tmp_path)  # bucket-only payload, as before
+    conn = connect(config.db_path)
+    try:
+        repo = JobRepository(conn)
+        job = repo.get_job(job_id)
+        profile = repo.get_profile(job["profile_id"])
+        assert profile["auth_type"] == "adc"
+        assert profile["bucket"] == "b"
+    finally:
+        conn.close()

@@ -38,6 +38,8 @@ def _options(args) -> EngineOptions:
 
 
 def _context(args):
+    if not args.bucket:
+        raise ValueError("--bucket is required in direct mode (no --service-url)")
     return make_context(
         args.bucket,
         credentials_path=args.credentials,
@@ -137,6 +139,7 @@ def run_transfer_via_service(args) -> int:
         "direction": args.direction,
         "source_root": args.source,
         "dest_prefix": args.prefix,
+        "profile": getattr(args, "profile", None),
         "bucket": args.bucket,
         "credentials_path": args.credentials,
         "emulator_endpoint": args.emulator_endpoint,
@@ -152,6 +155,13 @@ def run_transfer_via_service(args) -> int:
 
 
 def run_transfer(args) -> int:
+    if getattr(args, "profile", None) and not args.service_url:
+        raise ValueError(
+            "--profile needs the service (profiles live in the service"
+            " database); pass --service-url"
+        )
+    if not getattr(args, "profile", None) and not args.bucket:
+        raise ValueError("provide --bucket, or --profile with --service-url")
     if args.scheduled_at and not args.service_url:
         raise ValueError(
             "--scheduled-at requires the service; pass --service-url"
