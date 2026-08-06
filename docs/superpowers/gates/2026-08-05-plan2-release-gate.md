@@ -85,9 +85,9 @@ $env:MMLCT_TEST_PREFIX = "<scratch-folder>"                       # omit for a d
 Run the fast suite first. When one of those is red the scale test cannot
 succeed and would only cost time and bytes proving it.
 
-**This run deviated from that order on the last line: the slow suite was not
-run.** See "Task 7 — deferred" below for why and what is and is not proven as
-a result.
+Both suites were run. The slow suite was initially deferred on 2026-08-05
+(the workstation uplink measured ~1 Mbps) and was completed on 2026-08-06 on a
+faster link. See "Task 7 — passed" below.
 
 ## What each test proves
 
@@ -105,73 +105,53 @@ a result.
 | `test_compose_slices_leaves_no_noncurrent_temp_versions` (Finding 5) | The production `upload_slice` + `compose_slices` path, run end-to-end, leaves zero noncurrent versions of its slice temps on a versioning-enabled bucket | same reason — compose and versioned-delete semantics are not faithfully emulated |
 | `test_compose_slices_deletes_every_temp_with_an_explicit_generation` (`tests/gcs/test_compose_slices_generation_pinning.py`, Finding 5) | `compose_slices()` deletes every swept temp by an explicit, non-`None` generation and pins each compose source to its verified generation — a credential-free regression pin against silently reverting either half of the fix | — (no bucket needed; a stub client records calls. Exists precisely *because* the emulator and a live bucket both being unavailable in CI must not mean this regression goes unguarded) |
 
-The ninth test in the spec's original table, `test_multi_gigabyte_kill_and_resume`
-(the overnight promise at real 1 GiB slices), exists and is committed but was
-**not run** as part of closing this gate. See "Task 7 — deferred."
+The ninth test, `test_multi_gigabyte_kill_and_resume` (the overnight promise at
+real 1 GiB slices), **passed on 2026-08-06**. See "Task 7 — passed" below.
 
-## Task 7 — deferred, not passing
+## Task 7 — passed
 
-Task 7's scale test (`tests/cli/test_real_bucket_gate.py::test_multi_gigabyte_kill_and_resume`,
-committed at `74e386d`, marked both `real_bucket` and `slow`) is **deferred**,
-not part of this gate's passing result. This is a deliberate decision, not an
-oversight — recorded here so the next reader does not mistake "the fast gate
-is green" for "the whole gate is green."
+`tests/cli/test_real_bucket_gate.py::test_multi_gigabyte_kill_and_resume` — the
+spec's defining test, and the only one that kills a transfer mid-flight and
+resumes it against real GCS — **passed on 2026-08-06 in 227.91s (3m47s)**.
 
-Facts, all measured on this workstation on 2026-08-05:
+It was deferred on 2026-08-05 and completed the next day once a faster link was
+available; the deferral history is kept below because it is the reason the
+fast-gate results in this record are dated a day earlier.
 
-- The test exists, is committed, and is marked `real_bucket and slow`.
-- It is **not** collected by the gate command `-m "real_bucket and not slow"` —
-  confirmed via `--collect-only`.
-- A plain `pytest tests/cli/test_real_bucket_gate.py` run (no `MMLCT_TEST_BUCKET`)
-  skips it in well under a second (observed: `1 skipped in 0.28s`, ~0.86s wall
-  including interpreter startup) **without** generating its 2.6 GiB source
-  tree — `real_bucket_ctx` is requested before `big_tree` in the test's
-  fixture list, so the skip fires before the tree-building fixture runs.
-- It has **never passed**. Blocker: this workstation's uplink measures
-  0.12–0.15 MB/s (roughly 1 Mbps). A 32 MiB single-shot upload exceeded the
-  120s socket timeout outright. At that rate, transferring 2.6 GiB is roughly
-  a 6-hour run, and the default 8 MiB chunks (~68s each) sit close enough to
-  the timeout that individual chunk uploads fail intermittently even when the
-  overall transfer is progressing.
-- The one attempt made died at approximately 1% of `big.bin`. Because the
-  pytest session itself died (not a clean test failure), the session-scoped
-  `real_bucket_ctx` teardown never ran, and 8 MiB of slice data was stranded
-  in the bucket; it was located and purged manually, not by the fixture.
-- What that partial run **did** confirm against real GCS, and which stands as
-  partial validation even though the test did not complete:
-  - The default size policy sliced the 2.5 GiB `big.bin` into exactly 3
-    slices — 1 GiB, 1 GiB, 0.5 GiB — as designed.
-  - `mid.bin` (64 MiB) routed to the single-session resumable path, not the
-    sliced path, as designed.
-  - All four resumable sessions (3 slices + `mid.bin`) initiated successfully
-    against real GCS.
-  - Per-slice `bytes_transferred` was persisted to SQLite as bytes actually
-    moved, i.e. the DB bookkeeping this design depends on for resume tracks
-    real progress at real scale, not just at test-shrunk scale.
-- What remains **unproven**:
-  - `compose` of components at or above 1 GiB (the largest compose exercised
-    by the passing fast-gate test is far smaller).
-  - Kill-and-resume across a session with a multi-minute-plus lifetime.
-  - The report/verdict path (COMPLETE/INCOMPLETE audit) at real scale.
+What it proves, with the default size policy (no `--size-policy`, so real
+thresholds and real 1 GiB slices):
 
-**Consequently, this gate executed ZERO kill-and-resume against real GCS at
-any scale.** `test_real_bucket_round_trip` (see the table above) is an
-upload-then-download round-trip with no interruption and no resume call.
-Task 7 — the only test in this suite that kills a transfer mid-flight and
-resumes it against real GCS — never completed. The closest evidence this gate
-has for the resume path is `test_status_query_returns_the_servers_committed_offset`,
-which proves in-process session continuation only (the server's committed
-offset is read correctly and a resumed upload does not resend already-committed
-bytes) — it does not kill a process, does not go through `mmlct resume`, and
-proves nothing about session survival across a real interruption. Whether
-kill-and-resume actually works at any scale against real GCS remains unverified
-by this gate.
+- `big.bin` (2,684,354,560 bytes) was sliced into exactly 3 components —
+  1 GiB, 1 GiB, 0.5 GiB — uploaded in parallel via independent resumable
+  sessions, and composed.
+- The transfer subprocess was killed once `file_slices` showed a live
+  `session_uri` with `0 < bytes_transferred < length_bytes` — a genuine
+  mid-sliced-file kill, not a timer. Observed at kill time: slices at 24.2%,
+  17.2% and 34.2% of their respective lengths.
+- `mmlct resume` then drove the job to **`complete`**, with all 10 files
+  `verified` — including `big.bin` via `method=sliced`.
+- `file_slices` was empty at the end: the temps were composed and swept.
+- The event trail is complete: `scan_started`, `scan_finished`, `run_started`,
+  `audit_finished`, `run_finished`. Job `started_at 04:09:38Z`,
+  `finished_at 04:13:13Z`.
+- Teardown left nothing: `gcloud storage ls --all-versions --recursive` under
+  the gate prefix matched no objects.
 
-This is an environment limitation (uplink bandwidth), not a defect found in
-the product. Running the scale test to completion needs either a faster
-uplink than this workstation has, or a deliberately extended timeout budget
-and a multi-hour window; both are follow-up work, not part of closing this
-gate today.
+This closes the three items previously recorded as unproven: `compose` of
+components at or above 1 GiB, kill-and-resume across a long-lived session, and
+the report/verdict path at real scale. **The overnight promise — kill a
+multi-gigabyte transfer mid-slice and resume it to an audited COMPLETE — is now
+demonstrated against real Google Cloud Storage, not an emulator.**
+
+### Deferral history (2026-08-05)
+
+The first attempt died at ~1% of `big.bin`. The workstation uplink then measured
+0.12–0.15 MB/s (~1 Mbps) and a 32 MiB single-shot upload exceeded the 120s socket
+timeout outright, which put a 2.6 GiB run at roughly six hours with 8 MiB chunks
+(~68s each) failing intermittently against that timeout. Because the pytest
+session died rather than failing cleanly, the session-scoped teardown never ran
+and 8 MiB was stranded; it was purged manually. On 2026-08-06 the same link
+measured 10–12 MB/s (~100 Mbps) and the test completed in under four minutes.
 
 ## Results
 
@@ -182,10 +162,10 @@ gate today.
 | Scratch prefix (`MMLCT_TEST_PREFIX`) | `scratch` |
 | Region / storage class | Unverified — `storage.buckets.get` denied (see Findings) |
 | Versioning / retention policy | Versioning: **enabled**, confirmed empirically (write + delete + `gcloud storage ls --all-versions` still lists `name#generation`). Retention policy: unverified by metadata read; preflight's delete probe (the practical retention check) passed, so no retention lock is blocking deletes. |
-| Uplink (observed) | 0.12–0.15 MB/s (~1 Mbps), from the Task 7 attempt |
+| Uplink (observed) | 0.12–0.15 MB/s (~1 Mbps) on 2026-08-05; 10–12 MB/s (~100 Mbps) on 2026-08-06 |
 | Preflight | Pass — exit 0, with expected metadata warnings (see Findings) |
 | Fast suite (`real_bucket and not slow`) | **10 passed**, 0 failed, 0 skipped — run twice for repeatability: 42.08s then 41.33s (post-Finding-5-completion runs, this record; the earlier `8 passed … 62.62s then 39.94s` in Finding 2 was measured before `test_delete_object_generation_scoping_on_a_versioned_bucket` and `test_compose_slices_leaves_no_noncurrent_temp_versions` existed and is retained there for history, not as this gate's outcome) |
-| Scale test (`real_bucket and slow`) | **Not run — deferred.** See "Task 7 — deferred" above. |
+| Scale test (`real_bucket and slow`) | **1 passed** in 227.91s (2026-08-06). Job reached `complete`, 10/10 files `verified`, `big.bin` sliced into 1 GiB + 1 GiB + 0.5 GiB, killed mid-slice, resumed. |
 | Bytes re-sent on resume | 0 of the committed prefix — status-query test observed `put308 committed=262144`, then a resumed upload sending only `bytes_sent=786432` of 1048576 (i.e. the already-committed 262144 bytes were not re-sent) |
 | Run by | Claude (Task 8), operator account `peter.mahoney@noaa.gov`, project `ggn-nmfs-afscinf-infra-01` |
 
@@ -508,14 +488,27 @@ items were fixed in this gate; they are recorded here so they are not lost.
    residual gap) so `test_a_dirty_prefix_would_be_detected` exercises the
    same code path as the production collision check in `real_bucket_ctx`,
    rather than a parallel copy of its call shape.
-3. **Add a `pytest_collection_modifyitems` auto-skip for `real_bucket`** so
+3. ~~**Guard concurrent runs of the same job.**~~ **DONE 2026-08-06** — `run_job()`
+   now takes a per-job OS file lock (`engine/joblock.py`), so a second
+   `mmlct resume --job-id N` exits 3 with a clear message instead of racing the
+   first. Chosen over a DB flag because the OS releases the lock when a process
+   dies, and a killed transfer is a normal event here. Note the residual: this is
+   per-JOB, and `mmlct transfer` always creates a NEW job id — so an operator who
+   re-issues `transfer` rather than `resume` after a crash still gets two
+   processes composing to the same destination objects. Guarding that needs a
+   same-`(source_root, dest_prefix, bucket)` check at job creation, which is a
+   separate change.
+4. **Add a `pytest_collection_modifyitems` auto-skip for `real_bucket`** so
    real-bucket tests fail fast with a clear message (rather than erroring on
    missing credentials/env) when `MMLCT_TEST_BUCKET` is unset, and are
    trivially excludable in CI.
-4. **Run Task 7 on a real uplink.** This gate's uplink (0.12–0.15 MB/s) made
-   the scale test infeasible; it needs either a faster connection or a
-   multi-hour timeout budget, neither of which was available for this run.
-5. **Consider whether Layer 1 (in-flight CRC32C) should exist above 8 MiB at
+5. ~~**Run Task 7 on a real uplink.**~~ **DONE 2026-08-06** — passed in 227.91s
+   on a 10–12 MB/s link. See "Task 7 — passed".
+6. **Route `joblock.py`'s `db_path.parent.mkdir()` through `extended_path()`.**
+   Every other path in that function goes through it; this one does not. Only
+   reachable when `sqlite3.connect()` on the same path would already have failed,
+   so it is a tidiness gap rather than a live bug.
+7. **Consider whether Layer 1 (in-flight CRC32C) should exist above 8 MiB at
    all.** `initiate_upload` sets no CRC32C and `put_chunk` sends no checksum
    header, so there is no in-flight checksum for any file over 8 MiB today —
    Layer 2 (post-compose `crc32c_combine` verification) still catches
@@ -535,6 +528,10 @@ fixture was made version-aware.
 - [ ] Lifecycle rule: **not applied.** `storage.buckets.get`/`bucketsUpdate` are outside this
       operator account's grant (Finding 3). The recommended rule JSON above is on record for
       whoever holds bucket-admin on `afsc_mml_ccep`.
-- [x] Local 2.6 GiB source tree: never created. Task 7's scale test was deferred and its
-      `big_tree` fixture never ran (confirmed: the run skipped in 0.28s, before the tree-building
-      fixture would execute). Nothing to clean up.
+- [x] Local 2.6 GiB source tree: created by Task 7's `big_tree` fixture on 2026-08-06 under
+      pytest's `tmp_path_factory`, and removed by pytest's own tmp-dir retention policy. Free
+      space was 413 GiB before the run, so the 6 GiB guard did not trip.
+- [x] Probe residue from the uplink measurements: the ad-hoc speed probes used a generation-less
+      delete and therefore left three noncurrent `scratch/mmlct-preflight/speed-*.bin` versions —
+      the very defect Finding 5 fixes, reproduced by a throwaway script that does not use
+      `delete_object`. Purged with `gcloud storage rm --all-versions`; re-checked clean.
