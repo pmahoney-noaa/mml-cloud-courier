@@ -79,3 +79,21 @@ def test_token_file_acl_drops_inheritance(tmp_path):
     ).stdout
     assert "(I)" not in out          # no inherited ACEs survive
     assert "SYSTEM" in out or "S-1-5-18" in out
+
+
+def test_acl_grants_can_be_inheritable(monkeypatch):
+    """The credentials directory needs (OI)(CI) grants so files created
+    inside inherit the restriction instead of ProgramData's default ACL."""
+    monkeypatch.setattr(
+        security, "_current_sid", lambda: "S-1-5-21-111-222-333-1001"
+    )
+    grants = _acl_grants(inheritable=True)
+    assert "*S-1-5-18:(OI)(CI)(F)" in grants
+    assert "*S-1-5-21-111-222-333-1001:(OI)(CI)(F)" in grants
+    assert not any(g.endswith(":(F)") for g in grants if g.startswith("*"))
+
+
+def test_acl_grants_default_stays_non_inheritable(monkeypatch):
+    monkeypatch.setattr(security, "_current_sid", lambda: None)
+    grants = _acl_grants()
+    assert "*S-1-5-18:(F)" in grants

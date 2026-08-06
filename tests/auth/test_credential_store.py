@@ -1,0 +1,74 @@
+"""The DPAPI credential store: token-file pattern (create empty -> cut ACL
+-> write), grants by process SID, machine-scope encryption at rest."""
+
+import subprocess
+import sys
+
+import pytest
+
+pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI/ACLs are Windows-only")
+
+from mml_cloud_transfer.auth.credential_store import CredentialStore
+
+PAYLOAD = {
+    "type": "authorized_user",
+    "client_id": "c",
+    "client_secret": "s",
+    "refresh_token": "1//THE-SECRET",
+    "token_uri": "https://oauth2.googleapis.com/token",
+}
+
+
+def test_save_load_round_trip(tmp_path):
+    store = CredentialStore(tmp_path / "credentials")
+    ref = store.save(PAYLOAD)
+    assert ref.startswith("cred-") and ref.endswith(".dpapi")
+    assert store.load(ref) == PAYLOAD
+
+
+def test_secret_is_not_on_disk_in_plaintext(tmp_path):
+    store = CredentialStore(tmp_path / "credentials")
+    ref = store.save(PAYLOAD)
+    raw = store.path_for(ref).read_bytes()
+    assert b"THE-SECRET" not in raw
+    assert b"refresh_token" not in raw
+
+
+def test_delete_is_idempotent(tmp_path):
+    store = CredentialStore(tmp_path / "credentials")
+    ref = store.save(PAYLOAD)
+    store.delete(ref)
+    store.delete(ref)  # second delete must not raise
+    with pytest.raises(FileNotFoundError):
+        store.load(ref)
+
+
+@pytest.mark.parametrize("bad", ["../../etc", "cred-zzz.dpapi/..", "x.dpapi", ""])
+def test_refs_that_are_not_ours_are_rejected(tmp_path, bad):
+    store = CredentialStore(tmp_path / "credentials")
+    with pytest.raises(ValueError):
+        store.path_for(bad)
+
+
+def test_credential_file_acl_drops_inheritance(tmp_path):
+    """Same check shape as test_token_file_acl_drops_inheritance: the blob
+    file itself carries a cut ACL — no inherited ACEs survive."""
+    store = CredentialStore(tmp_path / "credentials")
+    ref = store.save(PAYLOAD)
+    out = subprocess.run(
+        ["icacls", str(store.path_for(ref))],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "(I)" not in out
+    assert "SYSTEM" in out or "S-1-5-18" in out
+
+
+def test_credentials_directory_acl_is_cut_and_inheritable(tmp_path):
+    store = CredentialStore(tmp_path / "credentials")
+    store.save(PAYLOAD)
+    out = subprocess.run(
+        ["icacls", str(tmp_path / "credentials")],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "(I)" not in out
+    assert "(OI)(CI)" in out
