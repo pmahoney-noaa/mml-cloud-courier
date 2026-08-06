@@ -414,3 +414,34 @@ def test_stopped_file_is_not_marked_failed(job, monkeypatch):
     assert status is JobStatus.PENDING
     states = files_by_state(db, job_id)
     assert FileState.FAILED.value not in states.values()
+
+
+def test_audit_network_failure_yields_incomplete_not_a_crash(job, monkeypatch):
+    """Phase 3 gate finding (2026-08-06, job 6): a network outage that
+    outlasts the per-file retries reaches the Layer-3 audit with the link
+    still down; the audit's list_prefix exception escaped run_job, so the
+    worker's catch-all mislabeled the outage as needs-attention PAUSED and
+    the stalled path never engaged. An unaudited run can never be COMPLETE:
+    the audit failure must yield INCOMPLETE and an audit_error event."""
+    import requests
+
+    db, job_id = job
+    monkeypatch.setattr(runner, "upload_single_shot", lambda *a, **k: verified(100))
+    monkeypatch.setattr(runner, "get_meta", lambda ctx, name: None)
+    monkeypatch.setattr(
+        runner, "list_prefix",
+        lambda ctx, lead: (_ for _ in ()).throw(
+            requests.exceptions.ConnectionError("link still down at audit time")
+        ),
+    )
+    status = run_job(db, job_id, ctx=None, options=opts(audit=True))
+    assert status is JobStatus.INCOMPLETE
+    conn = connect(db)
+    repo = JobRepository(conn)
+    kinds = [e["kind"] for e in repo.get_events(job_id)]
+    job_row = repo.get_job(job_id)
+    conn.close()
+    assert "audit_error" in kinds
+    assert ("run_finished", ) and job_row["status"] == JobStatus.INCOMPLETE.value
+    states = files_by_state(db, job_id)
+    assert set(states.values()) == {FileState.VERIFIED.value}

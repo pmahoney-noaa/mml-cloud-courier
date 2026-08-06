@@ -454,7 +454,21 @@ def run_job(
                 return JobStatus.PAUSED
 
             if options.audit:
-                _audit(ctx, repo, job)
+                try:
+                    _audit(ctx, repo, job)
+                except Exception as exc:
+                    # The audit needs the network; a run that survived a long
+                    # outage on per-file retries can reach this point with the
+                    # link still down. An unaudited run can never be COMPLETE,
+                    # so this is an INCOMPLETE outcome, not a crash — letting
+                    # the exception escape would bypass the worker's stalled
+                    # path and mislabel an outage as needs-attention PAUSED.
+                    repo.record_event(job_id, "audit_error", _scrub(str(exc))[:200])
+                    repo.finish_job(job_id, JobStatus.INCOMPLETE)
+                    repo.record_event(
+                        job_id, "run_finished", JobStatus.INCOMPLETE.value
+                    )
+                    return JobStatus.INCOMPLETE
 
             status = repo.job_verdict(job_id)
             repo.finish_job(job_id, status)
