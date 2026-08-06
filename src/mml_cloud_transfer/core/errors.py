@@ -184,6 +184,30 @@ def _from_os_error(exc: OSError) -> ErrorCategory:
     return ErrorCategory.UNKNOWN
 
 
+def _has_transport_cause(exc: BaseException) -> bool:
+    """True when the exception's cause chain contains a transport failure.
+
+    google-auth chains the underlying requests exception onto the error it
+    raises (``raise new_exc from caught_exc``), so the chain — not the
+    outermost type — says whether the network or the credential failed.
+    Matched by module/class name to keep this module free of cloud imports.
+    Bounded and cycle-safe.
+    """
+    seen: set[int] = set()
+    node: BaseException | None = exc
+    while node is not None and id(node) not in seen and len(seen) < 20:
+        seen.add(id(node))
+        module = type(node).__module__
+        if module.startswith(("requests", "urllib3")):
+            return True
+        if type(node).__name__ == "TransportError" and module.startswith("google.auth"):
+            return True
+        if isinstance(node, (ConnectionError, TimeoutError)):
+            return True
+        node = node.__cause__ or node.__context__
+    return False
+
+
 def classify(exc: BaseException) -> Classification:
     """Map any exception to its category and user-facing guidance."""
     if type(exc).__name__ == "DataCorruption":
@@ -202,10 +226,26 @@ def classify(exc: BaseException) -> Classification:
     module = type(exc).__module__
     if module.startswith(("requests", "urllib3")):
         return _build(ErrorCategory.NETWORK)
-    if type(exc).__name__ in ("RefreshError", "DefaultCredentialsError") and module.startswith(
-        "google.auth"
-    ):
-        return _build(ErrorCategory.CREDENTIAL)
+    if module.startswith("google.auth"):
+        name = type(exc).__name__
+        if name == "TransportError":
+            # google-auth wraps the requests exception raised when the
+            # token endpoint is unreachable. The network failed, not the
+            # credential.
+            return _build(ErrorCategory.NETWORK)
+        if name == "RefreshError":
+            # A refresh fails either because the grant is dead
+            # (invalid_grant — a human must re-authenticate) or because
+            # the refresh REQUEST failed in transit. Only the former is a
+            # credential problem; with stored refresh tokens the latter
+            # would otherwise pause overnight jobs on every outage.
+            # retryable=True is google-auth's own verdict on token-endpoint
+            # 5xx / server_error responses.
+            if getattr(exc, "retryable", False) or _has_transport_cause(exc):
+                return _build(ErrorCategory.NETWORK)
+            return _build(ErrorCategory.CREDENTIAL)
+        if name == "DefaultCredentialsError":
+            return _build(ErrorCategory.CREDENTIAL)
     if type(exc).__name__ == "RetryError" and module.startswith("google.api_core"):
         # The client library wraps exhausted retries of transient transport
         # failures in RetryError, which carries no HTTP code (observed live
