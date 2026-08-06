@@ -58,6 +58,29 @@ def test_delete_object_is_idempotent(ctx):
     delete_object(ctx, "gone.bin")  # second call must not raise
 
 
+@pytest.mark.emulator
+def test_delete_object_with_explicit_generation_removes_it(ctx):
+    ctx.client.bucket(ctx.bucket).blob("gen/scoped.bin").upload_from_string(b"x")
+    meta = get_meta(ctx, "gen/scoped.bin")
+    assert meta is not None
+
+    delete_object(ctx, "gen/scoped.bin", generation=meta.generation)
+
+    assert get_meta(ctx, "gen/scoped.bin") is None
+
+
+# The companion proof -- that a WRONG generation must NOT delete the current
+# object -- is deliberately not an emulator test. fake-gcs-server does not
+# enforce the `generation` query param on DELETE at all: a raw
+# `DELETE .../o/<name>?generation=<wrong>` still returns 200 and removes the
+# live object regardless of mismatch (confirmed directly against the running
+# emulator, both through the client library and a raw HTTP request, and with
+# the emulator bucket's versioning enabled or not). That is exactly the kind
+# of behaviour this file's sibling, test_real_bucket_protocol.py, exists to
+# cover -- see test_delete_object_generation_scoping_on_a_versioned_bucket
+# there for the real-GCS proof.
+
+
 def test_gcs_http_error_classifies_by_status_code():
     for code, category in ((403, ErrorCategory.CREDENTIAL), (429, ErrorCategory.QUOTA),
                            (503, ErrorCategory.NETWORK), (412, ErrorCategory.CONFLICT)):

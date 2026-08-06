@@ -347,11 +347,11 @@ future run needs to confirm it is STANDARD (rather than, say, an
 inadvertently-configured cold class incurring early-deletion charges), that
 needs either bucket-admin access or a request to whoever holds it.
 
-### 5. `delete_object()` is a live-pointer delete, so sliced uploads double-bill storage indefinitely on a versioning-enabled destination
+### 5. `delete_object()` is a live-pointer delete, so sliced uploads double-bill storage indefinitely on a versioning-enabled destination — FIXED
 
-Recorded here because this record is what someone will consult to answer "can
-Plan 2 ship?" — this is a real product defect the run surfaced, not a gate
-artifact.
+**Status: fixed**, commit `<PENDING_SHA>`. Recorded here because this record
+is what someone will consult to answer "can Plan 2 ship?" — this was a real
+product defect the run surfaced, not a gate artifact.
 
 `src/mml_cloud_transfer/gcs/objects.py::delete_object()` deletes through a
 fresh `Blob` handle with no generation set — the same live-pointer delete
@@ -386,47 +386,69 @@ this, for two independent reasons:**
    it — same as the code path in question — so the underlying bytes would
    keep billing as a noncurrent version regardless.
 
-**The fix is one line.** `compose_slices()` already holds each slice temp's
-`ObjectMeta` (which carries `.generation`) before it calls `delete_object()`
-on it — the generation is already in hand, it is just not being passed
-through. This is **out of scope for this plan**, which forbids `src/` changes
-beyond the error-taxonomy mapping (Item 1 of this fix wave), so it is not
-fixed here.
+**The fix was one line.** `compose_slices()` already held each slice temp's
+`ObjectMeta` (which carries `.generation`) before calling `delete_object()`
+on it — the generation was already in hand, it just was not being passed
+through. `delete_object()` (`src/mml_cloud_transfer/gcs/objects.py`) now
+takes an optional `generation` keyword and calls
+`bucket.delete_blob(name, generation=generation)` instead of deleting through
+a fresh, generation-less `Blob` handle; the default (`generation=None`)
+remains a live-pointer delete, so existing callers are unaffected.
+`compose_slices()` (`src/mml_cloud_transfer/gcs/uploader.py`) now passes
+`generation=slice_meta.generation` when sweeping each temp.
 
-**Severity: does not block this branch.** It must be resolved before Plan 2
-ships to any customer bucket with versioning enabled, since that is exactly
-the configuration this gate ran against (`afsc_mml_ccep`) and exactly the
-configuration under which the defect is both active and invisible.
+This is pinned by four tests:
+
+- `tests/gcs/test_objects.py::test_delete_object_with_explicit_generation_removes_it`
+  (emulator) — an explicit, matching generation deletes the object outright.
+- `tests/gcs/test_real_bucket_protocol.py::test_delete_object_generation_scoping_on_a_versioned_bucket`
+  (real bucket, the decisive test) — proves the actual contrast that
+  motivated the fix: a generation-less delete on `afsc_mml_ccep` leaves a
+  noncurrent version behind (`list_blobs(..., versions=True)` non-empty),
+  while a generation-scoped delete of an equivalent object removes it outright
+  (the same listing is empty). It also proves a mismatched generation leaves
+  the object untouched. (The wrong-generation half of this proof could not be
+  written against fake-gcs-server — confirmed empirically that the emulator
+  does not enforce the `generation` query param on `DELETE` at all, matched
+  or not, so only real GCS can show it.)
+- `tests/gcs/test_real_bucket_protocol.py::test_compose_slices_leaves_no_noncurrent_temp_versions`
+  (real bucket, product-level proof) — runs the actual `upload_slice` +
+  `compose_slices` path used in production and asserts a `versions=True`
+  listing of the swept `*.mmlct.tmp/` temps is empty. Before the fix this
+  failed, showing the three temps surviving as noncurrent versions —
+  reproducing the defect directly.
+
+**Severity was: does not block this branch**, but must be resolved before
+Plan 2 ships to any customer bucket with versioning enabled, since that is
+exactly the configuration this gate ran against (`afsc_mml_ccep`) and exactly
+the configuration under which the defect was both active and invisible. That
+condition is now satisfied.
 
 ## Follow-ups
 
-Ranked by what would most reduce risk before Plan 2 ships broadly. None of
-these were fixed in this gate; they are recorded here so they are not lost.
+Ranked by what would most reduce risk before Plan 2 ships broadly. Former
+item 1 (`delete_object()` generation scoping, Finding 5) is fixed — see
+Finding 5 above — and has been removed from this list. None of the remaining
+items were fixed in this gate; they are recorded here so they are not lost.
 
-1. **Fix `delete_object()` to a generation-scoped delete** (Finding 5). Same
-   fix already applied to the test helper in Finding 2 — pass the known
-   generation through from `compose_slices()`'s `ObjectMeta` instead of
-   deleting through a fresh, generation-less `Blob` handle. Highest priority:
-   this is a silent, unbounded storage-cost defect on any versioned
-   destination bucket.
-2. **Give `tests/gcs/test_uploader_sliced.py` distinct per-slice content.**
+1. **Give `tests/gcs/test_uploader_sliced.py` distinct per-slice content.**
    Its `source` fixture writes `bytes(range(256)) * 4096`, so every slice is
    byte-identical. A mis-ordered `compose` (e.g. slices 1 and 2 swapped) would
    still produce a byte-correct object and pass every existing assertion —
    no test anywhere in this suite can currently catch a slice-ordering
    regression in `upload_sliced`.
-3. **Hoist the versions-aware listing into a shared helper** (Finding 2's
+2. **Hoist the versions-aware listing into a shared helper** (Finding 2's
    residual gap) so `test_a_dirty_prefix_would_be_detected` exercises the
    same code path as the production collision check in `real_bucket_ctx`,
    rather than a parallel copy of its call shape.
-4. **Add a `pytest_collection_modifyitems` auto-skip for `real_bucket`** so
+3. **Add a `pytest_collection_modifyitems` auto-skip for `real_bucket`** so
    real-bucket tests fail fast with a clear message (rather than erroring on
    missing credentials/env) when `MMLCT_TEST_BUCKET` is unset, and are
    trivially excludable in CI.
-5. **Run Task 7 on a real uplink.** This gate's uplink (0.12–0.15 MB/s) made
+4. **Run Task 7 on a real uplink.** This gate's uplink (0.12–0.15 MB/s) made
    the scale test infeasible; it needs either a faster connection or a
    multi-hour timeout budget, neither of which was available for this run.
-6. **Consider whether Layer 1 (in-flight CRC32C) should exist above 8 MiB at
+5. **Consider whether Layer 1 (in-flight CRC32C) should exist above 8 MiB at
    all.** `initiate_upload` sets no CRC32C and `put_chunk` sends no checksum
    header, so there is no in-flight checksum for any file over 8 MiB today —
    Layer 2 (post-compose `crc32c_combine` verification) still catches

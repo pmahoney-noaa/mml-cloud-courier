@@ -202,3 +202,89 @@ def test_server_rejects_a_wrong_crc32c(real_bucket_ctx, source):
         f"{excinfo.value}"
     )
     assert get_meta(ctx, name) is None, "a rejected write must leave no object"
+
+
+@pytest.mark.real_bucket
+def test_delete_object_generation_scoping_on_a_versioned_bucket(real_bucket_ctx, tmp_path):
+    """The decisive test for the versioning defect (release-gate Finding 5).
+
+    Only a versioning-enabled bucket can show this contrast, which is why it
+    lives here rather than against the emulator: a generation-less delete
+    only clears the live pointer and leaves the bytes billing forever as a
+    noncurrent version; passing the exact generation performs a real delete.
+    `afsc_mml_ccep` has versioning enabled (confirmed in the gate record).
+    """
+    ctx, run_prefix = real_bucket_ctx
+    src = tmp_path / "genkill.bin"
+    src.write_bytes(b"generation scoping probe")
+
+    # 1. Live-pointer delete (no generation) -- archives, does not remove.
+    live_name = f"{run_prefix}genkill/live-pointer.bin"
+    live_result = upload_single_shot(ctx, str(src), live_name, precondition_generation=0)
+    assert live_result.state == "verified"
+
+    delete_object(ctx, live_name)
+
+    live_versions = list(ctx.client.list_blobs(ctx.bucket, prefix=live_name, versions=True))
+    assert live_versions, (
+        "a generation-less delete on a versioning-enabled bucket must leave a "
+        "noncurrent version behind -- this is the defect the fix closes"
+    )
+
+    # 2. Generation-scoped delete -- genuinely removes the version.
+    scoped_name = f"{run_prefix}genkill/generation-scoped.bin"
+    scoped_result = upload_single_shot(ctx, str(src), scoped_name, precondition_generation=0)
+    assert scoped_result.state == "verified"
+
+    # 2a. A WRONG generation must not touch the object. This specifically
+    # cannot be proven against fake-gcs-server: it does not enforce the
+    # `generation` query param on DELETE at all (confirmed empirically --
+    # it deletes the live object regardless of mismatch). ignore_missing=True
+    # (the default) means the resulting NotFound is swallowed, not raised.
+    delete_object(ctx, scoped_name, generation=scoped_result.generation + 1)
+    assert get_meta(ctx, scoped_name) is not None, (
+        "a mismatched generation must not delete the current object"
+    )
+
+    delete_object(ctx, scoped_name, generation=scoped_result.generation)
+
+    scoped_versions = list(
+        ctx.client.list_blobs(ctx.bucket, prefix=scoped_name, versions=True)
+    )
+    assert scoped_versions == [], (
+        "a generation-scoped delete must remove the version outright, leaving "
+        "no noncurrent copy behind"
+    )
+
+
+@pytest.mark.real_bucket
+def test_compose_slices_leaves_no_noncurrent_temp_versions(real_bucket_ctx, composable):
+    """Product-level proof: compose_slices' sweep must be a real delete.
+
+    Before the fix, every temp swept here would survive as a billable
+    noncurrent version on a versioning-enabled bucket even though the live
+    listing (test_compose_preserves_slice_order) shows nothing.
+    """
+    ctx, run_prefix = real_bucket_ctx
+    name = f"{run_prefix}genkill/product-level.bin"
+
+    specs = plan_slices(THREE_MIB, policy=COMPOSE_POLICY)
+    crcs = []
+    metas = []
+    for spec in specs:
+        crc, meta = upload_slice(ctx, str(composable), name, spec, chunk_size=CHUNK)
+        crcs.append(crc)
+        metas.append(meta)
+
+    combined = combine_all([(c, s.length) for c, s in zip(crcs, specs)])
+    result = compose_slices(
+        ctx, name, metas, combined, THREE_MIB, precondition_generation=0
+    )
+    assert result.state == "verified"
+
+    temp_versions = list(
+        ctx.client.list_blobs(ctx.bucket, prefix=f"{name}.mmlct.tmp/", versions=True)
+    )
+    assert temp_versions == [], (
+        f"compose_slices left noncurrent temp versions behind: {temp_versions}"
+    )

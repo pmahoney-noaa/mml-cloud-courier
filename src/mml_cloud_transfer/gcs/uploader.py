@@ -350,7 +350,7 @@ def compose_slices(
     verify_layer2(meta, total_size, expected_crc32c)
 
     for slice_meta in slice_metas:
-        delete_object(ctx, slice_meta.name)
+        delete_object(ctx, slice_meta.name, generation=slice_meta.generation)
 
     return UploadResult(
         state="verified",
