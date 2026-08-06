@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.metadata
 import os
 import secrets
+import sqlite3
 from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Literal
@@ -17,14 +18,19 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from mml_cloud_transfer.auth.context import context_for_profile
+from mml_cloud_transfer.auth.credential_store import CredentialStore
+from mml_cloud_transfer.auth.preflight import run_preflight
+from mml_cloud_transfer.core.errors import classify
 from mml_cloud_transfer.core.models import Direction, JobStatus
 from mml_cloud_transfer.engine.report import write_report
+from mml_cloud_transfer.gcs.client import make_context
 from mml_cloud_transfer.service.config import ServiceConfig
 from mml_cloud_transfer.service.controller import JobController
 from mml_cloud_transfer.service.security import ensure_token
 from mml_cloud_transfer.service.sse import progress_events
 from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_transfer.store.repository import JobRepository, ProfileInUse
 
 try:
     VERSION = importlib.metadata.version("mml-cloud-transfer")
@@ -42,6 +48,21 @@ class JobSubmission(BaseModel):
     emulator_endpoint: str | None = None
     audit_hash: bool = False
     scheduled_start_at: str | None = None
+
+
+class ProfileCreate(BaseModel):
+    name: str = Field(min_length=1)
+    bucket: str = Field(min_length=1)
+    auth_type: Literal["service_account_key", "oauth_user"]
+    credential: dict
+    project_id: str = ""
+    default_prefix: str = ""
+    emulator_endpoint: str | None = None  # tests only, like JobSubmission's
+
+
+class ProfileCheck(BaseModel):
+    direction: Literal["upload", "download"] | None = None
+    prefix: str | None = None
 
 
 def _normalize_schedule(text: str) -> str:
@@ -70,7 +91,12 @@ def _row_dict(row) -> dict:
     return {key: row[key] for key in row.keys()}
 
 
-def create_app(config: ServiceConfig, controller: JobController) -> FastAPI:
+def create_app(
+    config: ServiceConfig,
+    controller: JobController,
+    *,
+    preflight_fn=run_preflight,
+) -> FastAPI:
     app = FastAPI(title="MML Cloud Transfer", version=VERSION)
     app.state.config = config
     app.state.controller = controller
@@ -88,6 +114,19 @@ def create_app(config: ServiceConfig, controller: JobController) -> FastAPI:
         except LookupError:
             raise HTTPException(
                 status_code=404, detail=f"no job with id {job_id}"
+            ) from None
+
+    def _profile_dict(row) -> dict:
+        data = _row_dict(row)
+        data.pop("credential_ref", None)  # an internal filename, not API surface
+        return data
+
+    def _profile_or_404(repo: JobRepository, profile_id: int):
+        try:
+            return repo.get_profile(profile_id)
+        except LookupError:
+            raise HTTPException(
+                status_code=404, detail=f"no profile with id {profile_id}"
             ) from None
 
     @app.get("/health")
@@ -317,6 +356,124 @@ def create_app(config: ServiceConfig, controller: JobController) -> FastAPI:
             progress_events(config.db_path, job_id, interval=config.sse_interval),
             media_type="text/event-stream",
         )
+
+    @router.post("/profiles", status_code=201)
+    def create_profile(body: ProfileCreate) -> dict:
+        expected = (
+            "service_account" if body.auth_type == "service_account_key"
+            else "authorized_user"
+        )
+        if body.emulator_endpoint is None and body.credential.get("type") != expected:
+            raise HTTPException(status_code=422, detail=(
+                f"credential JSON has type {body.credential.get('type')!r};"
+                f" a {body.auth_type} profile needs {expected!r}"
+            ))
+
+        # Validate by real operations against the target bucket BEFORE
+        # anything is stored (spec: a wrong key or missing IAM grant
+        # surfaces during setup rather than overnight).
+        try:
+            if body.emulator_endpoint:
+                ctx = make_context(
+                    body.bucket, emulator_endpoint=body.emulator_endpoint
+                )
+            else:
+                ctx = make_context(
+                    body.bucket,
+                    credentials_info=body.credential,
+                    project=body.project_id or None,
+                )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=(
+                f"credential rejected before reaching the bucket:"
+                f" {classify(exc).message}"
+            )) from exc
+        result = preflight_fn(ctx, body.default_prefix)
+        if not (result.can_list and result.can_read):
+            raise HTTPException(status_code=400, detail=result.summary())
+
+        if body.emulator_endpoint:
+            auth_type, credential_ref, store = "emulator", body.emulator_endpoint, None
+        else:
+            store = CredentialStore(config.credentials_dir)
+            auth_type, credential_ref = body.auth_type, store.save(body.credential)
+
+        conn, repo = _open()
+        try:
+            try:
+                profile_id = repo.create_profile(
+                    name=body.name, bucket=body.bucket, auth_type=auth_type,
+                    credential_ref=credential_ref, project_id=body.project_id,
+                    default_prefix=body.default_prefix,
+                )
+            except sqlite3.IntegrityError:
+                if store is not None:
+                    store.delete(credential_ref)
+                raise HTTPException(status_code=409, detail=(
+                    f"a profile named {body.name!r} already exists"
+                )) from None
+            repo.set_profile_validated(profile_id)
+            row = repo.get_profile(profile_id)
+        finally:
+            conn.close()
+        return {
+            **_profile_dict(row),
+            "preflight": asdict(result),
+            "summary": result.summary(),
+        }
+
+    @router.get("/profiles")
+    def list_profiles() -> list[dict]:
+        conn, repo = _open()
+        try:
+            return [_profile_dict(row) for row in repo.list_profiles()]
+        finally:
+            conn.close()
+
+    @router.post("/profiles/{profile_id}/check")
+    def check_profile(profile_id: int, body: ProfileCheck) -> dict:
+        conn, repo = _open()
+        try:
+            row = _profile_or_404(repo, profile_id)
+        finally:
+            conn.close()
+        try:
+            ctx = context_for_profile(row, CredentialStore(config.credentials_dir))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=(
+                f"stored credential could not be loaded: {classify(exc).message}"
+            )) from exc
+        prefix = body.prefix if body.prefix is not None else row["default_prefix"]
+        result = preflight_fn(ctx, prefix)
+        if body.direction is not None:
+            ok = result.ok_for(Direction(body.direction))
+        else:
+            ok = result.can_list and result.can_read
+        if ok:
+            conn, repo = _open()
+            try:
+                repo.set_profile_validated(profile_id)
+            finally:
+                conn.close()
+        return {"ok": ok, "summary": result.summary(), "preflight": asdict(result)}
+
+    @router.delete("/profiles/{profile_id}")
+    def delete_profile(profile_id: int) -> dict:
+        conn, repo = _open()
+        try:
+            row = _profile_or_404(repo, profile_id)
+            try:
+                repo.delete_profile(profile_id)
+            except ProfileInUse as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from None
+        finally:
+            conn.close()
+        # Blob removal AFTER the row is gone: an in-use profile must keep
+        # its credential. delete() is idempotent, so a crash between the
+        # two leaves only an orphaned encrypted blob, never a broken profile.
+        if row["auth_type"] in ("service_account_key", "oauth_user") and row["credential_ref"]:
+            CredentialStore(config.credentials_dir).delete(row["credential_ref"])
+        return {"deleted": profile_id}
 
     app.include_router(router)
     return app

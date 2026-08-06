@@ -1,6 +1,4 @@
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa as crypto_rsa
 
 from mml_cloud_transfer.gcs.client import GcsContext, make_context
 
@@ -30,27 +28,6 @@ def test_endpoint_never_has_a_trailing_slash():
     # Pure string behavior — building the context makes no network calls.
     ctx = make_context("b", emulator_endpoint="http://127.0.0.1:1/")
     assert ctx.endpoint == "http://127.0.0.1:1"
-
-
-@pytest.fixture(scope="module")
-def sa_key_json() -> dict:
-    """A syntactically valid service-account key: real RSA PEM, fake
-    identity. Construction-only tests — nothing here talks to Google."""
-    key = crypto_rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    pem = key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode("ascii")
-    return {
-        "type": "service_account",
-        "project_id": "mmlct-test",
-        "private_key_id": "0" * 40,
-        "private_key": pem,
-        "client_email": "probe@mmlct-test.iam.gserviceaccount.com",
-        "client_id": "0",
-        "token_uri": "https://oauth2.googleapis.com/token",
-    }
 
 
 def test_make_context_from_service_account_info(sa_key_json):
