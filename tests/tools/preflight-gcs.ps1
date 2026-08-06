@@ -188,8 +188,15 @@ if (-not $script:Failed) {
             # Deleting is not cleanup hygiene here — it is a check. A retention
             # policy or object hold refuses deletes, and the gate's fixture
             # teardown would then fail the whole session after writing 2.6 GiB.
-            Invoke-Gcloud storage rm --recursive "gs://$Bucket/$probePrefix" | Out-Null
-            $code, $survivors = Invoke-Gcloud storage ls --recursive "gs://$Bucket/$probePrefix"
+            #
+            # --all-versions on both calls: a plain `rm` on a versioning-enabled
+            # bucket is a live-pointer delete that leaves a noncurrent version
+            # behind, and a live-only `ls` cannot see what survived — the probe
+            # would print "deleted" while three billable objects remain. This is
+            # the same lesson the fixture teardown already learned; the probe
+            # must apply it too.
+            Invoke-Gcloud storage rm --recursive --all-versions "gs://$Bucket/$probePrefix" | Out-Null
+            $code, $survivors = Invoke-Gcloud storage ls --recursive --all-versions "gs://$Bucket/$probePrefix"
             if ($survivors -and $survivors -notmatch "One or more URLs matched no objects") {
                 Report-Fail "probe objects could not be deleted: $survivors" `
                             "check for a retention policy, object hold, or missing storage.objects.delete"

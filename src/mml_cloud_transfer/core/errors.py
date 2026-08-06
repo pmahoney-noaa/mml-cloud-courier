@@ -11,6 +11,7 @@ keeps ``core`` pure and the tests dependency-free.
 from __future__ import annotations
 
 import errno
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -151,10 +152,15 @@ def _from_http_status(code: int, message: str = "") -> ErrorCategory | None:
     # unrelated 400 against an object path like checksums/manifest.txt or
     # md5sums.txt would also contain "checksum"/"md5" and must not be
     # reclassified — a malformed request is not a corrupted transfer.
-    lowered = message.lower()
-    if code == 400 and any(
-        token in lowered for token in ("crc32c", "checksum", "md5")
-    ) and ("match" in lowered or "mismatch" in lowered):
+    #
+    # google-api-core formats errors as "<code> <METHOD> <url>: <body>", and
+    # the URL carries the query string -- including ifGenerationMatch, whose
+    # literal "match" would otherwise satisfy the mismatch test below on any
+    # precondition-guarded request. Object names in the path can likewise
+    # supply "crc32c"/"md5"/"checksum". Judge the body only.
+    body = re.sub(r"https?://\S+", " ", message).lower()
+    if code == 400 and any(t in body for t in ("crc32c", "checksum", "md5")) \
+            and "match" in body:
         return ErrorCategory.CHECKSUM_MISMATCH
     return None
 

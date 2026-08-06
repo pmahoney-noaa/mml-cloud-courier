@@ -46,9 +46,26 @@ performs accumulates a billable noncurrent version forever:
   {"action": {"type": "Delete"},
    "condition": {"age": 7, "matchesPrefix": ["scratch/mmlct-gate/"]}},
   {"action": {"type": "Delete"},
-   "condition": {"isLive": false, "numNewerVersions": 1, "daysSinceNoncurrentTime": 7}}
+   "condition": {"isLive": false, "numNewerVersions": 1, "daysSinceNoncurrentTime": 7,
+                 "matchesPrefix": ["scratch/mmlct-gate/", "scratch/mmlct-preflight/"]}}
 ]}}
 ```
+
+**Warning — read before applying.** `gcloud storage buckets update --lifecycle-file`
+**replaces the bucket's entire lifecycle configuration**; it does not merge. Both
+rules above are scoped with `matchesPrefix` to the gate's own scratch paths
+deliberately — the second rule (noncurrent-version cleanup) has no prefix filter
+in the original spec draft, and applying that unscoped version to `afsc_mml_ccep`
+would delete noncurrent versions **bucket-wide**, including under `data/` and
+`marine-surveys-raw/`. If versioning is enabled there as an overwrite safety net
+for live research data, an unscoped rule silently dismantles that net — this is
+the only path in this entire gate by which anything outside the gate's own
+prefix could be destroyed. Before applying, whoever holds bucket-admin must
+first read the bucket's *current* lifecycle configuration and merge these two
+rules into it — nobody on the operator account used for this gate can do that
+enumeration themselves, since `storage.buckets.get` is denied (see Findings).
+Applying this file as-is, without merging, would also delete any lifecycle
+rules the bucket already has.
 
 Apply with `gcloud storage buckets update gs://<bucket> --lifecycle-file=rule.json`.
 Not applied for this run — `storage.buckets.get`/`bucketsUpdate` are outside
@@ -77,13 +94,13 @@ a result.
 | Test | Proves | Why the emulator cannot |
 | --- | --- | --- |
 | `test_run_prefix_is_unique_and_well_formed` | Runs cannot collide | — (fixture self-check) |
-| `test_a_dirty_prefix_would_be_detected` | The fixture's virgin-prefix check (in `real_bucket_ctx` setup) sees noncurrent versions, not just live objects — using the exact `list_blobs(..., versions=True)` call the check makes, it proves a `versions=True` listing still finds a probe object after its live version is deleted, which a live-only listing would miss | — (fixture self-check; see Findings for why this replaced `test_the_run_prefix_starts_empty`, and for a second finding on the same test) |
+| `test_a_dirty_prefix_would_be_detected` | A `list_blobs(..., versions=True)` listing — the same call *shape* the fixture's collision check uses — still finds a probe object after its live version is deleted, which a live-only listing would miss. **It replicates that call shape inline; it does not invoke the fixture's actual collision check** in `real_bucket_ctx` setup (`tests/conftest.py`), so it cannot catch a regression that drops `versions=True` from the production check itself | — (fixture self-check; see Findings for why this replaced `test_the_run_prefix_starts_empty`, and for a second finding on the same test) |
 | `test_objects_written_under_the_prefix_are_reachable` | Credentials can write and read | — (fixture self-check) |
 | `test_status_query_returns_the_servers_committed_offset` | Resume reads the server's real committed offset | fake-gcs-server finalizes a truncated upload on the `bytes */total` probe |
 | `test_compose_preserves_slice_order` | Layer 2 detects a mis-stitched object; `crc32c_combine` matches real compose | emulator compose is not the real implementation |
 | `test_stale_precondition_is_a_conflict_on_real_gcs` | Concurrent writers cannot silently clobber each other | emulator precondition enforcement is unverified |
 | `test_server_rejects_a_wrong_crc32c` | Layer 1 — GCS refuses a corrupted write | emulator does not validate CRC32C server-side |
-| `test_real_bucket_round_trip` (`tests/cli/test_interrupt_resume.py`) | A full transfer + resume + download round-trip reproduces the source bytes against real GCS | shrunken test-only size policy, not the scale claim below |
+| `test_real_bucket_round_trip` (`tests/cli/test_interrupt_resume.py`) | An upload-then-download round-trip reproduces the source bytes against real GCS. **No resume**: the test runs `transfer` then `transfer --direction download` only — no kill, no `mmlct resume`, no `--job-id` | shrunken test-only size policy, not the scale claim below |
 
 The ninth test in the spec's original table, `test_multi_gigabyte_kill_and_resume`
 (the overnight promise at real 1 GiB slices), exists and is committed but was
@@ -133,6 +150,19 @@ Facts, all measured on this workstation on 2026-08-05:
     by the passing fast-gate test is far smaller).
   - Kill-and-resume across a session with a multi-minute-plus lifetime.
   - The report/verdict path (COMPLETE/INCOMPLETE audit) at real scale.
+
+**Consequently, this gate executed ZERO kill-and-resume against real GCS at
+any scale.** `test_real_bucket_round_trip` (see the table above) is an
+upload-then-download round-trip with no interruption and no resume call.
+Task 7 — the only test in this suite that kills a transfer mid-flight and
+resumes it against real GCS — never completed. The closest evidence this gate
+has for the resume path is `test_status_query_returns_the_servers_committed_offset`,
+which proves in-process session continuation only (the server's committed
+offset is read correctly and a resumed upload does not resend already-committed
+bytes) — it does not kill a process, does not go through `mmlct resume`, and
+proves nothing about session survival across a real interruption. Whether
+kill-and-resume actually works at any scale against real GCS remains unverified
+by this gate.
 
 This is an environment limitation (uplink bandwidth), not a defect found in
 the product. Running the scale test to completion needs either a faster
@@ -272,6 +302,19 @@ noncurrent version for the fixture's teardown to sweep, and still reasons
 only about sub-paths it owns, so it remains order-independent. The now-unused
 `list_prefix` import was dropped.
 
+**Residual gap, stated plainly:** this rewritten test still does not invoke
+the fixture's actual collision check (the `versions=True` listing inside
+`real_bucket_ctx` setup in `tests/conftest.py`). It duplicates that same call
+shape inline in the test file instead. That proves the *mechanism* — a
+`versions=True` listing genuinely sees noncurrent versions a live-only listing
+would miss — but it does not prove the *production check* still uses that
+mechanism. If someone edited `real_bucket_ctx` and dropped `versions=True`
+from its own listing call, this test would keep passing; nothing in this
+suite would catch that regression. Follow-up: hoist the listing into a shared
+helper (e.g. `_list_including_noncurrent(ctx, prefix)`) used by both the
+production check and this test, so the test exercises the real code path
+instead of a parallel copy of it.
+
 Verification after this fix, again against the exact documented command with
 default collection order:
 
@@ -303,6 +346,91 @@ this gate's cleanup. Storage class was not independently checked; if a
 future run needs to confirm it is STANDARD (rather than, say, an
 inadvertently-configured cold class incurring early-deletion charges), that
 needs either bucket-admin access or a request to whoever holds it.
+
+### 5. `delete_object()` is a live-pointer delete, so sliced uploads double-bill storage indefinitely on a versioning-enabled destination
+
+Recorded here because this record is what someone will consult to answer "can
+Plan 2 ship?" — this is a real product defect the run surfaced, not a gate
+artifact.
+
+`src/mml_cloud_transfer/gcs/objects.py::delete_object()` deletes through a
+fresh `Blob` handle with no generation set — the same live-pointer delete
+shape identified in Finding 2, except here it is in production code, not a
+test. Its only production caller is `compose_slices()`
+(`src/mml_cloud_transfer/gcs/uploader.py`), which sweeps the per-slice temp
+objects after a successful compose.
+
+On a **versioning-enabled destination bucket**, that live-pointer delete does
+not remove the swept temp — it archives it as a noncurrent version, which
+keeps billing. Because a sliced upload writes its full content twice (once
+per slice as a temp object, then again as the composed object), this means a
+500 GB sliced file costs **1 TB** of storage indefinitely, and a 20 TB dataset
+costs **40 TB** — until something else purges those noncurrent versions. It is
+also invisible in normal operation: live listings show nothing under the
+object's name, and the job's audit reports `COMPLETE`, because compose and
+delete both returned success.
+
+**The parent spec's suggested `*.mmlct.tmp/` lifecycle rule does not mitigate
+this, for two independent reasons:**
+
+1. `slice_temp_name()` (`src/mml_cloud_transfer/gcs/uploader.py`) puts
+   `.mmlct.tmp/` in the **middle** of the object name —
+   `<object_name>.mmlct.tmp/<nnnn>` — not as a shared prefix. GCS lifecycle
+   `matchesPrefix` conditions match only literal prefixes; there is no
+   wildcard support. Because `<object_name>` varies per file, the temps for
+   different files share no common prefix, so a lifecycle rule of the shape
+   the spec describes (`matchesPrefix: ["*.mmlct.tmp/"]` or similar) cannot
+   actually be written against this naming scheme.
+2. Even if a matching rule could be written, a lifecycle `Delete` action
+   applied to a **live** object in a versioning-enabled bucket only archives
+   it — same as the code path in question — so the underlying bytes would
+   keep billing as a noncurrent version regardless.
+
+**The fix is one line.** `compose_slices()` already holds each slice temp's
+`ObjectMeta` (which carries `.generation`) before it calls `delete_object()`
+on it — the generation is already in hand, it is just not being passed
+through. This is **out of scope for this plan**, which forbids `src/` changes
+beyond the error-taxonomy mapping (Item 1 of this fix wave), so it is not
+fixed here.
+
+**Severity: does not block this branch.** It must be resolved before Plan 2
+ships to any customer bucket with versioning enabled, since that is exactly
+the configuration this gate ran against (`afsc_mml_ccep`) and exactly the
+configuration under which the defect is both active and invisible.
+
+## Follow-ups
+
+Ranked by what would most reduce risk before Plan 2 ships broadly. None of
+these were fixed in this gate; they are recorded here so they are not lost.
+
+1. **Fix `delete_object()` to a generation-scoped delete** (Finding 5). Same
+   fix already applied to the test helper in Finding 2 — pass the known
+   generation through from `compose_slices()`'s `ObjectMeta` instead of
+   deleting through a fresh, generation-less `Blob` handle. Highest priority:
+   this is a silent, unbounded storage-cost defect on any versioned
+   destination bucket.
+2. **Give `tests/gcs/test_uploader_sliced.py` distinct per-slice content.**
+   Its `source` fixture writes `bytes(range(256)) * 4096`, so every slice is
+   byte-identical. A mis-ordered `compose` (e.g. slices 1 and 2 swapped) would
+   still produce a byte-correct object and pass every existing assertion —
+   no test anywhere in this suite can currently catch a slice-ordering
+   regression in `upload_sliced`.
+3. **Hoist the versions-aware listing into a shared helper** (Finding 2's
+   residual gap) so `test_a_dirty_prefix_would_be_detected` exercises the
+   same code path as the production collision check in `real_bucket_ctx`,
+   rather than a parallel copy of its call shape.
+4. **Add a `pytest_collection_modifyitems` auto-skip for `real_bucket`** so
+   real-bucket tests fail fast with a clear message (rather than erroring on
+   missing credentials/env) when `MMLCT_TEST_BUCKET` is unset, and are
+   trivially excludable in CI.
+5. **Run Task 7 on a real uplink.** This gate's uplink (0.12–0.15 MB/s) made
+   the scale test infeasible; it needs either a faster connection or a
+   multi-hour timeout budget, neither of which was available for this run.
+6. **Consider whether Layer 1 (in-flight CRC32C) should exist above 8 MiB at
+   all.** `initiate_upload` sets no CRC32C and `put_chunk` sends no checksum
+   header, so there is no in-flight checksum for any file over 8 MiB today —
+   Layer 2 (post-compose `crc32c_combine` verification) still catches
+   corruption, but only after the fact, not during upload.
 
 ## Teardown
 
