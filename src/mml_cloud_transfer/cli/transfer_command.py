@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from mml_cloud_transfer.core.models import Direction, JobStatus
-from mml_cloud_transfer.core.paths import display_path
+from mml_cloud_transfer.core.paths import display_path, resolve_mapped_drive
 from mml_cloud_transfer.core.slicing import SizePolicy
 from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.engine.runner import EngineOptions, run_job, scan_remote
@@ -133,6 +133,13 @@ def _watch_until_settled(client: ApiClient, job_id: int) -> JobStatus:
 
 
 def run_transfer_via_service(args) -> int:
+    resolved = resolve_mapped_drive(args.source)
+    if resolved != args.source:
+        print(
+            f"{args.source} is a mapped drive -> submitting {resolved}"
+            " (the service cannot see your drive letters)"
+        )
+        args.source = resolved
     client = _api_client(args)
     job_id = client.submit_job({
         "name": args.name,

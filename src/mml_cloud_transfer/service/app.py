@@ -6,6 +6,7 @@ thread-bound and requests land on arbitrary pool threads."""
 
 from __future__ import annotations
 
+import getpass
 import importlib.metadata
 import os
 import secrets
@@ -23,6 +24,7 @@ from mml_cloud_transfer.auth.credential_store import CredentialStore
 from mml_cloud_transfer.auth.preflight import run_preflight
 from mml_cloud_transfer.core.errors import classify
 from mml_cloud_transfer.core.models import Direction, JobStatus
+from mml_cloud_transfer.core.paths import display_path, extended_path, is_unc
 from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.gcs.client import make_context
 from mml_cloud_transfer.service.config import ServiceConfig
@@ -92,6 +94,33 @@ def _row_dict(row) -> dict:
     return {key: row[key] for key in row.keys()}
 
 
+def _service_identity() -> str:
+    try:
+        domain = os.environ.get("USERDOMAIN", "")
+        user = getpass.getuser()
+        return f"{domain}\\{user}" if domain else user
+    except Exception:  # session-0 oddities must not break an error message
+        return "the service account"
+
+
+def _unreachable_detail(root: str) -> str:
+    where = display_path(root)
+    base = f"{where} is not reachable by the service (running as {_service_identity()})"
+    if is_unc(root):
+        return base + (
+            ": check the share path and that this account has been granted"
+            " access; folders on a per-user VPN are not visible to the service"
+        )
+    drive = root[:2] + "\\" if len(root) >= 2 and root[1] == ":" else None
+    if drive is not None and not os.path.exists(drive):
+        return base + (
+            f": drive {root[:2]} does not exist for the service — if it is a"
+            " mapped drive, use the full \\\\server\\share form (the CLI and"
+            " GUI resolve mapped drives automatically)"
+        )
+    return f"source folder not found or not readable by the service account: {where}"
+
+
 def create_app(
     config: ServiceConfig,
     controller: JobController,
@@ -147,19 +176,17 @@ def create_app(
                 f" not {root!r}"
             ))
         if submission.direction == "upload":
-            if not os.path.isdir(submission.source_root):
-                raise HTTPException(status_code=400, detail=(
-                    "source folder not found or not readable by the service"
-                    f" account: {submission.source_root}"
-                ))
+            if not os.path.isdir(extended_path(root)):
+                raise HTTPException(status_code=400, detail=_unreachable_detail(root))
         else:
             # Spec: reachability is tested at creation, under the service's
-            # own identity. Creating the destination folder IS that test.
+            # own identity. Creating the destination folder IS that test —
+            # via the extended path so >260-char trees work.
             try:
-                os.makedirs(submission.source_root, exist_ok=True)
+                os.makedirs(extended_path(root), exist_ok=True)
             except OSError as exc:
                 raise HTTPException(status_code=400, detail=(
-                    f"destination folder cannot be created by the service: {exc}"
+                    f"{_unreachable_detail(root)} ({exc.strerror or exc})"
                 )) from exc
 
         scheduled = (

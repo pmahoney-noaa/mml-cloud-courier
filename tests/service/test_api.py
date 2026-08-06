@@ -213,3 +213,65 @@ def test_bridge_config_submission_shape_is_pinned(api, tmp_path):
         assert profile["bucket"] == "b"
     finally:
         conn.close()
+
+
+def _free_drive_letter() -> str:
+    import os
+    import string
+
+    for letter in reversed(string.ascii_uppercase):
+        if not os.path.exists(f"{letter}:\\"):
+            return letter
+    pytest.skip("every drive letter exists on this machine")
+
+
+def test_unreachable_drive_letter_explains_mapped_drives(api):
+    """A drive that does not exist for the service is (almost always) the
+    user's mapped drive. The error must teach, not just refuse."""
+    client, _, _ = api
+    response = client.post("/jobs", json={
+        "name": "j", "direction": "upload",
+        "source_root": f"{_free_drive_letter()}:\\imaging\\run47", "bucket": "b",
+    })
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "running as" in detail
+    assert "mapped drive" in detail
+
+
+def test_unreachable_unc_share_names_the_service_identity(api, monkeypatch):
+    """UNC checks against a dead host can hang for many seconds — the
+    filesystem answer is stubbed; the MESSAGE is what this test pins."""
+    import os
+
+    client, _, _ = api
+    real_isdir = os.path.isdir
+    monkeypatch.setattr(
+        os.path, "isdir",
+        lambda p: False if "unreachable-host" in str(p) else real_isdir(p),
+    )
+    response = client.post("/jobs", json={
+        "name": "j", "direction": "upload",
+        "source_root": r"\\unreachable-host\share\data", "bucket": "b",
+    })
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "running as" in detail
+    assert "VPN" in detail
+
+
+def test_deep_download_destination_is_created_via_extended_path(api, tmp_path):
+    """Spec: \\\\?\\-prefixed paths so >260-char destinations do not fail."""
+    client, _, _ = api
+    deep = tmp_path
+    for i in range(12):
+        deep = deep / ("d" * 24)
+    assert len(str(deep)) > 260
+    response = client.post("/jobs", json={
+        "name": "j", "direction": "download",
+        "source_root": str(deep), "bucket": "b",
+    })
+    assert response.status_code == 201, response.text
+    import os
+    from mml_cloud_transfer.core.paths import extended_path
+    assert os.path.isdir(extended_path(str(deep)))
