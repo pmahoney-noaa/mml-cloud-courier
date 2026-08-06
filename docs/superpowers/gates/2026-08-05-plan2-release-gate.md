@@ -488,13 +488,27 @@ items were fixed in this gate; they are recorded here so they are not lost.
    residual gap) so `test_a_dirty_prefix_would_be_detected` exercises the
    same code path as the production collision check in `real_bucket_ctx`,
    rather than a parallel copy of its call shape.
-3. **Add a `pytest_collection_modifyitems` auto-skip for `real_bucket`** so
+3. ~~**Guard concurrent runs of the same job.**~~ **DONE 2026-08-06** — `run_job()`
+   now takes a per-job OS file lock (`engine/joblock.py`), so a second
+   `mmlct resume --job-id N` exits 3 with a clear message instead of racing the
+   first. Chosen over a DB flag because the OS releases the lock when a process
+   dies, and a killed transfer is a normal event here. Note the residual: this is
+   per-JOB, and `mmlct transfer` always creates a NEW job id — so an operator who
+   re-issues `transfer` rather than `resume` after a crash still gets two
+   processes composing to the same destination objects. Guarding that needs a
+   same-`(source_root, dest_prefix, bucket)` check at job creation, which is a
+   separate change.
+4. **Add a `pytest_collection_modifyitems` auto-skip for `real_bucket`** so
    real-bucket tests fail fast with a clear message (rather than erroring on
    missing credentials/env) when `MMLCT_TEST_BUCKET` is unset, and are
    trivially excludable in CI.
-4. ~~**Run Task 7 on a real uplink.**~~ **DONE 2026-08-06** — passed in 227.91s
+5. ~~**Run Task 7 on a real uplink.**~~ **DONE 2026-08-06** — passed in 227.91s
    on a 10–12 MB/s link. See "Task 7 — passed".
-5. **Consider whether Layer 1 (in-flight CRC32C) should exist above 8 MiB at
+6. **Route `joblock.py`'s `db_path.parent.mkdir()` through `extended_path()`.**
+   Every other path in that function goes through it; this one does not. Only
+   reachable when `sqlite3.connect()` on the same path would already have failed,
+   so it is a tidiness gap rather than a live bug.
+7. **Consider whether Layer 1 (in-flight CRC32C) should exist above 8 MiB at
    all.** `initiate_upload` sets no CRC32C and `put_chunk` sends no checksum
    header, so there is no in-flight checksum for any file over 8 MiB today —
    Layer 2 (post-compose `crc32c_combine` verification) still catches
