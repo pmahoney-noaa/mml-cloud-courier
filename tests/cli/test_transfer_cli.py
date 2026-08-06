@@ -2,16 +2,51 @@ import json
 
 import pytest
 
+import mml_cloud_transfer.cli.transfer_command as transfer_command
 from mml_cloud_transfer.cli.__main__ import main
 from mml_cloud_transfer.cli.transfer_command import (
     _finish_via_service,
     _watch_until_settled,
     parse_size_policy,
 )
-from mml_cloud_transfer.core.models import JobStatus
+from mml_cloud_transfer.core.models import Direction, JobStatus
 from mml_cloud_transfer.core.slicing import SizePolicy
+from mml_cloud_transfer.engine.joblock import JobAlreadyRunning
+from mml_cloud_transfer.store.db import connect
+from mml_cloud_transfer.store.repository import JobRepository
 
 POLICY_ARG = "65536,262144,262144"
+
+
+def test_resume_reports_job_already_running_as_a_clean_error(tmp_path, monkeypatch, capsys):
+    """CRITICAL: `resume` against a job whose lock another process already
+    holds must print an actionable message and exit 3 — not a traceback,
+    and not the generic exit code 2 used for ValueError."""
+    db = tmp_path / "jobs.db"
+    conn = connect(db)
+    try:
+        job_id = JobRepository(conn).create_job(
+            name="locked", direction=Direction.UPLOAD,
+            source_root=str(tmp_path), dest_prefix="p",
+        )
+    finally:
+        conn.close()
+
+    def fake_run_job(*args, **kwargs):
+        raise JobAlreadyRunning(
+            f"job {job_id} is already running in another process"
+            f" (lock: {db}.job-{job_id}.lock). If that process is gone, retry."
+        )
+
+    monkeypatch.setattr(transfer_command, "run_job", fake_run_job)
+
+    code = main([
+        "resume", "--db", str(db), "--job-id", str(job_id),
+        "--bucket", "irrelevant", "--emulator-endpoint", "http://127.0.0.1:1",
+    ])
+    out = capsys.readouterr().out
+    assert code == 3
+    assert f"job {job_id} is already running" in out
 
 
 class _StubReportEventsClient:

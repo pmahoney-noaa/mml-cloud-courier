@@ -21,6 +21,7 @@ from mml_cloud_transfer.cli.transfer_command import (
     run_status,
     run_transfer,
 )
+from mml_cloud_transfer.engine.joblock import JobAlreadyRunning
 
 
 def add_service_options(sub):
@@ -157,6 +158,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError as exc:
             print(str(exc))
             return 2
+        except JobAlreadyRunning as exc:
+            print(str(exc))
+            return 3
     if args.command == "status":
         return _dispatch_via_service(run_status, args)
     if args.command == "report":

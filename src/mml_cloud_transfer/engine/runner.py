@@ -36,6 +36,7 @@ from mml_cloud_transfer.core.models import (
 from mml_cloud_transfer.core.paths import extended_path
 from mml_cloud_transfer.core.retry import QUARANTINE_ATTEMPTS, RetrySchedule
 from mml_cloud_transfer.core.slicing import SizePolicy, plan_slices
+from mml_cloud_transfer.engine.joblock import job_run_lock
 from mml_cloud_transfer.gcs.downloader import download_file
 from mml_cloud_transfer.gcs.objects import get_meta, list_prefix
 from mml_cloud_transfer.gcs.uploader import (
@@ -398,65 +399,66 @@ def run_job(
     options = options or EngineOptions()
     rng = rng or random.Random()
 
-    conn = connect(db_path)
-    try:
-        repo = JobRepository(conn)
-        job = dict(repo.get_job(job_id))
-        repo.start_job(job_id)
-        repo.record_event(job_id, "run_started")
-        repo.reset_stale_transfers(job_id)
+    with job_run_lock(db_path, job_id):
+        conn = connect(db_path)
+        try:
+            repo = JobRepository(conn)
+            job = dict(repo.get_job(job_id))
+            repo.start_job(job_id)
+            repo.record_event(job_id, "run_started")
+            repo.reset_stale_transfers(job_id)
 
-        paused = False
-        stopped = False
-        for _pass in range(2):  # second pass picks up files marked `changed`
-            pending = [dict(r) for r in repo.iter_pending_files(job_id)]
-            if _pass == 1:
-                pending = [
-                    r for r in pending if r["state"] == FileState.CHANGED.value
-                ]
-            if not pending:
-                break
-            with ThreadPoolExecutor(max_workers=options.file_workers) as pool:
-                futures = [
-                    pool.submit(
-                        _process_file, db_path, ctx, job, row, options, sleep, rng
-                    )
-                    for row in pending
-                ]
-                for future in futures:
-                    try:
-                        future.result()
-                    except JobPaused as exc:
-                        repo.record_event(job_id, "run_paused", str(exc)[:200])
-                        pool.shutdown(cancel_futures=True)
-                        paused = True
-                        break
-                    except TransferStopped:
-                        repo.record_event(job_id, "run_stopped")
-                        pool.shutdown(cancel_futures=True)
-                        stopped = True
-                        break
-            if paused or stopped:
-                break
+            paused = False
+            stopped = False
+            for _pass in range(2):  # second pass picks up files marked `changed`
+                pending = [dict(r) for r in repo.iter_pending_files(job_id)]
+                if _pass == 1:
+                    pending = [
+                        r for r in pending if r["state"] == FileState.CHANGED.value
+                    ]
+                if not pending:
+                    break
+                with ThreadPoolExecutor(max_workers=options.file_workers) as pool:
+                    futures = [
+                        pool.submit(
+                            _process_file, db_path, ctx, job, row, options, sleep, rng
+                        )
+                        for row in pending
+                    ]
+                    for future in futures:
+                        try:
+                            future.result()
+                        except JobPaused as exc:
+                            repo.record_event(job_id, "run_paused", str(exc)[:200])
+                            pool.shutdown(cancel_futures=True)
+                            paused = True
+                            break
+                        except TransferStopped:
+                            repo.record_event(job_id, "run_stopped")
+                            pool.shutdown(cancel_futures=True)
+                            stopped = True
+                            break
+                if paused or stopped:
+                    break
 
-        if stopped:
-            # Deliberately NOT finish_job: a stop is an interruption, not an
-            # outcome. `pending` + run_stopped puts the job exactly where the
-            # startup-recovery / resume path expects to find it.
-            repo.set_job_status(job_id, JobStatus.PENDING)
-            return JobStatus.PENDING
+            if stopped:
+                # Deliberately NOT finish_job: a stop is an interruption, not an
+                # outcome. `pending` + run_stopped puts the job exactly where the
+                # startup-recovery / resume path expects to find it.
+                repo.set_job_status(job_id, JobStatus.PENDING)
+                return JobStatus.PENDING
 
-        if paused:
-            repo.finish_job(job_id, JobStatus.PAUSED)
-            repo.record_event(job_id, "run_finished", JobStatus.PAUSED.value)
-            return JobStatus.PAUSED
+            if paused:
+                repo.finish_job(job_id, JobStatus.PAUSED)
+                repo.record_event(job_id, "run_finished", JobStatus.PAUSED.value)
+                return JobStatus.PAUSED
 
-        if options.audit:
-            _audit(ctx, repo, job)
+            if options.audit:
+                _audit(ctx, repo, job)
 
-        status = repo.job_verdict(job_id)
-        repo.finish_job(job_id, status)
-        repo.record_event(job_id, "run_finished", status.value)
-        return status
-    finally:
-        conn.close()
+            status = repo.job_verdict(job_id)
+            repo.finish_job(job_id, status)
+            repo.record_event(job_id, "run_finished", status.value)
+            return status
+        finally:
+            conn.close()
