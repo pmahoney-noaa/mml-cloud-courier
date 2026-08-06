@@ -517,3 +517,35 @@ def test_stall_wait_interrupts_on_service_stop(config):
     controller.service_stop.set()
     worker._stall_wait(threading.Event())
     assert slept == []
+
+
+def test_worker_context_builds_from_a_dpapi_profile(tmp_path):
+    """A profile-backed job must reach make_context with the decrypted
+    payload — the unattended-after-logoff path."""
+    import sys
+    if sys.platform != "win32":
+        pytest.skip("DPAPI is Windows-only")
+    from mml_cloud_transfer.auth.credential_store import CredentialStore
+    from mml_cloud_transfer.service.config import load_config
+    from mml_cloud_transfer.service.controller import JobController
+    from mml_cloud_transfer.service.worker import QueueWorker
+
+    config = load_config(tmp_path / "data")
+    payload = {
+        "type": "authorized_user", "client_id": "c", "client_secret": "s",
+        "refresh_token": "rt", "token_uri": "https://x/token",
+    }
+    ref = CredentialStore(config.credentials_dir).save(payload)
+    seen = {}
+
+    def recorder(bucket, **kwargs):
+        seen.update({"bucket": bucket, **kwargs})
+        return "CTX"
+
+    worker = QueueWorker(config, JobController(), make_context_fn=recorder)
+    ctx = worker._context({
+        "bucket": "bkt", "auth_type": "oauth_user",
+        "credential_ref": ref, "project_id": "",
+    })
+    assert ctx == "CTX"
+    assert seen["credentials_info"] == payload
