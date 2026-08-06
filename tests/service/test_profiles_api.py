@@ -244,3 +244,25 @@ def test_an_upload_that_cannot_write_is_rejected_with_the_summary(tmp_path):
         "source_root": str(tmp_path / "dl"), "profile": "ro",
     })
     assert down.status_code == 201, down.text
+
+
+@pytest.mark.emulator
+def test_resubmitting_the_same_destination_is_409(emulator_api, tmp_path):
+    client, config, create = emulator_api
+    create(name="lab")
+    src = tmp_path / "src"; src.mkdir()
+    payload = {
+        "name": "j", "direction": "upload", "source_root": str(src),
+        "profile": "lab",
+    }
+    first = client.post("/jobs", json=payload)
+    assert first.status_code == 201
+    second = client.post("/jobs", json=payload)
+    assert second.status_code == 409
+    detail = second.json()["detail"]
+    assert str(first.json()["job_id"]) in detail
+    assert "resume" in detail
+
+    # Cancelling the first job releases the destination.
+    client.post(f"/jobs/{first.json()['job_id']}/cancel")
+    assert client.post("/jobs", json=payload).status_code == 201

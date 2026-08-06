@@ -321,3 +321,32 @@ def test_transfer_profile_requires_service_url(tmp_path, capsys, monkeypatch):
     ])
     assert code == 2
     assert "--service-url" in capsys.readouterr().out
+
+
+def test_direct_mode_reissue_after_crash_is_refused(tmp_path, capsys, monkeypatch):
+    """The release-gate residual, closed: re-issuing `transfer` (not
+    `resume`) for a destination an active job owns exits 3 with the
+    resume command — no second writer. The guard must fire before any
+    GCS context is built, so this needs no credentials and no network."""
+    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)  # force direct mode
+
+    db = tmp_path / "jobs.db"
+    src = tmp_path / "src"; src.mkdir()
+    (src / "f.bin").write_bytes(b"x")
+    conn = connect(db)
+    try:
+        repo = JobRepository(conn)
+        pid = repo.create_profile(name="p", bucket="bkt", auth_type="adc")
+        job_id = repo.create_job(name="j", direction=Direction.UPLOAD,
+                                 source_root=str(src), dest_prefix="pre",
+                                 profile_id=pid)
+    finally:
+        conn.close()
+
+    code = main([
+        "transfer", "--db", str(db), "--name", "j2", "--source", str(src),
+        "--prefix", "pre", "--bucket", "bkt",
+    ])
+    out = capsys.readouterr().out
+    assert code == 3
+    assert f"--job-id {job_id}" in out

@@ -95,3 +95,19 @@ def display_path(path: str) -> str:
     if path.startswith(_EXTENDED_PREFIX):
         return path[len(_EXTENDED_PREFIX) :]
     return path
+
+
+def canonical_source_key(
+    path: str,
+    resolver: Callable[[str], str | None] = default_drive_resolver,
+) -> str:
+    """Equality key for "the same source folder".
+
+    Job rows store paths as submitted (drive-resolved by the CLI, raw from
+    the API), so equality must survive spelling differences: mapped drive
+    vs UNC, forward vs backward slashes, ``\\\\?\\`` prefix or not, trailing
+    separator, and NTFS case-insensitivity.
+    """
+    resolved = resolve_mapped_drive(path, resolver)
+    plain = display_path(extended_path(resolved))
+    return plain.replace("/", "\\").rstrip("\\").casefold()

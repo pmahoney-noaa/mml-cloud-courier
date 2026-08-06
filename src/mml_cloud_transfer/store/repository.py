@@ -19,7 +19,7 @@ from mml_cloud_transfer.core.models import (
     PlannedFile,
     SliceState,
 )
-from mml_cloud_transfer.core.paths import to_object_name
+from mml_cloud_transfer.core.paths import canonical_source_key, to_object_name
 from mml_cloud_transfer.core.slicing import SizePolicy, choose_method
 
 #: States that will never be retried by a resume.
@@ -49,10 +49,44 @@ class JobProgress:
 
 
 class JobRepository:
+    #: Statuses that can still write to (or be resumed onto) a destination.
+    _ACTIVE_STATUSES = (
+        JobStatus.PENDING.value, JobStatus.SCANNING.value,
+        JobStatus.RUNNING.value, JobStatus.PAUSED.value,
+        JobStatus.STALLED.value, JobStatus.INCOMPLETE.value,
+    )
+
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
     # ---- jobs -----------------------------------------------------------
+
+    def find_active_duplicate(
+        self, *, source_root: str, dest_prefix: str, bucket: str
+    ) -> sqlite3.Row | None:
+        """A not-finished job already targeting this destination, or None.
+
+        Two writers composing to one destination corrupt each other's slice
+        temps and precondition bookkeeping (release-gate follow-up 3). The
+        candidate set is filtered in SQL (destination prefix + active
+        status); source equality needs canonical_source_key, so it runs in
+        Python over the handful of active rows. A job with no profile row
+        (direct-CLI history) has an unknowable bucket and matches
+        conservatively — blocking is safe, double-writing is not."""
+        placeholders = ", ".join("?" for _ in self._ACTIVE_STATUSES)
+        rows = self._conn.execute(
+            f"SELECT j.*, p.bucket AS profile_bucket FROM jobs j"
+            f" LEFT JOIN profiles p ON p.id = j.profile_id"
+            f" WHERE j.dest_prefix = ? AND j.status IN ({placeholders})",
+            (dest_prefix, *self._ACTIVE_STATUSES),
+        ).fetchall()
+        wanted = canonical_source_key(source_root)
+        for row in rows:
+            if row["profile_bucket"] not in (None, bucket):
+                continue
+            if canonical_source_key(row["source_root"]) == wanted:
+                return row
+        return None
 
     def create_job(
         self,

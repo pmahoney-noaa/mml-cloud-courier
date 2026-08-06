@@ -169,6 +169,23 @@ def run_transfer(args) -> int:
     if args.service_url:
         return run_transfer_via_service(args)
     options = _options(args)
+
+    conn = connect(args.db)
+    try:
+        duplicate = JobRepository(conn).find_active_duplicate(
+            source_root=args.source, dest_prefix=args.prefix, bucket=args.bucket,
+        )
+    finally:
+        conn.close()
+    if duplicate is not None:
+        print(
+            f"job {duplicate['id']} ({duplicate['status']}) already transfers"
+            f" this source to gs://{args.bucket}/{args.prefix or ''} — run:"
+            f" mmlct resume --db {args.db} --job-id {duplicate['id']}"
+            f" --bucket {args.bucket}"
+        )
+        return 3
+
     ctx = _context(args)
     direction = Direction(args.direction)
     scan_error_count = 0

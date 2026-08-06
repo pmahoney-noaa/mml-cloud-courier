@@ -215,29 +215,47 @@ def create_app(
 
         conn, repo = _open()
         try:
-            if profile_id is None:
-                if submission.emulator_endpoint:
-                    auth_type, credential_ref = "emulator", submission.emulator_endpoint
-                elif submission.credentials_path:
-                    auth_type, credential_ref = "key_file", submission.credentials_path
-                else:
-                    auth_type, credential_ref = "adc", None
-                profile_id = repo.get_or_create_profile(
-                    bucket=bucket, auth_type=auth_type,
-                    credential_ref=credential_ref,
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                duplicate = repo.find_active_duplicate(
+                    source_root=submission.source_root,
+                    dest_prefix=dest_prefix, bucket=bucket,
                 )
-            job_id = repo.create_job(
-                name=submission.name,
-                direction=Direction(submission.direction),
-                source_root=submission.source_root,
-                dest_prefix=dest_prefix,
-                profile_id=profile_id,
-                audit_hash=submission.audit_hash,
-                scheduled_start_at=scheduled,
-            )
-            repo.record_event(
-                job_id, "job_submitted", f"direction={submission.direction}"
-            )
+                if duplicate is not None:
+                    raise HTTPException(status_code=409, detail=(
+                        f"job {duplicate['id']} ({duplicate['status']}) already"
+                        f" transfers this source to"
+                        f" gs://{bucket}/{dest_prefix or ''} — resume it"
+                        f" (mmlct resume --job-id {duplicate['id']}) or cancel"
+                        " it instead of creating a second writer"
+                    ))
+                if profile_id is None:
+                    if submission.emulator_endpoint:
+                        auth_type, credential_ref = "emulator", submission.emulator_endpoint
+                    elif submission.credentials_path:
+                        auth_type, credential_ref = "key_file", submission.credentials_path
+                    else:
+                        auth_type, credential_ref = "adc", None
+                    profile_id = repo.get_or_create_profile(
+                        bucket=bucket, auth_type=auth_type,
+                        credential_ref=credential_ref,
+                    )
+                job_id = repo.create_job(
+                    name=submission.name,
+                    direction=Direction(submission.direction),
+                    source_root=submission.source_root,
+                    dest_prefix=dest_prefix,
+                    profile_id=profile_id,
+                    audit_hash=submission.audit_hash,
+                    scheduled_start_at=scheduled,
+                )
+                repo.record_event(
+                    job_id, "job_submitted", f"direction={submission.direction}"
+                )
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
         finally:
             conn.close()
         return {

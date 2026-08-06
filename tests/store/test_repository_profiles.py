@@ -100,3 +100,45 @@ def test_delete_profile_removes_an_unreferenced_row(repo):
         repo.get_profile(pid)
     with pytest.raises(LookupError):
         repo.delete_profile(pid)
+
+
+def test_find_active_duplicate_blocks_and_releases(repo):
+    from mml_cloud_transfer.core.models import JobStatus
+
+    pid = repo.create_profile(name="lab", bucket="bkt", auth_type="adc")
+    job_id = repo.create_job(name="j", direction=Direction.UPLOAD,
+                             source_root=r"C:\data\run47", dest_prefix="p",
+                             profile_id=pid)
+
+    hit = repo.find_active_duplicate(
+        source_root=r"C:/DATA/run47/", dest_prefix="p", bucket="bkt")
+    assert hit is not None and hit["id"] == job_id
+
+    # A different bucket, prefix, or source is a different destination.
+    assert repo.find_active_duplicate(
+        source_root=r"C:\data\run47", dest_prefix="p", bucket="other") is None
+    assert repo.find_active_duplicate(
+        source_root=r"C:\data\run47", dest_prefix="q", bucket="bkt") is None
+    assert repo.find_active_duplicate(
+        source_root=r"C:\data\other", dest_prefix="p", bucket="bkt") is None
+
+    # Finished jobs stop blocking.
+    for status in (JobStatus.COMPLETE, JobStatus.CANCELLED):
+        repo.set_job_status(job_id, status)
+        assert repo.find_active_duplicate(
+            source_root=r"C:\data\run47", dest_prefix="p", bucket="bkt") is None
+
+    # INCOMPLETE blocks: the honest answer is "resume job N", not a twin.
+    repo.set_job_status(job_id, JobStatus.INCOMPLETE)
+    assert repo.find_active_duplicate(
+        source_root=r"C:\data\run47", dest_prefix="p", bucket="bkt") is not None
+
+
+def test_find_active_duplicate_is_conservative_about_profileless_jobs(repo):
+    """Direct-CLI jobs have no profile row, so their bucket is unknowable.
+    Same source + same prefix + unknown bucket blocks: double-writing is
+    the expensive mistake, a clear 'resume or cancel job N' is cheap."""
+    repo.create_job(name="j", direction=Direction.UPLOAD,
+                    source_root=r"C:\data", dest_prefix="p")
+    assert repo.find_active_duplicate(
+        source_root=r"C:\data", dest_prefix="p", bucket="any") is not None
