@@ -266,3 +266,25 @@ def test_resubmitting_the_same_destination_is_409(emulator_api, tmp_path):
     # Cancelling the first job releases the destination.
     client.post(f"/jobs/{first.json()['job_id']}/cancel")
     assert client.post("/jobs", json=payload).status_code == 201
+
+
+@pytest.mark.emulator
+def test_resubmitting_with_a_slash_variant_prefix_is_still_409(emulator_api, tmp_path):
+    """"data" and "/data/" are the same GCS destination once to_object_name
+    strips slashes (final-review finding 1) — a re-issued transfer must not
+    walk past the guard by respelling the prefix."""
+    client, config, create = emulator_api
+    create(name="lab")
+    src = tmp_path / "src"; src.mkdir()
+    first = client.post("/jobs", json={
+        "name": "j", "direction": "upload", "source_root": str(src),
+        "profile": "lab",
+    })
+    assert first.status_code == 201
+    second = client.post("/jobs", json={
+        "name": "j2", "direction": "upload", "source_root": str(src),
+        "profile": "lab", "dest_prefix": "/data/",
+    })
+    assert second.status_code == 409
+    detail = second.json()["detail"]
+    assert str(first.json()["job_id"]) in detail

@@ -114,6 +114,15 @@ def test_find_active_duplicate_blocks_and_releases(repo):
         source_root=r"C:/DATA/run47/", dest_prefix="p", bucket="bkt")
     assert hit is not None and hit["id"] == job_id
 
+    # "p", "/p/", and "p" all name the same GCS destination once
+    # to_object_name strips slashes — a spelling variant must not evade
+    # the guard (final-review finding 1).
+    hit = repo.find_active_duplicate(
+        source_root=r"C:\data\run47", dest_prefix="/p/", bucket="bkt")
+    assert hit is not None and hit["id"] == job_id
+    assert repo.find_active_duplicate(
+        source_root=r"C:\data\run47", dest_prefix="q/", bucket="bkt") is None
+
     # A different bucket, prefix, or source is a different destination.
     assert repo.find_active_duplicate(
         source_root=r"C:\data\run47", dest_prefix="p", bucket="other") is None

@@ -68,20 +68,27 @@ class JobRepository:
 
         Two writers composing to one destination corrupt each other's slice
         temps and precondition bookkeeping (release-gate follow-up 3). The
-        candidate set is filtered in SQL (destination prefix + active
-        status); source equality needs canonical_source_key, so it runs in
-        Python over the handful of active rows. A job with no profile row
-        (direct-CLI history) has an unknowable bucket and matches
-        conservatively — blocking is safe, double-writing is not."""
+        candidate set is filtered in SQL on active status only; destination
+        prefix and source equality both need normalization (to_object_name
+        strips slashes, so "p", "p/", and "/p" are the same GCS destination,
+        and source needs canonical_source_key), so both run in Python over
+        the handful of active rows. A job with no profile row (direct-CLI
+        history) has an unknowable bucket and matches conservatively —
+        blocking is safe, double-writing is not."""
         placeholders = ", ".join("?" for _ in self._ACTIVE_STATUSES)
         rows = self._conn.execute(
             f"SELECT j.*, p.bucket AS profile_bucket FROM jobs j"
             f" LEFT JOIN profiles p ON p.id = j.profile_id"
-            f" WHERE j.dest_prefix = ? AND j.status IN ({placeholders})",
-            (dest_prefix, *self._ACTIVE_STATUSES),
+            f" WHERE j.status IN ({placeholders})",
+            self._ACTIVE_STATUSES,
         ).fetchall()
+        wanted_prefix = dest_prefix.strip("/")
         wanted = canonical_source_key(source_root)
         for row in rows:
+            if row["dest_prefix"].strip("/") != wanted_prefix:
+                continue  # "p", "p/", "/p" are one GCS destination; raw
+                          # string equality would let a spelling variant
+                          # slip a second writer past the guard
             if row["profile_bucket"] not in (None, bucket):
                 continue
             if canonical_source_key(row["source_root"]) == wanted:
