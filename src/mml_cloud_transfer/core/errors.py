@@ -11,6 +11,7 @@ keeps ``core`` pure and the tests dependency-free.
 from __future__ import annotations
 
 import errno
+import re
 from dataclasses import dataclass
 from enum import Enum
 
@@ -132,7 +133,7 @@ def _build(category: ErrorCategory) -> Classification:
     )
 
 
-def _from_http_status(code: int) -> ErrorCategory | None:
+def _from_http_status(code: int, message: str = "") -> ErrorCategory | None:
     if code in (401, 403):
         return ErrorCategory.CREDENTIAL
     if code == 404:
@@ -145,6 +146,22 @@ def _from_http_status(code: int) -> ErrorCategory | None:
         return ErrorCategory.NETWORK
     if 500 <= code <= 599:
         return ErrorCategory.NETWORK
+    # GCS reports a rejected checksum as a 400 whose message names the hash
+    # AND says it didn't match. The hash token alone is not enough: every
+    # google-api-core error string leads with the request URL, so an
+    # unrelated 400 against an object path like checksums/manifest.txt or
+    # md5sums.txt would also contain "checksum"/"md5" and must not be
+    # reclassified — a malformed request is not a corrupted transfer.
+    #
+    # google-api-core formats errors as "<code> <METHOD> <url>: <body>", and
+    # the URL carries the query string -- including ifGenerationMatch, whose
+    # literal "match" would otherwise satisfy the mismatch test below on any
+    # precondition-guarded request. Object names in the path can likewise
+    # supply "crc32c"/"md5"/"checksum". Judge the body only.
+    body = re.sub(r"https?://\S+", " ", message).lower()
+    if code == 400 and any(t in body for t in ("crc32c", "checksum", "md5")) \
+            and "match" in body:
+        return ErrorCategory.CHECKSUM_MISMATCH
     return None
 
 
@@ -174,7 +191,7 @@ def classify(exc: BaseException) -> Classification:
 
     code = getattr(exc, "code", None)
     if isinstance(code, int) and not isinstance(code, bool):
-        category = _from_http_status(code)
+        category = _from_http_status(code, str(exc))
         if category is not None:
             return _build(category)
 

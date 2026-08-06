@@ -53,11 +53,26 @@ def list_prefix(ctx: GcsContext, prefix: str) -> Iterator[ObjectMeta]:
         yield _to_meta(blob)
 
 
-def delete_object(ctx: GcsContext, name: str, *, ignore_missing: bool = True) -> None:
+def delete_object(
+    ctx: GcsContext,
+    name: str,
+    *,
+    generation: int | None = None,
+    ignore_missing: bool = True,
+) -> None:
+    """Delete ``name``. With ``generation``, delete that exact version.
+
+    A generation-less delete only clears the live pointer, which on a
+    versioning-enabled bucket archives the object as a noncurrent version
+    instead of removing it -- so temp objects would bill forever. Passing an
+    explicit generation makes it a real delete. It is also safer: if the
+    object was replaced since we read its metadata, the generation no longer
+    matches and we decline to delete a newer object we never inspected.
+    """
     from google.api_core.exceptions import NotFound
 
     try:
-        ctx.client.bucket(ctx.bucket).blob(name).delete()
+        ctx.client.bucket(ctx.bucket).delete_blob(name, generation=generation)
     except NotFound:
         if not ignore_missing:
             raise

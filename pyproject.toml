@@ -36,4 +36,5 @@ addopts = "-q"
 markers = [
     "emulator: requires fake-gcs-server (tools/fake-gcs-server.exe); skipped when absent",
     "real_bucket: requires MMLCT_TEST_BUCKET and real credentials; release gate",
+    "slow: multi-gigabyte; minutes, not seconds",
 ]

@@ -134,3 +134,147 @@ def test_google_auth_refresh_error_pauses_the_job_as_credential():
     result = classify(google.auth.exceptions.RefreshError("token refresh failed"))
     assert result.category is ErrorCategory.CREDENTIAL
     assert result.pauses_job is True
+
+
+def test_a_400_naming_crc32c_is_a_checksum_mismatch():
+    """GCS rejects a write whose declared CRC32C does not match the bytes.
+
+    That is Layer 1 doing its job, and the user must be told the copy was
+    corrupted -- not that something unexpected happened.
+    """
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "Provided CRC32C hash 'AAAAAA==' doesn't match calculated CRC32C hash 'zzzzzz=='."
+    )
+    assert classify(exc).category is ErrorCategory.CHECKSUM_MISMATCH
+
+
+def test_a_400_about_anything_else_stays_unknown():
+    """Only checksum 400s are reclassified; a malformed request is not."""
+
+    class BadRequest(Exception):
+        code = 400
+
+    assert classify(BadRequest("Invalid argument.")).category is ErrorCategory.UNKNOWN
+
+
+def test_a_400_naming_md5_is_a_checksum_mismatch():
+    """The MD5 wording of the same JSON API rejection must classify too."""
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "Provided MD5 hash 'AAAAAA==' doesn't match calculated MD5 hash 'zzzzzz=='."
+    )
+    assert classify(exc).category is ErrorCategory.CHECKSUM_MISMATCH
+
+
+def test_a_400_with_xml_api_digest_wording_is_a_checksum_mismatch():
+    """The XML API (InvalidDigest/BadDigest) phrases the rejection differently."""
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest("The Content-MD5 you specified did not match what we received.")
+    assert classify(exc).category is ErrorCategory.CHECKSUM_MISMATCH
+
+
+def test_a_400_with_hash_token_in_object_name_but_no_mismatch_phrase_stays_unknown():
+    """Regression test: a hash token in the URL/object path is not a mismatch.
+
+    google-api-core error strings lead with the request URL, so an unrelated
+    400 against a path like checksums/manifest.txt would also contain
+    "checksum" -- that must not be reclassified as a corrupted transfer.
+    """
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "400 PATCH https://storage.googleapis.com/storage/v1/b/b/o/2024%2Fchecksums%2Fmanifest.txt: "
+        "Invalid argument."
+    )
+    assert classify(exc).category is ErrorCategory.UNKNOWN
+
+
+def test_a_400_compose_error_with_ifgenerationmatch_query_string_stays_unknown():
+    """Regression test: ifGenerationMatch=0 in the query string is not a mismatch.
+
+    Every precondition-guarded request this product makes carries
+    "ifGenerationMatch=" in the query string, which contains the literal
+    substring "match". A compose rejection against an object path containing
+    "checksums/" must not be reclassified just because the URL happens to
+    supply both a hash-shaped token and "match".
+    """
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "400 POST https://storage.googleapis.com/storage/v1/b/bucket/o/"
+        "surveys%2F2024%2Fchecksums%2Fframes.bin/compose?ifGenerationMatch=0: "
+        "The number of source components provided is not valid."
+    )
+    assert classify(exc).category is ErrorCategory.UNKNOWN
+
+
+def test_a_400_resumable_init_error_with_ifgenerationmatch_query_string_stays_unknown():
+    """Regression test: same failure mode, on the resumable-init endpoint.
+
+    The object name itself ("md5sums.txt") supplies a hash token, and the
+    query string supplies "match" via ifGenerationMatch -- neither should
+    combine to look like a checksum mismatch on a generic 400.
+    """
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "400 POST https://storage.googleapis.com/upload/storage/v1/b/bucket/"
+        "o?uploadType=resumable&ifGenerationMatch=0&name=data%2Fmd5sums.txt: "
+        "Invalid argument."
+    )
+    assert classify(exc).category is ErrorCategory.UNKNOWN
+
+
+def test_a_400_crc32c_mismatch_with_full_url_and_query_string_is_still_caught():
+    """The real positive case must still classify once URLs are stripped.
+
+    A genuine checksum rejection also arrives with a full URL and query
+    string; stripping the URL to avoid the ifGenerationMatch false positive
+    must not also blind the classifier to the mismatch phrase in the body.
+    """
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "400 POST https://storage.googleapis.com/upload/storage/v1/b/bucket/"
+        "o?uploadType=resumable&upload_id=abc123&name=data%2Fframes.bin: "
+        "Provided CRC32C hash '3q2+7w==' doesn't match calculated CRC32C hash 'CNb0NA=='."
+    )
+    assert classify(exc).category is ErrorCategory.CHECKSUM_MISMATCH
+
+
+def test_a_400_xml_api_content_md5_wording_with_query_string_is_a_checksum_mismatch():
+    """The XML API phrases the same rejection as a Content-MD5 mismatch.
+
+    Distinct from test_a_400_with_xml_api_digest_wording_is_a_checksum_mismatch
+    above (which uses a bare message): this one carries a full URL with a
+    precondition query string, so it also exercises the URL-stripping fix
+    rather than only the body-wording match.
+    """
+
+    class BadRequest(Exception):
+        code = 400
+
+    exc = BadRequest(
+        "400 PUT https://storage.googleapis.com/bucket/data%2Fmd5sums.txt"
+        "?ifGenerationMatch=0: "
+        "The Content-MD5 you specified did not match what we received."
+    )
+    assert classify(exc).category is ErrorCategory.CHECKSUM_MISMATCH
