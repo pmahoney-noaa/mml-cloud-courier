@@ -19,6 +19,17 @@
 | C3 | Kill pythonservice.exe mid-transfer → SCM auto-restarts → job auto-resumes → COMPLETE, checksums match | pending | |
 | C4 | Network disabled ~5 min mid-run → job `stalled` → recovers on reconnect → COMPLETE | pending | |
 
+## Applied lessons from the Plan 2 release gate (docs/superpowers/gates/2026-08-05-plan2-release-gate.md)
+
+1. **Preflight before bytes.** Run `pwsh tests/tools/preflight-gcs.ps1 -Bucket afsc_mml_ccep -Prefix scratch` before C1; expect (and accept) metadata WARNs — `storage.buckets.get` is denied and the write/compose/delete probes are the real check. It also validates that the exact ADC the user-account service will use can do everything the runs need.
+2. **Versioning changes every cleanup.** `afsc_mml_ccep` has versioning ON: a plain delete archives, it does not remove. All Stage C teardown uses `gcloud storage rm --all-versions` and all emptiness verification uses `gcloud storage ls --all-versions --recursive`. A live-only "clean" is not clean.
+3. **Crash-orphaned slice temps do not self-clean.** The compose-time sweep (Finding 5 fix) only runs on a job that reaches a successful compose. Any Stage C run abandoned INCOMPLETE leaves `<object>.mmlct.tmp/<nnnn>` versions that nothing will ever remove (no lifecycle rule is applied, and none can match the infix). Teardown must explicitly check for and purge `*.mmlct.tmp*` at all versions.
+4. **Measure the uplink first.** The same 2.6 GiB run was a non-finishing ~6 h ordeal at ~1 Mbps and a 3m47s pass at ~100 Mbps, with 8 MiB chunks brushing the 120 s socket timeout on the slow link. Before C1: quick throughput check; if the link is slow that day, the logoff test (C2) can still run — slow is realistic overnight behavior — but C3/C4 iterations should use the small-file tree, not the 2.5 GiB file.
+5. **Time the C3 kill by slice state, not by feel.** The release gate killed when `file_slices` showed a live `session_uri` with `0 < bytes_transferred < length_bytes` — a provable mid-sliced-file kill. Stage C does the same by querying the service's `jobs.db` read-only during the run.
+6. **One writer per destination, by discipline.** Known residual (release-gate follow-up 3): the per-job lock does not stop a second `transfer` to the same destination from creating a second job. Stage C uses a fresh `scratch/phase3-gate/runN` prefix per run, never re-issues `transfer` for a prefix in flight, and never mixes direct-mode CLI transfers with service jobs on the same prefix. (Within the service, the FIFO worker serializes jobs anyway.)
+7. **Manual runs have no pytest teardown.** The release gate's stranded-bytes incident happened when a dying session skipped session-scoped cleanup. Everything Stage C writes is cleaned explicitly at the end against checklist items, not implicitly.
+8. **Default size policy is the point.** C-runs use no `--size-policy`, so the 2.5 GiB file slices at real 1 GiB boundaries (3 components) — the exact configuration the release gate proved end-to-end, now exercised through the service instead of the CLI runner.
+
 ## Findings / anomalies
 
 1. **pythonservice.exe hosting structurally broken here** (fixed, 676e9a0): per-user Python → python312.dll invisible to LocalSystem (Event 7009); venv-root relocation → no site-packages → `ModuleNotFoundError: servicemanager` (Event 14). Service now hosted by the venv's python.exe via PrepareToHostSingle.
