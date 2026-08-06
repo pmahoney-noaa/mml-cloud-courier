@@ -19,6 +19,11 @@ from mml_cloud_transfer.core.models import Direction
 from mml_cloud_transfer.gcs.client import GcsContext
 from mml_cloud_transfer.gcs.objects import delete_object, get_meta
 
+#: Reserved path segment for transient permission-probe objects. Written
+#: and deleted seconds apart by run_preflight below; engine/runner.py's
+#: scan_remote must never let one into a manifest (final-review finding 2).
+PROBE_SEGMENT = ".mmlct-preflight"
+
 
 def _join(words: list[str]) -> str:
     if len(words) == 1:
@@ -67,7 +72,7 @@ class PreflightResult:
 
 def run_preflight(ctx: GcsContext, prefix: str) -> PreflightResult:
     base = prefix.strip("/")
-    probe = (f"{base}/" if base else "") + f".mmlct-preflight/{uuid.uuid4().hex[:8]}"
+    probe = (f"{base}/" if base else "") + f"{PROBE_SEGMENT}/{uuid.uuid4().hex[:8]}"
     target = f"gs://{ctx.bucket}/{base}".rstrip("/")
     messages: list[str] = []
     written: list[tuple[str, int]] = []  # (name, generation): version-aware cleanup
