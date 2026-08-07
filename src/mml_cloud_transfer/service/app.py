@@ -305,6 +305,13 @@ def create_app(
                 repo.record_event(
                     job_id, "job_submitted", f"direction={submission.direction}"
                 )
+                if scheduled:
+                    # Phase 5 gate feedback: the timeline must say WHY a
+                    # queued job is sitting there, not just that it exists.
+                    repo.record_event(
+                        job_id, "scheduled",
+                        f"waiting until {scheduled} to start",
+                    )
                 conn.execute("COMMIT")
             except BaseException:
                 conn.execute("ROLLBACK")

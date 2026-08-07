@@ -110,6 +110,13 @@ def test_schedule_is_normalized_to_utc_seconds(api, tmp_path):
     })
     assert response.status_code == 201
     assert response.json()["scheduled_start_at"] == "2027-01-01T07:30:00+00:00"
+    # Phase 5 gate feedback: the event timeline must record why the job is
+    # queued, so the GUI's events pane can remind the user.
+    job_id = response.json()["job_id"]
+    events = client.get(f"/jobs/{job_id}/events").json()
+    scheduled_events = [e for e in events if e["kind"] == "scheduled"]
+    assert len(scheduled_events) == 1
+    assert "waiting until 2027-01-01T07:30:00+00:00" in scheduled_events[0]["detail"]
     bad = client.post("/jobs", json={
         "name": "j", "direction": "upload", "source_root": str(src),
         "bucket": "b", "scheduled_start_at": "tonight",
