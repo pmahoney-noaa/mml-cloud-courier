@@ -464,6 +464,10 @@ class NewTransferWizard(QWizard):
         self.state = WizardState()
         self.profile_id: int | None = None
         self.setWindowTitle("New transfer")
+        # Windows' default Aero wizard style paints the page area white while
+        # dark mode keeps the palette's white text — white on white. Classic
+        # style draws pages on the normal themed background instead.
+        self.setWizardStyle(QWizard.WizardStyle.ClassicStyle)
 
         self.direction_page = DirectionPage(self)
         self.connection_page = ConnectionPage(self)

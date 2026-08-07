@@ -106,7 +106,14 @@ class MainWindow(QMainWindow):
 
     def _build_full_ui(self) -> None:
         self.banner = QWidget()
-        self.banner.setStyleSheet("background-color: #f2dede;")
+        # Pin BOTH colors: a background alone inherits the palette's text
+        # color, which is white under Windows dark mode — white on pink.
+        # Scoped so the Start button keeps its native theme colors.
+        self.banner.setObjectName("serviceBanner")
+        self.banner.setStyleSheet(
+            "#serviceBanner { background-color: #f2dede; }"
+            " #serviceBanner QLabel { color: #a94442; }"
+        )
         banner_layout = QHBoxLayout(self.banner)
         banner_layout.setContentsMargins(6, 6, 6, 6)
         self.banner_label = QLabel(BANNER_TEXT)

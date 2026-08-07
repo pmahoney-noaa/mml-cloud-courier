@@ -393,10 +393,12 @@ class SummaryTab(QWidget):
 
 
 def _verdict_style(status: str) -> str:
+    # Text color pinned alongside each background: under Windows dark mode
+    # the palette text is white, unreadable on these pastel fills.
     if status == "complete":
-        return "background-color: #dff0d8; padding: 6px;"
+        return "background-color: #dff0d8; color: #3c763d; padding: 6px;"
     if status == "incomplete":
-        return "background-color: #fcf8e3; padding: 6px;"
+        return "background-color: #fcf8e3; color: #8a6d3b; padding: 6px;"
     return "padding: 6px;"
 
 
