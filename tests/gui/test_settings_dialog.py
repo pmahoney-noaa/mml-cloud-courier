@@ -3,7 +3,7 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
-from mml_cloud_transfer.gui.settings_dialog import (
+from mml_cloud_courier.gui.settings_dialog import (
     SettingsDialog, policy_fields, policy_text,
 )
 

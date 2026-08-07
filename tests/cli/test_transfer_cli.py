@@ -3,18 +3,18 @@ import sys
 
 import pytest
 
-import mml_cloud_transfer.cli.transfer_command as transfer_command
-from mml_cloud_transfer.cli.__main__ import main
-from mml_cloud_transfer.cli.transfer_command import (
+import mml_cloud_courier.cli.transfer_command as transfer_command
+from mml_cloud_courier.cli.__main__ import main
+from mml_cloud_courier.cli.transfer_command import (
     _finish_via_service,
     _watch_until_settled,
     parse_size_policy,
 )
-from mml_cloud_transfer.core.models import Direction, JobStatus
-from mml_cloud_transfer.core.slicing import SizePolicy
-from mml_cloud_transfer.engine.joblock import JobAlreadyRunning
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.models import Direction, JobStatus
+from mml_cloud_courier.core.slicing import SizePolicy
+from mml_cloud_courier.engine.joblock import JobAlreadyRunning
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 POLICY_ARG = "65536,262144,262144"
 
@@ -60,7 +60,7 @@ def test_resume_against_a_genuinely_held_lock_exits_3_with_a_clear_message(
     (run_job is faked). This drives the real code path — a REAL lock, held
     by this same test process, contending against the real `job_run_lock`
     inside the real `run_job` — end to end through `main()`."""
-    from mml_cloud_transfer.engine.joblock import job_run_lock
+    from mml_cloud_courier.engine.joblock import job_run_lock
 
     db = tmp_path / "jobs.db"
     conn = connect(db)
@@ -290,9 +290,9 @@ def test_workers_negative_is_rejected_on_resume_before_any_network(tmp_path, cap
     context is built, or a bad --workers value on resume would still crash
     deep inside ThreadPoolExecutor after touching credentials/network.
     """
-    from mml_cloud_transfer.core.models import Direction
-    from mml_cloud_transfer.store.db import connect
-    from mml_cloud_transfer.store.repository import JobRepository
+    from mml_cloud_courier.core.models import Direction
+    from mml_cloud_courier.store.db import connect
+    from mml_cloud_courier.store.repository import JobRepository
 
     db = tmp_path / "jobs.db"
     conn = connect(db)
@@ -355,7 +355,7 @@ def test_direct_mode_reissue_after_crash_is_refused(tmp_path, capsys, monkeypatc
 def test_service_submission_resolves_mapped_drives(tmp_path, monkeypatch, capsys):
     """The CLI is the interactive side: it must hand the service a UNC
     path, because the service cannot resolve the user's drive letters."""
-    from mml_cloud_transfer.cli import transfer_command
+    from mml_cloud_courier.cli import transfer_command
 
     submitted = {}
 

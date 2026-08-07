@@ -2,7 +2,7 @@ import hashlib
 
 import pytest
 
-from mml_cloud_transfer.core.hashing import (
+from mml_cloud_courier.core.hashing import (
     crc32c_from_base64,
     crc32c_to_base64,
     hash_file,
@@ -53,7 +53,7 @@ def test_hash_range_rejects_a_short_file(tmp_path):
 def test_chunk_size_does_not_change_the_result(tmp_path):
     p = tmp_path / "big.bin"
     p.write_bytes(bytes(range(256)) * 50)
-    from mml_cloud_transfer.core.hashing import hash_stream
+    from mml_cloud_courier.core.hashing import hash_stream
 
     with p.open("rb") as fp:
         small = hash_stream(fp, chunk_size=7)

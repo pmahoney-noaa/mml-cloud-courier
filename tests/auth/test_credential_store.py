@@ -9,7 +9,7 @@ import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI/ACLs are Windows-only")
 
-from mml_cloud_transfer.auth.credential_store import CredentialStore
+from mml_cloud_courier.auth.credential_store import CredentialStore
 
 PAYLOAD = {
     "type": "authorized_user",

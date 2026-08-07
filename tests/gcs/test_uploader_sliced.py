@@ -1,10 +1,10 @@
 import pytest
 
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.core.slicing import SizePolicy, plan_slices
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.gcs.objects import get_meta, list_prefix
-from mml_cloud_transfer.gcs.uploader import (
+from mml_cloud_courier.core.hashing import hash_file
+from mml_cloud_courier.core.slicing import SizePolicy, plan_slices
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.gcs.objects import get_meta, list_prefix
+from mml_cloud_courier.gcs.uploader import (
     slice_temp_name,
     upload_slice,
     upload_sliced,

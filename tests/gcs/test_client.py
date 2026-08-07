@@ -1,6 +1,6 @@
 import pytest
 
-from mml_cloud_transfer.gcs.client import GcsContext, make_context
+from mml_cloud_courier.gcs.client import GcsContext, make_context
 
 
 @pytest.mark.emulator

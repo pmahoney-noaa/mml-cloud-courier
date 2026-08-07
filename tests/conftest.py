@@ -162,7 +162,7 @@ def real_bucket_ctx():
             "see docs/superpowers/gates/2026-08-05-plan2-release-gate.md"
         )
 
-    from mml_cloud_transfer.gcs.client import make_context
+    from mml_cloud_courier.gcs.client import make_context
 
     run_prefix = _gate_run_prefix(os.environ.get("MMLCT_TEST_PREFIX", ""))
     ctx = make_context(bucket)

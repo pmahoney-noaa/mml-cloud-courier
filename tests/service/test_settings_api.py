@@ -4,10 +4,10 @@ import json
 
 from fastapi.testclient import TestClient
 
-from mml_cloud_transfer.service.app import create_app
-from mml_cloud_transfer.service.config import load_config
-from mml_cloud_transfer.service.controller import JobController
-from mml_cloud_transfer.service.security import read_token
+from mml_cloud_courier.service.app import create_app
+from mml_cloud_courier.service.config import load_config
+from mml_cloud_courier.service.controller import JobController
+from mml_cloud_courier.service.security import read_token
 
 
 def _make_client(tmp_path):

@@ -4,8 +4,8 @@ import socket
 
 import pytest
 
-from mml_cloud_transfer.service.config import load_config
-from mml_cloud_transfer.service.security import read_token
+from mml_cloud_courier.service.config import load_config
+from mml_cloud_courier.service.security import read_token
 
 
 def free_port() -> int:
@@ -16,7 +16,7 @@ def free_port() -> int:
 
 @pytest.fixture
 def running_host(tmp_path):
-    from mml_cloud_transfer.service.host import ServiceHost
+    from mml_cloud_courier.service.host import ServiceHost
 
     config = load_config(tmp_path / "data", port=free_port())
     host = ServiceHost(config)

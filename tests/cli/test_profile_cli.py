@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from mml_cloud_transfer.cli import profile_command
-from mml_cloud_transfer.cli.__main__ import main
-from mml_cloud_transfer.service.config import load_config
+from mml_cloud_courier.cli import profile_command
+from mml_cloud_courier.cli.__main__ import main
+from mml_cloud_courier.service.config import load_config
 
 
 def _free_port() -> int:
@@ -40,7 +40,7 @@ def oauth_client_json(tmp_path, monkeypatch):
 def host(tmp_path):
     """Same shape as tests/service/conftest.py::running_host (that fixture
     is directory-scoped and not importable from tests/cli)."""
-    from mml_cloud_transfer.service.host import ServiceHost
+    from mml_cloud_courier.service.host import ServiceHost
 
     config = load_config(tmp_path / "data", port=_free_port())
     service_host = ServiceHost(config)
@@ -80,7 +80,7 @@ def test_add_key_rejects_a_non_key_file(tmp_path, capsys):
 @pytest.mark.emulator
 def test_login_list_check_remove_round_trip(host, emulator, emulator_client,
                                             tmp_path, capsys, monkeypatch):
-    from mml_cloud_transfer.cli import profile_command
+    from mml_cloud_courier.cli import profile_command
 
     _, bucket_name = emulator_client
     payload = {

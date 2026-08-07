@@ -1,10 +1,10 @@
 import pytest
 
-from mml_cloud_transfer.core.errors import ErrorCategory, classify
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.gcs.objects import get_meta
-from mml_cloud_transfer.gcs.uploader import (
+from mml_cloud_courier.core.errors import ErrorCategory, classify
+from mml_cloud_courier.core.hashing import hash_file
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.gcs.objects import get_meta
+from mml_cloud_courier.gcs.uploader import (
     ChecksumMismatch,
     UploadResult,
     should_skip,
@@ -94,7 +94,7 @@ def test_stale_precondition_raises_conflict(ctx, source, tmp_path):
 
 
 def test_should_skip_needs_size_and_crc_to_match():
-    from mml_cloud_transfer.gcs.objects import ObjectMeta
+    from mml_cloud_courier.gcs.objects import ObjectMeta
 
     meta = ObjectMeta(name="x", size=10, crc32c=42, generation=1)
     assert should_skip(meta, size=10, local_crc32c=42)
@@ -104,7 +104,7 @@ def test_should_skip_needs_size_and_crc_to_match():
 
 
 def test_verify_layer2_raises_on_any_mismatch():
-    from mml_cloud_transfer.gcs.objects import ObjectMeta
+    from mml_cloud_courier.gcs.objects import ObjectMeta
 
     good = ObjectMeta(name="x", size=10, crc32c=42, generation=1)
     verify_layer2(good, size=10, local_crc32c=42)  # no raise

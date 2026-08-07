@@ -5,7 +5,7 @@ pytest.importorskip("pytestqt")
 
 from PySide6.QtCore import QModelIndex, Qt
 
-from mml_cloud_transfer.gui.files_model import PAGE, FileTableModel
+from mml_cloud_courier.gui.files_model import PAGE, FileTableModel
 
 
 def _rows(n, state="verified"):

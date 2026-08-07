@@ -5,7 +5,7 @@ pytest.importorskip("pytestqt")
 
 import json
 
-from mml_cloud_transfer.gui.connection_dialogs import (
+from mml_cloud_courier.gui.connection_dialogs import (
     COPY_CHOOSE_KEY, COPY_CHOOSE_SIGNIN, COPY_DELETE_ORIGINAL,
     NewConnectionDialog, key_profile_payload, load_key_file,
     oauth_profile_payload,

@@ -17,11 +17,11 @@ import time
 
 import pytest
 
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.core.models import FileState, JobStatus
-from mml_cloud_transfer.gcs.objects import get_meta, list_prefix
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.hashing import hash_file
+from mml_cloud_courier.core.models import FileState, JobStatus
+from mml_cloud_courier.gcs.objects import get_meta, list_prefix
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 MIB = 1024 * 1024
 BIG_BYTES = 2560 * MIB      # 2.5 GiB -> 3 slices: 1 GiB, 1 GiB, 0.5 GiB
@@ -34,7 +34,7 @@ KILL_DEADLINE_SECONDS = 900
 
 
 def _cli(*args):
-    return [sys.executable, "-m", "mml_cloud_transfer.cli", *args]
+    return [sys.executable, "-m", "mml_cloud_courier.cli", *args]
 
 
 def _write_blocks(path, block_count: int, seed: int) -> None:

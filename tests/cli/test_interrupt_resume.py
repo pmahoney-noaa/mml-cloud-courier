@@ -9,18 +9,18 @@ import time
 
 import pytest
 
-from mml_cloud_transfer.core.models import FileState, JobStatus
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.gcs.objects import get_meta
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.models import FileState, JobStatus
+from mml_cloud_courier.core.hashing import hash_file
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.gcs.objects import get_meta
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 POLICY = "65536,262144,262144"
 
 
 def _cli(*args):
-    return [sys.executable, "-m", "mml_cloud_transfer.cli", *args]
+    return [sys.executable, "-m", "mml_cloud_courier.cli", *args]
 
 
 @pytest.fixture

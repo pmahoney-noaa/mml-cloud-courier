@@ -1,14 +1,14 @@
 import pytest
 
-from mml_cloud_transfer.auth.preflight import PROBE_SEGMENT
-from mml_cloud_transfer.core.models import Direction, JobStatus
-from mml_cloud_transfer.core.retry import RetrySchedule
-from mml_cloud_transfer.core.slicing import SizePolicy
-from mml_cloud_transfer.engine.runner import EngineOptions, run_job, scan_remote
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.cli.scan_command import run_scan
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.auth.preflight import PROBE_SEGMENT
+from mml_cloud_courier.core.models import Direction, JobStatus
+from mml_cloud_courier.core.retry import RetrySchedule
+from mml_cloud_courier.core.slicing import SizePolicy
+from mml_cloud_courier.engine.runner import EngineOptions, run_job, scan_remote
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.cli.scan_command import run_scan
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 TINY = SizePolicy(
     single_shot_max=64 * 1024,

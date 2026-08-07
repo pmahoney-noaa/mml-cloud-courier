@@ -6,7 +6,7 @@ win32serviceutil = pytest.importorskip(
 
 
 def test_service_class_shape():
-    from mml_cloud_transfer.service.windows_service import (
+    from mml_cloud_courier.service.windows_service import (
         DISPLAY_NAME,
         SERVICE_NAME,
         _build_service_class,
@@ -27,7 +27,7 @@ def test_service_is_hosted_by_the_venv_python_not_pythonservice():
     import sys
     from pathlib import Path
 
-    from mml_cloud_transfer.service import windows_service
+    from mml_cloud_courier.service import windows_service
 
     cls = windows_service._build_service_class()
     assert cls._exe_name_ == sys.executable

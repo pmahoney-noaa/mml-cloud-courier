@@ -1,9 +1,9 @@
 import pytest
 
-from mml_cloud_transfer.core.errors import ErrorCategory, classify
-from mml_cloud_transfer.core.hashing import crc32c_to_base64, hash_file
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.gcs.objects import (
+from mml_cloud_courier.core.errors import ErrorCategory, classify
+from mml_cloud_courier.core.hashing import crc32c_to_base64, hash_file
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.gcs.objects import (
     GcsHttpError,
     ObjectMeta,
     delete_object,

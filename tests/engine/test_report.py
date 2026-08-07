@@ -3,12 +3,12 @@ import json
 
 import pytest
 
-from mml_cloud_transfer.core.errors import ErrorCategory
-from mml_cloud_transfer.core.hashing import crc32c_to_base64
-from mml_cloud_transfer.core.models import Direction, JobStatus
-from mml_cloud_transfer.engine.report import write_report
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.errors import ErrorCategory
+from mml_cloud_courier.core.hashing import crc32c_to_base64
+from mml_cloud_courier.core.models import Direction, JobStatus
+from mml_cloud_courier.engine.report import write_report
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 from tests.store.test_repository import make_files
 

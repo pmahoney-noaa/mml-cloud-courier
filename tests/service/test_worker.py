@@ -6,14 +6,14 @@ import threading
 import pytest
 import requests
 
-from mml_cloud_transfer.core.errors import ErrorCategory
-from mml_cloud_transfer.core.models import Direction, FileState, JobStatus, PlannedFile
-from mml_cloud_transfer.engine.joblock import JobAlreadyRunning
-from mml_cloud_transfer.service.config import load_config
-from mml_cloud_transfer.service.controller import JobController
-from mml_cloud_transfer.service.worker import QueueWorker
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.errors import ErrorCategory
+from mml_cloud_courier.core.models import Direction, FileState, JobStatus, PlannedFile
+from mml_cloud_courier.engine.joblock import JobAlreadyRunning
+from mml_cloud_courier.service.config import load_config
+from mml_cloud_courier.service.controller import JobController
+from mml_cloud_courier.service.worker import QueueWorker
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 
 @pytest.fixture
@@ -389,7 +389,7 @@ def test_startup_recovery_honours_auto_resume_off_for_scanning_jobs(config):
     config.settings_path.write_text(
         jsonlib.dumps({"auto_resume_on_startup": False}), encoding="utf-8"
     )
-    from mml_cloud_transfer.service.config import load_config as reload
+    from mml_cloud_courier.service.config import load_config as reload
     config = reload(config.data_dir)
     job_id = _submit(config)
     conn = connect(config.db_path)
@@ -407,7 +407,7 @@ def test_startup_recovery_honours_auto_resume_off(config, tmp_path):
     config.settings_path.write_text(
         jsonlib.dumps({"auto_resume_on_startup": False}), encoding="utf-8"
     )
-    from mml_cloud_transfer.service.config import load_config as reload
+    from mml_cloud_courier.service.config import load_config as reload
     config = reload(config.data_dir)
     job_id = _submit(config)
     conn = connect(config.db_path)
@@ -525,10 +525,10 @@ def test_worker_context_builds_from_a_dpapi_profile(tmp_path):
     import sys
     if sys.platform != "win32":
         pytest.skip("DPAPI is Windows-only")
-    from mml_cloud_transfer.auth.credential_store import CredentialStore
-    from mml_cloud_transfer.service.config import load_config
-    from mml_cloud_transfer.service.controller import JobController
-    from mml_cloud_transfer.service.worker import QueueWorker
+    from mml_cloud_courier.auth.credential_store import CredentialStore
+    from mml_cloud_courier.service.config import load_config
+    from mml_cloud_courier.service.controller import JobController
+    from mml_cloud_courier.service.worker import QueueWorker
 
     config = load_config(tmp_path / "data")
     payload = {
@@ -552,7 +552,7 @@ def test_worker_context_builds_from_a_dpapi_profile(tmp_path):
 
 
 def test_startup_recovery_sweeps_orphaned_credential_blobs(tmp_path):
-    from mml_cloud_transfer.auth.credential_store import CredentialStore
+    from mml_cloud_courier.auth.credential_store import CredentialStore
     config = load_config(tmp_path / "data")
     store = CredentialStore(config.credentials_dir)
     referenced = store.save({"type": "authorized_user"})

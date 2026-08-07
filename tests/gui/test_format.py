@@ -2,8 +2,8 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from mml_cloud_transfer.core.models import FileState, JobStatus
-from mml_cloud_transfer.gui.format import (
+from mml_cloud_courier.core.models import FileState, JobStatus
+from mml_cloud_courier.gui.format import (
     STATE_LABELS, STATUS_LABELS, human_bytes, human_duration, human_rate,
 )
 

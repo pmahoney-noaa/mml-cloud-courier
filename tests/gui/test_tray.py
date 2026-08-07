@@ -2,7 +2,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from mml_cloud_transfer.gui.tray import notification_for
+from mml_cloud_courier.gui.tray import notification_for
 
 
 def test_notifications_speak_plainly():

@@ -1,4 +1,4 @@
-from mml_cloud_transfer.service.controller import JobController
+from mml_cloud_courier.service.controller import JobController
 
 
 def test_request_only_reaches_the_active_job():

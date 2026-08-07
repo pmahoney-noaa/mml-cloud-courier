@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from google.oauth2.credentials import Credentials
 
-from mml_cloud_transfer.auth.oauth_flow import (
+from mml_cloud_courier.auth.oauth_flow import (
     SCOPES,
     authorized_user_payload,
     load_client_config,

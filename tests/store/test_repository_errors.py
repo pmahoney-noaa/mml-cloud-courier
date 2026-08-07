@@ -1,9 +1,9 @@
 """Grouped-error queries and the category filter behind the GUI Errors tab."""
 
-from mml_cloud_transfer.core.errors import ErrorCategory
-from mml_cloud_transfer.core.models import Direction, PlannedFile
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.errors import ErrorCategory
+from mml_cloud_courier.core.models import Direction, PlannedFile
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 
 def _seeded_repo(tmp_path):

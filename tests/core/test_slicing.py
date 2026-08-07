@@ -1,7 +1,7 @@
 import pytest
 
-from mml_cloud_transfer.core.models import TransferMethod
-from mml_cloud_transfer.core.slicing import (
+from mml_cloud_courier.core.models import TransferMethod
+from mml_cloud_courier.core.slicing import (
     MAX_COMPONENTS,
     SliceSpec,
     choose_method,
@@ -68,7 +68,7 @@ def test_negative_size_is_rejected():
 
 
 def test_size_policy_default_matches_module_constants():
-    from mml_cloud_transfer.core.slicing import (
+    from mml_cloud_courier.core.slicing import (
         MAX_COMPONENTS,
         MIN_SLICE_BYTES,
         RESUMABLE_MAX_BYTES,
@@ -84,7 +84,7 @@ def test_size_policy_default_matches_module_constants():
 
 
 def test_tiny_policy_reroutes_methods_and_slices():
-    from mml_cloud_transfer.core.slicing import SizePolicy, choose_method, plan_slices
+    from mml_cloud_courier.core.slicing import SizePolicy, choose_method, plan_slices
 
     tiny = SizePolicy(
         single_shot_max=64 * 1024,
@@ -103,14 +103,14 @@ def test_tiny_policy_reroutes_methods_and_slices():
 
 
 def test_omitting_policy_behaves_exactly_as_before():
-    from mml_cloud_transfer.core.slicing import choose_method, plan_slices
+    from mml_cloud_courier.core.slicing import choose_method, plan_slices
 
     assert choose_method(8 * MIB) is TransferMethod.SINGLE_SHOT
     assert plan_slices(2 * GIB)[0].length == GIB
 
 
 def test_size_policy_parse_round_trips():
-    from mml_cloud_transfer.core.slicing import SizePolicy
+    from mml_cloud_courier.core.slicing import SizePolicy
 
     policy = SizePolicy.parse("65536,262144,262144")
     assert policy.single_shot_max == 65536
@@ -120,7 +120,7 @@ def test_size_policy_parse_round_trips():
 
 
 def test_size_policy_parse_rejects_garbage():
-    from mml_cloud_transfer.core.slicing import SizePolicy
+    from mml_cloud_courier.core.slicing import SizePolicy
 
     with pytest.raises(ValueError):
         SizePolicy.parse("1,2")

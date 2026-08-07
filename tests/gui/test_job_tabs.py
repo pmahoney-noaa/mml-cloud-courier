@@ -3,8 +3,8 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
-from mml_cloud_transfer.gui.errors_model import ErrorGroup
-from mml_cloud_transfer.gui.job_tabs import ErrorsTab, SummaryTab, group_fill_rows
+from mml_cloud_courier.gui.errors_model import ErrorGroup
+from mml_cloud_courier.gui.job_tabs import ErrorsTab, SummaryTab, group_fill_rows
 
 
 def _summary_tab(qtbot) -> SummaryTab:

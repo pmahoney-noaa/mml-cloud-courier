@@ -1,8 +1,8 @@
 import pytest
 
-from mml_cloud_transfer.core.models import Direction, JobStatus, SliceState
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.models import Direction, JobStatus, SliceState
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 from tests.store.test_repository import make_files
 
@@ -105,7 +105,7 @@ def test_mark_changed_clears_stale_slices(repo, file_id):
     """CRITICAL 1 regression: a same-size in-place rewrite must not let resume
     reuse content-A slice temp objects recorded before the change was seen.
     """
-    from mml_cloud_transfer.core.models import FileState
+    from mml_cloud_courier.core.models import FileState
 
     repo.upsert_slice(file_id, 0, offset=0, length=10, crc32c=111, state=SliceState.UPLOADED)
     repo.upsert_slice(file_id, 1, offset=10, length=10, crc32c=222, state=SliceState.UPLOADED)

@@ -1,9 +1,9 @@
 import pytest
 
-from mml_cloud_transfer.core.errors import ErrorCategory, classify
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.gcs.downloader import (
+from mml_cloud_courier.core.errors import ErrorCategory, classify
+from mml_cloud_courier.core.hashing import hash_file
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.gcs.downloader import (
     DownloadResult,
     download_file,
     plan_ranges,

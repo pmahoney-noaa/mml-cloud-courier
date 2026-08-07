@@ -9,17 +9,17 @@ import random
 
 import pytest
 
-from mml_cloud_transfer.core.crc32c_combine import combine_all
-from mml_cloud_transfer.core.errors import ErrorCategory, classify
-from mml_cloud_transfer.core.hashing import crc32c_from_base64, crc32c_to_base64, hash_file
-from mml_cloud_transfer.core.slicing import SizePolicy, plan_slices
-from mml_cloud_transfer.gcs.objects import delete_object, get_meta, list_prefix
-from mml_cloud_transfer.gcs.resumable import (
+from mml_cloud_courier.core.crc32c_combine import combine_all
+from mml_cloud_courier.core.errors import ErrorCategory, classify
+from mml_cloud_courier.core.hashing import crc32c_from_base64, crc32c_to_base64, hash_file
+from mml_cloud_courier.core.slicing import SizePolicy, plan_slices
+from mml_cloud_courier.gcs.objects import delete_object, get_meta, list_prefix
+from mml_cloud_courier.gcs.resumable import (
     initiate_upload,
     put_chunk,
     query_offset,
 )
-from mml_cloud_transfer.gcs.uploader import (
+from mml_cloud_courier.gcs.uploader import (
     compose_slices,
     slice_temp_name,
     upload_resumable,

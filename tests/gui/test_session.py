@@ -2,7 +2,7 @@ import pytest
 
 pytest.importorskip("PySide6")  # module convention for every tests/gui file
 
-from mml_cloud_transfer.gui.session import discover_session
+from mml_cloud_courier.gui.session import discover_session
 
 
 def test_discover_session_uses_env_overrides(tmp_path, monkeypatch):

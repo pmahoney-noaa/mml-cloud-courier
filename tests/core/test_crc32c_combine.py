@@ -4,7 +4,7 @@ import random
 import google_crc32c
 import pytest
 
-from mml_cloud_transfer.core.crc32c_combine import combine, combine_all
+from mml_cloud_courier.core.crc32c_combine import combine, combine_all
 
 
 def crc(data: bytes) -> int:

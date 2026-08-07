@@ -7,15 +7,15 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from mml_cloud_transfer.auth.preflight import PreflightResult
-from mml_cloud_transfer.core.models import Direction
-from mml_cloud_transfer.service import app as app_module
-from mml_cloud_transfer.service.app import create_app
-from mml_cloud_transfer.service.config import load_config
-from mml_cloud_transfer.service.controller import JobController
-from mml_cloud_transfer.service.security import read_token
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.auth.preflight import PreflightResult
+from mml_cloud_courier.core.models import Direction
+from mml_cloud_courier.service import app as app_module
+from mml_cloud_courier.service.app import create_app
+from mml_cloud_courier.service.config import load_config
+from mml_cloud_courier.service.controller import JobController
+from mml_cloud_courier.service.security import read_token
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 
 def _make_client(tmp_path, preflight_fn=None):
@@ -126,7 +126,7 @@ def test_wrong_credential_json_type_is_422(tmp_path):
 def test_a_real_key_payload_is_dpapi_stored_and_loads_back(tmp_path, sa_key_json):
     """Stubbed preflight (no network); everything else real: context built
     from the key, payload DPAPI-encrypted on disk, row points at the blob."""
-    from mml_cloud_transfer.auth.credential_store import CredentialStore
+    from mml_cloud_courier.auth.credential_store import CredentialStore
 
     ok = PreflightResult(bucket="b", prefix="", can_list=True, can_read=True,
                          can_write=True, can_compose=True, can_delete=True,

@@ -4,12 +4,12 @@ import os
 
 import pytest
 
-from mml_cloud_transfer.core.models import Direction, JobStatus
-from mml_cloud_transfer.service.config import load_config
-from mml_cloud_transfer.service.controller import JobController
-from mml_cloud_transfer.service.worker import QueueWorker
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.models import Direction, JobStatus
+from mml_cloud_courier.service.config import load_config
+from mml_cloud_courier.service.controller import JobController
+from mml_cloud_courier.service.worker import QueueWorker
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 
 @pytest.mark.emulator

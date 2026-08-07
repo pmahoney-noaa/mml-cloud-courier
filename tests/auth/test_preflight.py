@@ -5,9 +5,9 @@ is the truth-teller for versioned-delete semantics."""
 
 import pytest
 
-from mml_cloud_transfer.core.models import Direction
-from mml_cloud_transfer.auth.preflight import PreflightResult, run_preflight
-from mml_cloud_transfer.gcs.client import make_context
+from mml_cloud_courier.core.models import Direction
+from mml_cloud_courier.auth.preflight import PreflightResult, run_preflight
+from mml_cloud_courier.gcs.client import make_context
 
 
 def _result(**overrides) -> PreflightResult:

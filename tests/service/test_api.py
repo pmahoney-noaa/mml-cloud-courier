@@ -4,14 +4,14 @@ tested by arming the controller directly, exactly as the worker does."""
 import pytest
 from fastapi.testclient import TestClient
 
-from mml_cloud_transfer.core.errors import ErrorCategory
-from mml_cloud_transfer.core.models import Direction, JobStatus, PlannedFile
-from mml_cloud_transfer.service.app import create_app
-from mml_cloud_transfer.service.config import load_config
-from mml_cloud_transfer.service.controller import JobController
-from mml_cloud_transfer.service.security import read_token
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.errors import ErrorCategory
+from mml_cloud_courier.core.models import Direction, JobStatus, PlannedFile
+from mml_cloud_courier.service.app import create_app
+from mml_cloud_courier.service.config import load_config
+from mml_cloud_courier.service.controller import JobController
+from mml_cloud_courier.service.security import read_token
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 
 @pytest.fixture
@@ -281,7 +281,7 @@ def test_deep_download_destination_is_created_via_extended_path(api, tmp_path):
     })
     assert response.status_code == 201, response.text
     import os
-    from mml_cloud_transfer.core.paths import extended_path
+    from mml_cloud_courier.core.paths import extended_path
     assert os.path.isdir(extended_path(str(deep)))
 
 

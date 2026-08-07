@@ -4,7 +4,7 @@ pytest.importorskip("PySide6")
 
 import sys
 
-from mml_cloud_transfer.gui.service_control import (
+from mml_cloud_courier.gui.service_control import (
     SERVICE_NAME, start_service_elevated,
 )
 

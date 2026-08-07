@@ -2,7 +2,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from mml_cloud_transfer.gui.errors_model import (
+from mml_cloud_courier.gui.errors_model import (
     ErrorGroup, build_error_groups, fetch_group_page, fetch_group_paths,
 )
 

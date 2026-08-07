@@ -8,7 +8,7 @@ import re
 
 import pytest
 
-from mml_cloud_transfer.gcs.objects import get_meta
+from mml_cloud_courier.gcs.objects import get_meta
 
 from tests.conftest import _gate_run_prefix
 
