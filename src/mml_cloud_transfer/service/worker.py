@@ -98,8 +98,17 @@ class QueueWorker:
                             job["id"], "recovered_at_startup",
                             "paused (auto-resume off)",
                         )
+            referenced = {
+                row["credential_ref"] for row in repo.list_profiles()
+                if row["credential_ref"]
+            }
         finally:
             conn.close()
+
+        removed = CredentialStore(self._config.credentials_dir).sweep_orphans(referenced)
+        if removed:
+            _log.info("swept %d orphaned credential blob(s): %s",
+                      len(removed), ", ".join(removed))
 
     # ---- loop -----------------------------------------------------------
 

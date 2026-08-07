@@ -58,3 +58,31 @@ def test_job_progress_ignores_slices_of_files_not_transferring(tmp_path):
     progress = repo.job_progress(job_id)  # b is pending, not transferring
     conn.close()
     assert progress.bytes_done == 0
+
+
+def test_transferring_files_reports_slice_rollups(tmp_path):
+    conn = connect(tmp_path / "j.db")
+    repo = JobRepository(conn)
+    job_id = repo.create_job(name="j", direction=Direction.UPLOAD,
+                             source_root="C:\\d", dest_prefix="")
+    repo.add_planned_files(job_id, [
+        PlannedFile("big.bin", "C:\\d\\big.bin", 3_000_000, 1),
+        PlannedFile("idle.bin", "C:\\d\\idle.bin", 10, 1),
+    ])
+    big, idle = repo.get_files(job_id)
+    repo.mark_transferring(big["id"])
+    repo.upsert_slice(big["id"], 0, offset=0, length=1_000_000,
+                      state=SliceState.UPLOADED, bytes_transferred=1_000_000)
+    repo.upsert_slice(big["id"], 1, offset=1_000_000, length=1_000_000,
+                      state=SliceState.UPLOADING, bytes_transferred=250_000)
+    repo.upsert_slice(big["id"], 2, offset=2_000_000, length=1_000_000)
+
+    rows = repo.transferring_files(job_id)
+
+    assert len(rows) == 1                      # idle.bin is pending, not listed
+    row = rows[0]
+    assert row["relative_path"] == "big.bin"
+    assert row["slices_total"] == 3
+    assert row["slices_done"] == 1
+    assert row["bytes_transferred"] == 1_250_000
+    conn.close()

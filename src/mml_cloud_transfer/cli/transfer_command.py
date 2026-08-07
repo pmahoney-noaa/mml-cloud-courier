@@ -141,7 +141,7 @@ def run_transfer_via_service(args) -> int:
         )
         args.source = resolved
     client = _api_client(args)
-    job_id = client.submit_job({
+    result = client.submit_job({
         "name": args.name,
         "direction": args.direction,
         "source_root": args.source,
@@ -153,6 +153,9 @@ def run_transfer_via_service(args) -> int:
         "audit_hash": args.audit_hash,
         "scheduled_start_at": args.scheduled_at,
     })
+    job_id = int(result["job_id"])
+    if result.get("preflight_summary"):
+        print(result["preflight_summary"])
     print(f"Job {job_id} submitted")
     if args.scheduled_at:
         print(f"Scheduled to start at {args.scheduled_at}; check progress with"

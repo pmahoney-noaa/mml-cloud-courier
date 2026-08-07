@@ -383,6 +383,34 @@ class JobRepository:
         )
         return cursor.rowcount
 
+    def retry_files(self, job_id: int, category: str) -> int:
+        """Reset a cause-group for another go. attempts=0 on purpose: retry
+        must also revive quarantined files, and the cumulative 15-attempt cap
+        would re-quarantine them on the next failure otherwise."""
+        cursor = self._conn.execute(
+            "UPDATE job_files SET state = ?, attempts = 0, error_category = NULL,"
+            " error_message = NULL, heartbeat_at = NULL"
+            " WHERE job_id = ? AND state IN (?, ?)"
+            " AND COALESCE(error_category, 'unknown') = ?",
+            (FileState.PENDING.value, job_id, FileState.FAILED.value,
+             FileState.QUARANTINED.value, category),
+        )
+        return cursor.rowcount
+
+    def exclude_files(self, job_id: int, category: str) -> int:
+        """The Errors tab's 'stop retrying these'. Quarantine, NOT skipped:
+        skipped means 'verified present at destination' and the Layer 3
+        audit would fail user-skipped files as missing. The error columns
+        stay so the report still names the cause."""
+        cursor = self._conn.execute(
+            "UPDATE job_files SET state = ?, heartbeat_at = NULL, finished_at = ?"
+            " WHERE job_id = ? AND state = ?"
+            " AND COALESCE(error_category, 'unknown') = ?",
+            (FileState.QUARANTINED.value, _now(), job_id,
+             FileState.FAILED.value, category),
+        )
+        return cursor.rowcount
+
     # ---- reporting ------------------------------------------------------
 
     def count_by_state(self, job_id: int) -> dict[FileState, int]:
@@ -436,21 +464,53 @@ class JobRepository:
             state_counts=counts,
         )
 
+    def transferring_files(self, job_id: int, *, limit: int = 10) -> list[dict]:
+        """Slice rollups for files currently in flight — the SSE snapshot's
+        'transferring' section. Plain dicts: this goes straight to JSON."""
+        rows = self._conn.execute(
+            "SELECT f.id AS file_id, f.relative_path, f.size_bytes, f.method,"
+            " COUNT(s.id) AS slices_total,"
+            " COALESCE(SUM(CASE WHEN s.state = ? THEN 1 ELSE 0 END), 0) AS slices_done,"
+            " COALESCE(SUM(s.bytes_transferred), 0) AS bytes_transferred"
+            " FROM job_files f LEFT JOIN file_slices s ON s.file_id = f.id"
+            " WHERE f.job_id = ? AND f.state = ?"
+            " GROUP BY f.id ORDER BY f.id LIMIT ?",
+            (SliceState.UPLOADED.value, job_id, FileState.TRANSFERRING.value, limit),
+        ).fetchall()
+        return [{key: r[key] for key in r.keys()} for r in rows]
+
     def get_files_page(
         self, job_id: int, *, state: str | None = None,
-        limit: int = 500, offset: int = 0,
+        category: str | None = None, limit: int = 500, offset: int = 0,
     ) -> list[sqlite3.Row]:
-        if state is None:
-            return self._conn.execute(
-                "SELECT * FROM job_files WHERE job_id = ?"
-                " ORDER BY id LIMIT ? OFFSET ?",
-                (job_id, limit, offset),
-            ).fetchall()
+        clauses, params = ["job_id = ?"], [job_id]
+        if state is not None:
+            clauses.append("state = ?"); params.append(state)
+        if category is not None:
+            clauses.append("COALESCE(error_category, 'unknown') = ?")
+            params.append(category)
+            if state is None:
+                # A verified file keeps the category of an earlier failed
+                # attempt; category queries mean "current problems" only.
+                clauses.append("state IN (?, ?)")
+                params += [FileState.FAILED.value, FileState.QUARANTINED.value]
+        params += [limit, offset]
         return self._conn.execute(
-            "SELECT * FROM job_files WHERE job_id = ? AND state = ?"
-            " ORDER BY id LIMIT ? OFFSET ?",
-            (job_id, state, limit, offset),
+            f"SELECT * FROM job_files WHERE {' AND '.join(clauses)}"
+            " ORDER BY id LIMIT ? OFFSET ?", params,
         ).fetchall()
+
+    def error_groups(self, job_id: int) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT COALESCE(error_category, 'unknown') AS category,"
+            " COUNT(*) AS count,"
+            " SUM(CASE WHEN state = ? THEN 1 ELSE 0 END) AS quarantined"
+            " FROM job_files WHERE job_id = ? AND state IN (?, ?)"
+            " GROUP BY 1 ORDER BY count DESC, category",
+            (FileState.QUARANTINED.value, job_id,
+             FileState.FAILED.value, FileState.QUARANTINED.value),
+        ).fetchall()
+        return [{key: r[key] for key in r.keys()} for r in rows]
 
     def count_failures(self, job_id: int, category: ErrorCategory) -> int:
         return self._conn.execute(

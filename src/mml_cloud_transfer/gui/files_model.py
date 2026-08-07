@@ -1,0 +1,90 @@
+"""Virtualized file table: Qt pulls pages only as the user scrolls.
+
+The fetcher is one HTTP GET against localhost answering from an indexed
+SQLite page — synchronous by choice; the worst hiccup stalls a scrollbar,
+never a transfer. A short page marks exhaustion.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+
+from mml_cloud_transfer.gui.format import STATE_LABELS, human_bytes
+
+PAGE = 500
+
+
+class FileTableModel(QAbstractTableModel):
+    HEADERS = ("File", "Size", "Status", "Problem")
+
+    def __init__(self, fetcher: Callable[..., list[dict]], parent=None):
+        super().__init__(parent)
+        self._fetcher = fetcher
+        self._rows: list[dict] = []
+        self._state: str | None = None
+        self._category: str | None = None
+        self._exhausted = True   # nothing to fetch until set_filter()
+        self.last_error: str | None = None
+
+    def set_filter(self, state: str | None = None, category: str | None = None) -> None:
+        self.beginResetModel()
+        self._state, self._category = state, category
+        self._rows = []
+        self._exhausted = False
+        self.last_error = None
+        self.endResetModel()
+        self.fetchMore(QModelIndex())
+
+    def refresh(self) -> None:
+        self.set_filter(state=self._state, category=self._category)
+
+    # ---- Qt plumbing ----------------------------------------------------
+
+    def rowCount(self, parent=QModelIndex()) -> int:
+        return 0 if parent.isValid() else len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()) -> int:
+        return len(self.HEADERS)
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return self.HEADERS[section]
+        return None
+
+    def canFetchMore(self, parent: QModelIndex) -> bool:
+        return not parent.isValid() and not self._exhausted
+
+    def fetchMore(self, parent: QModelIndex) -> None:
+        if self._exhausted:
+            return
+        try:
+            page = self._fetcher(state=self._state, category=self._category,
+                                 limit=PAGE, offset=len(self._rows))
+        except Exception as exc:
+            # Stop hammering a failing endpoint; refresh() retries deliberately.
+            self._exhausted = True
+            self.last_error = str(exc)
+            return
+        if len(page) < PAGE:
+            self._exhausted = True
+        if not page:
+            return
+        first = len(self._rows)
+        self.beginInsertRows(QModelIndex(), first, first + len(page) - 1)
+        self._rows += page
+        self.endInsertRows()
+
+    def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
+            return None
+        row = self._rows[index.row()]
+        column = index.column()
+        if column == 0:
+            return row["relative_path"]
+        if column == 1:
+            return human_bytes(row["size_bytes"])
+        if column == 2:
+            return STATE_LABELS.get(row["state"], row["state"])
+        return row.get("error_message") or ""

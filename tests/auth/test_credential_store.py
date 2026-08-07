@@ -3,6 +3,7 @@
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -72,3 +73,46 @@ def test_credentials_directory_acl_is_cut_and_inheritable(tmp_path):
     ).stdout
     assert "(I)" not in out
     assert "(OI)(CI)" in out
+
+
+def test_sweep_orphans_removes_only_unreferenced_blobs(tmp_path):
+    store = CredentialStore(tmp_path / "credentials")
+    kept = store.save({"type": "service_account", "k": 1})
+    orphan = store.save({"type": "service_account", "k": 2})
+    (tmp_path / "credentials" / "not-a-blob.txt").write_text("keep me")
+
+    removed = store.sweep_orphans({kept})
+
+    assert removed == [orphan]
+    assert store.load(kept)["k"] == 1                       # referenced blob intact
+    assert not (tmp_path / "credentials" / orphan).exists()
+    assert (tmp_path / "credentials" / "not-a-blob.txt").exists()  # pattern-gated
+
+
+def test_sweep_orphans_with_no_store_directory_is_a_noop(tmp_path):
+    assert CredentialStore(tmp_path / "never-created").sweep_orphans(set()) == []
+
+
+def test_sweep_orphans_skips_a_held_file_without_raising(tmp_path, monkeypatch):
+    """A PermissionError (e.g. AV holding a blob at boot) must not propagate
+    through sweep_orphans -> worker.startup_recovery -> ServiceHost.start():
+    the held file is skipped and retried at the next startup instead of
+    failing service startup over a stray file."""
+    store = CredentialStore(tmp_path / "credentials")
+    held = store.save({"type": "service_account", "k": 1})
+    removable = store.save({"type": "service_account", "k": 2})
+
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self, *args, **kwargs):
+        if self.name == held:
+            raise PermissionError("file is in use")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+    removed = store.sweep_orphans(set())  # neither ref is referenced
+
+    assert removed == [removable]
+    assert (tmp_path / "credentials" / held).exists()            # held file remains
+    assert not (tmp_path / "credentials" / removable).exists()   # other orphan still removed

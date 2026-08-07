@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from mml_cloud_transfer.auth.preflight import PreflightResult
 from mml_cloud_transfer.core.models import Direction
+from mml_cloud_transfer.service import app as app_module
 from mml_cloud_transfer.service.app import create_app
 from mml_cloud_transfer.service.config import load_config
 from mml_cloud_transfer.service.controller import JobController
@@ -288,3 +289,75 @@ def test_resubmitting_with_a_slash_variant_prefix_is_still_409(emulator_api, tmp
     assert second.status_code == 409
     detail = second.json()["detail"]
     assert str(first.json()["job_id"]) in detail
+
+
+def test_check_with_corrupted_auth_type_is_a_400_naming_the_type(tmp_path):
+    client, config = _make_client(tmp_path)
+    conn = connect(config.db_path)
+    profile_id = JobRepository(conn).create_profile(
+        name="bad", bucket="b", auth_type="mystery", credential_ref=None,
+    )
+    conn.close()
+    response = client.post(f"/profiles/{profile_id}/check", json={})
+    assert response.status_code == 400
+    assert "mystery" in response.json()["detail"]
+
+
+@pytest.mark.emulator
+def test_preview_counts_objects_and_skips_preflight_probes(emulator_api, emulator_client):
+    client, config, create = emulator_api
+    storage_client, bucket_name = emulator_client
+    profile_id = create(name="prev", default_prefix="data").json()["id"]
+    bucket = storage_client.bucket(bucket_name)
+    bucket.blob("data/a.bin").upload_from_string(b"12345")
+    bucket.blob("data/sub/b.bin").upload_from_string(b"1234567")
+    bucket.blob("data/.mmlct-preflight/zz/probe.bin").upload_from_string(b"x")
+    bucket.blob("elsewhere/c.bin").upload_from_string(b"xx")
+
+    response = client.post(f"/profiles/{profile_id}/preview", json={})
+    assert response.status_code == 200
+    assert response.json() == {"objects": 2, "bytes": 12, "truncated": False}
+
+    response = client.post(f"/profiles/{profile_id}/preview",
+                           json={"prefix": "elsewhere"})
+    assert response.json()["objects"] == 1
+
+
+@pytest.mark.emulator
+def test_preview_exactly_at_cap_is_not_truncated(emulator_api, emulator_client, monkeypatch):
+    """A bucket with exactly PREVIEW_MAX_OBJECTS non-probe objects must NOT
+    be reported truncated — nothing was actually cut off."""
+    monkeypatch.setattr(app_module, "PREVIEW_MAX_OBJECTS", 3)
+    client, config, create = emulator_api
+    storage_client, bucket_name = emulator_client
+    profile_id = create(name="atcap", default_prefix="data").json()["id"]
+    bucket = storage_client.bucket(bucket_name)
+    for i in range(3):
+        bucket.blob(f"data/o{i}.bin").upload_from_string(b"x")
+
+    response = client.post(f"/profiles/{profile_id}/preview", json={})
+    assert response.status_code == 200
+    assert response.json() == {"objects": 3, "bytes": 3, "truncated": False}
+
+
+@pytest.mark.emulator
+def test_preview_one_past_cap_is_truncated_and_excludes_the_extra_object(
+    emulator_api, emulator_client, monkeypatch,
+):
+    """cap+1 objects: only the first `cap` are counted (and their bytes
+    summed) — the (cap+1)th trips truncated without being counted."""
+    monkeypatch.setattr(app_module, "PREVIEW_MAX_OBJECTS", 3)
+    client, config, create = emulator_api
+    storage_client, bucket_name = emulator_client
+    profile_id = create(name="pastcap", default_prefix="data").json()["id"]
+    bucket = storage_client.bucket(bucket_name)
+    for i in range(3):
+        bucket.blob(f"data/o{i}.bin").upload_from_string(b"x")
+    bucket.blob("data/o3-extra.bin").upload_from_string(b"x" * 999)
+
+    response = client.post(f"/profiles/{profile_id}/preview", json={})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["objects"] == 3
+    assert body["truncated"] is True
+    assert body["bytes"] == 3   # the 999-byte 4th object must not be counted

@@ -59,12 +59,17 @@ def run_login(
     open_browser: bool = True,
     port: int = 0,
     flow_factory=None,
+    timeout_seconds: int | None = None,
 ) -> dict:
     """Run the browser flow; return an authorized-user payload.
 
     access_type=offline and prompt=consent force Google to (re)issue a
     refresh token — without them a re-consenting user gets access tokens
     only, and the profile would die at the first refresh after logoff.
+
+    timeout_seconds bounds the wait for the browser round trip: the GUI
+    runs this on a background thread, and an abandoned tab must not hang
+    it forever.
     """
     if flow_factory is None:
         from google_auth_oauthlib.flow import InstalledAppFlow
@@ -76,6 +81,7 @@ def run_login(
         open_browser=open_browser,
         access_type="offline",
         prompt="consent",
+        timeout_seconds=timeout_seconds,
     )
     if not creds.refresh_token:
         raise ValueError(

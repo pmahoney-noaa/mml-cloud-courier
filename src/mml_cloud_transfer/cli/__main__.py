@@ -66,7 +66,8 @@ def _build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--emulator-endpoint", default=None, help=argparse.SUPPRESS)
 
     transfer = subparsers.add_parser("transfer", help="Scan and run a transfer job")
-    transfer.add_argument("--db", required=True)
+    transfer.add_argument("--db", default=None,
+                          help="Path to the job database (not needed with --service-url)")
     transfer.add_argument("--name", required=True)
     transfer.add_argument("--direction", choices=["upload", "download"],
                           default="upload")
@@ -87,17 +88,20 @@ def _build_parser() -> argparse.ArgumentParser:
     add_service_options(transfer)
 
     resume = subparsers.add_parser("resume", help="Resume an interrupted job")
-    resume.add_argument("--db", required=True)
+    resume.add_argument("--db", default=None,
+                        help="Path to the job database (not needed with --service-url)")
     resume.add_argument("--job-id", type=int, required=True)
     add_gcs_options(resume)
     add_service_options(resume)
 
     status = subparsers.add_parser("status", help="List jobs and their state")
-    status.add_argument("--db", required=True)
+    status.add_argument("--db", default=None,
+                        help="Path to the job database (not needed with --service-url)")
     add_service_options(status)
 
     report = subparsers.add_parser("report", help="Re-export a job's report")
-    report.add_argument("--db", required=True)
+    report.add_argument("--db", default=None,
+                        help="Path to the job database (not needed with --service-url)")
     report.add_argument("--job-id", type=int, required=True)
     report.add_argument("--out", default=None)
     report.add_argument("--bucket", default=None)
@@ -169,7 +173,12 @@ def _dispatch_via_service(dispatch, args) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command in ("transfer", "resume", "status", "report") \
+            and not args.db and not args.service_url:
+        parser.error(f"{args.command}: --db is required unless --service-url is set")
 
     if args.command == "scan":
         try:

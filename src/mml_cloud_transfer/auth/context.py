@@ -33,4 +33,9 @@ def context_for_profile(
             credentials_info=payload,
             project=profile["project_id"] or None,
         )
-    return make_context_fn(bucket)  # adc
+    if auth_type == "adc":
+        return make_context_fn(bucket)
+    raise ValueError(
+        f"profile has unknown auth_type {auth_type!r} — refusing to fall back"
+        " to Application Default Credentials; delete and recreate this profile"
+    )

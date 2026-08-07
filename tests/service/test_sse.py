@@ -7,12 +7,12 @@ import threading
 import pytest
 from fastapi.testclient import TestClient
 
-from mml_cloud_transfer.core.models import Direction, JobStatus
+from mml_cloud_transfer.core.models import Direction, JobStatus, PlannedFile
 from mml_cloud_transfer.service.app import create_app
 from mml_cloud_transfer.service.config import load_config
 from mml_cloud_transfer.service.controller import JobController
 from mml_cloud_transfer.service.security import read_token
-from mml_cloud_transfer.service.sse import format_sse, progress_events
+from mml_cloud_transfer.service.sse import format_sse, progress_events, snapshot
 from mml_cloud_transfer.store.db import connect
 from mml_cloud_transfer.store.repository import JobRepository
 
@@ -137,3 +137,18 @@ def test_generator_safe_with_concurrent_threads(db_with_job):
     ticks = [_parse(e) for e in results]
     assert ticks[0]["status"] == "pending"
     assert ticks[1]["status"] == "complete"
+
+
+def test_snapshot_includes_transferring_files(tmp_path):
+    conn = connect(tmp_path / "j.db")
+    repo = JobRepository(conn)
+    job_id = repo.create_job(name="j", direction=Direction.UPLOAD,
+                             source_root="C:\\d", dest_prefix="")
+    repo.add_planned_files(job_id, [PlannedFile("a.bin", "C:\\d\\a.bin", 5, 1)])
+    repo.mark_transferring(repo.get_files(job_id)[0]["id"])
+
+    data = snapshot(repo, job_id, 0)
+
+    assert data["transferring"][0]["relative_path"] == "a.bin"
+    json.dumps(data)  # every value must remain JSON-serializable
+    conn.close()

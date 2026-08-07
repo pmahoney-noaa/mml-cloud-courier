@@ -39,9 +39,17 @@ class ApiClient:
     def health(self) -> dict:
         return self._check(self._session.get(f"{self._base}/health", timeout=10))
 
-    def submit_job(self, payload: dict) -> int:
-        response = self._session.post(f"{self._base}/jobs", json=payload, timeout=30)
-        return int(self._check(response)["job_id"])
+    def submit_job(self, payload: dict) -> dict:
+        """Full creation response: job_id, scheduled_start_at, profile_id,
+        preflight_summary. (Returned an int before Phase 5.)"""
+        response = self._session.post(f"{self._base}/jobs", json=payload, timeout=120)
+        return self._check(response)
+
+    def preview_remote(self, profile_id: int, prefix: str | None = None) -> dict:
+        return self._check(self._session.post(
+            f"{self._base}/profiles/{profile_id}/preview",
+            json={"prefix": prefix}, timeout=300,
+        ))
 
     def list_jobs(self) -> list[dict]:
         return self._check(self._session.get(f"{self._base}/jobs", timeout=30))
@@ -70,6 +78,32 @@ class ApiClient:
         return self._check(
             self._session.post(f"{self._base}/jobs/{job_id}/report", timeout=600)
         )
+
+    def files(
+        self, job_id: int, *, state: str | None = None,
+        category: str | None = None, limit: int = 500, offset: int = 0,
+    ) -> list[dict]:
+        params: dict = {"limit": limit, "offset": offset}
+        if state is not None:
+            params["state"] = state
+        if category is not None:
+            params["category"] = category
+        return self._check(self._session.get(
+            f"{self._base}/jobs/{job_id}/files", params=params, timeout=30
+        ))
+
+    def errors(self, job_id: int) -> list[dict]:
+        return self._check(
+            self._session.get(f"{self._base}/jobs/{job_id}/errors", timeout=30)
+        )
+
+    def retry_errors(self, job_id: int, category: str) -> dict:
+        return self._check(self._session.post(
+            f"{self._base}/jobs/{job_id}/errors/{category}/retry", timeout=30))
+
+    def exclude_errors(self, job_id: int, category: str) -> dict:
+        return self._check(self._session.post(
+            f"{self._base}/jobs/{job_id}/errors/{category}/exclude", timeout=30))
 
     def events(self, job_id: int, after_id: int = 0) -> list[dict]:
         return self._check(
@@ -112,4 +146,12 @@ class ApiClient:
     def delete_profile(self, profile_id: int) -> dict:
         return self._check(
             self._session.delete(f"{self._base}/profiles/{profile_id}", timeout=30)
+        )
+
+    def get_settings(self) -> dict:
+        return self._check(self._session.get(f"{self._base}/settings", timeout=30))
+
+    def put_settings(self, payload: dict) -> dict:
+        return self._check(
+            self._session.put(f"{self._base}/settings", json=payload, timeout=30)
         )

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import getpass
 import importlib.metadata
+import json
 import os
 import secrets
 import sqlite3
@@ -17,16 +18,18 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from mml_cloud_transfer.auth.context import context_for_profile
 from mml_cloud_transfer.auth.credential_store import CredentialStore
-from mml_cloud_transfer.auth.preflight import run_preflight
-from mml_cloud_transfer.core.errors import classify
+from mml_cloud_transfer.auth.preflight import PROBE_SEGMENT, run_preflight
+from mml_cloud_transfer.core.errors import ErrorCategory, classify, describe
 from mml_cloud_transfer.core.models import Direction, JobStatus
+from mml_cloud_transfer.core.slicing import SizePolicy
 from mml_cloud_transfer.core.paths import display_path, extended_path, is_unc
 from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.gcs.client import make_context
+from mml_cloud_transfer.gcs.objects import list_prefix
 from mml_cloud_transfer.service.config import ServiceConfig
 from mml_cloud_transfer.service.controller import JobController
 from mml_cloud_transfer.service.security import ensure_token
@@ -66,6 +69,29 @@ class ProfileCreate(BaseModel):
 class ProfileCheck(BaseModel):
     direction: Literal["upload", "download"] | None = None
     prefix: str | None = None
+
+
+PREVIEW_MAX_OBJECTS = 20_000
+
+
+class ProfilePreviewRequest(BaseModel):
+    prefix: str | None = None
+
+
+class SettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file_workers: int | None = Field(default=None, ge=1, le=16)
+    size_policy: str | None = None          # CSV for SizePolicy.parse; "" clears
+    auto_resume_on_startup: bool | None = None
+
+
+_TUNABLE_KEYS = ("file_workers", "size_policy", "auto_resume_on_startup")
+
+
+def _policy_text(policy) -> str | None:
+    if policy is None:
+        return None
+    return f"{policy.single_shot_max},{policy.resumable_max},{policy.min_slice}"
 
 
 def _normalize_schedule(text: str) -> str:
@@ -222,9 +248,9 @@ def create_app(
                     row, CredentialStore(config.credentials_dir)
                 )
             except Exception as exc:
+                reason = str(exc) if isinstance(exc, ValueError) else classify(exc).message
                 raise HTTPException(status_code=400, detail=(
-                    f"stored credential could not be loaded:"
-                    f" {classify(exc).message}"
+                    f"stored credential could not be loaded: {reason}"
                 )) from exc
             result = preflight_fn(ctx, dest_prefix)
             if not result.ok_for(Direction(submission.direction)):
@@ -311,7 +337,8 @@ def create_app(
 
     @router.get("/jobs/{job_id}/files")
     def get_files(
-        job_id: int, state: str | None = None, limit: int = 500, offset: int = 0
+        job_id: int, state: str | None = None, category: str | None = None,
+        limit: int = 500, offset: int = 0,
     ) -> list[dict]:
         limit = max(1, min(limit, 5000))
         conn, repo = _open()
@@ -320,11 +347,71 @@ def create_app(
             return [
                 _row_dict(r)
                 for r in repo.get_files_page(
-                    job_id, state=state, limit=limit, offset=offset
+                    job_id, state=state, category=category, limit=limit, offset=offset
                 )
             ]
         finally:
             conn.close()
+
+    @router.get("/jobs/{job_id}/errors")
+    def get_error_groups(job_id: int) -> list[dict]:
+        conn, repo = _open()
+        try:
+            _job_or_404(repo, job_id)
+            groups = repo.error_groups(job_id)
+        finally:
+            conn.close()
+        out = []
+        for group in groups:
+            try:
+                info = describe(ErrorCategory(group["category"]))
+            except ValueError:  # a category this build no longer knows
+                info = describe(ErrorCategory.UNKNOWN)
+            out.append({**group, "message": info.message, "action": info.action})
+        return out
+
+    _ERROR_ACTION_BLOCKED = (
+        JobStatus.RUNNING.value, JobStatus.SCANNING.value, JobStatus.STALLED.value,
+    )
+
+    def _error_action(job_id: int, category: str, action) -> dict:
+        if category not in {c.value for c in ErrorCategory}:
+            raise HTTPException(status_code=422,
+                                detail=f"unknown error category {category!r}")
+        conn, repo = _open()
+        try:
+            job = _job_or_404(repo, job_id)
+            if job["status"] in _ERROR_ACTION_BLOCKED:
+                raise HTTPException(status_code=409, detail=(
+                    f"cannot modify files while the job is {job['status']} —"
+                    " pause it first"
+                ))
+            # Guard against TOCTOU race with worker job pickup: a PENDING job
+            # can be claimed by the worker (marked active in the controller)
+            # before we run the UPDATE, allowing the worker to process a
+            # stale snapshot. The tiny residual window between _pick and
+            # job_started is accepted (same as pause/cancel do).
+            if controller.active_job_id == job_id:
+                raise HTTPException(status_code=409, detail=(
+                    "cannot modify files while the job is being processed —"
+                    " pause it first"
+                ))
+            count, kind = action(repo)
+            if count:
+                repo.record_event(job_id, kind, f"{category}: {count} file(s)")
+        finally:
+            conn.close()
+        return {"count": count}
+
+    @router.post("/jobs/{job_id}/errors/{category}/retry")
+    def retry_error_group(job_id: int, category: str) -> dict:
+        return _error_action(job_id, category, lambda repo: (
+            repo.retry_files(job_id, category), "files_retried"))
+
+    @router.post("/jobs/{job_id}/errors/{category}/exclude")
+    def exclude_error_group(job_id: int, category: str) -> dict:
+        return _error_action(job_id, category, lambda repo: (
+            repo.exclude_files(job_id, category), "files_excluded"))
 
     @router.get("/jobs/{job_id}/events")
     def get_events(job_id: int, after_id: int = 0) -> list[dict]:
@@ -538,8 +625,9 @@ def create_app(
         try:
             ctx = context_for_profile(row, CredentialStore(config.credentials_dir))
         except Exception as exc:
+            reason = str(exc) if isinstance(exc, ValueError) else classify(exc).message
             raise HTTPException(status_code=400, detail=(
-                f"stored credential could not be loaded: {classify(exc).message}"
+                f"stored credential could not be loaded: {reason}"
             )) from exc
         prefix = body.prefix if body.prefix is not None else row["default_prefix"]
         result = preflight_fn(ctx, prefix)
@@ -554,6 +642,41 @@ def create_app(
             finally:
                 conn.close()
         return {"ok": ok, "summary": result.summary(), "preflight": asdict(result)}
+
+    @router.post("/profiles/{profile_id}/preview")
+    def preview_profile(profile_id: int, body: ProfilePreviewRequest) -> dict:
+        conn, repo = _open()
+        try:
+            row = _profile_or_404(repo, profile_id)
+        finally:
+            conn.close()
+        try:
+            ctx = context_for_profile(row, CredentialStore(config.credentials_dir))
+        except Exception as exc:
+            reason = str(exc) if isinstance(exc, ValueError) else classify(exc).message
+            raise HTTPException(status_code=400, detail=(
+                f"stored credential could not be loaded: {reason}"
+            )) from exc
+        prefix = body.prefix if body.prefix is not None else row["default_prefix"]
+        base = prefix.strip("/")
+        lead = f"{base}/" if base else ""
+        objects = total_bytes = 0
+        truncated = False
+        try:
+            for meta in list_prefix(ctx, lead):
+                if PROBE_SEGMENT in meta.name.split("/"):
+                    continue  # transient preflight probes are not user data
+                if objects >= PREVIEW_MAX_OBJECTS:
+                    truncated = True
+                    break
+                objects += 1
+                total_bytes += meta.size
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=(
+                f"cannot list gs://{row['bucket']}/{base}:"
+                f" {classify(exc).message}"
+            )) from exc
+        return {"objects": objects, "bytes": total_bytes, "truncated": truncated}
 
     @router.delete("/profiles/{profile_id}")
     def delete_profile(profile_id: int) -> dict:
@@ -572,6 +695,51 @@ def create_app(
         if row["auth_type"] in ("service_account_key", "oauth_user") and row["credential_ref"]:
             CredentialStore(config.credentials_dir).delete(row["credential_ref"])
         return {"deleted": profile_id}
+
+    def _read_stored_settings() -> dict:
+        if config.settings_path.exists():
+            return json.loads(config.settings_path.read_text(encoding="utf-8"))
+        return {}
+
+    def _settings_view() -> dict:
+        stored = _read_stored_settings()
+        running = {
+            "file_workers": config.file_workers,
+            "size_policy": _policy_text(config.size_policy),
+            "auto_resume_on_startup": config.auto_resume_on_startup,
+        }
+        # The running config is a startup snapshot; a stored value that
+        # disagrees with it is waiting for the next service start.
+        restart_required = any(
+            key in stored and stored[key] != running[key] for key in _TUNABLE_KEYS
+        )
+        return {**running, "stored": stored, "restart_required": restart_required}
+
+    @router.get("/settings")
+    def get_settings() -> dict:
+        return _settings_view()
+
+    @router.put("/settings")
+    def put_settings(body: SettingsUpdate) -> dict:
+        if body.size_policy:
+            try:
+                SizePolicy.parse(body.size_policy)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        stored = _read_stored_settings()
+        for key in _TUNABLE_KEYS:
+            value = getattr(body, key)
+            if value is None:
+                continue
+            if key == "size_policy" and value == "":
+                stored.pop(key, None)
+            else:
+                stored[key] = value
+        config.data_dir.mkdir(parents=True, exist_ok=True)
+        tmp = config.settings_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+        os.replace(tmp, config.settings_path)   # atomic: never a torn file
+        return _settings_view()
 
     app.include_router(router)
     return app

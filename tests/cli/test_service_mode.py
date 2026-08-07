@@ -147,3 +147,21 @@ def test_scheduled_submit_returns_immediately(emulator, emulator_client, running
     assert "2100-01-01" in out
     client = ApiClient(config.base_url, token)
     assert client.list_jobs()[-1]["status"] == JobStatus.PENDING.value
+
+
+def test_status_in_service_mode_needs_no_db(running_host):
+    # live_service: whatever fixture this file already uses that yields a
+    # base URL + token file for a running in-process host.
+    host, config, token = running_host
+    code, out = _run(["status", "--service-url", config.base_url, "--token-file", str(config.token_path)])
+    assert code == 0
+
+
+def test_direct_mode_without_db_exits_2_with_guidance(capsys, monkeypatch):
+    # Ensure MMLCT_SERVICE_URL is not set so we're in pure direct mode
+    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)
+    with pytest.raises(SystemExit) as excinfo:
+        main(["status"])
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "--db" in err and "--service-url" in err

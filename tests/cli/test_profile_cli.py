@@ -4,9 +4,11 @@ stubbed at run_login; everything below it is real."""
 
 import json
 import socket
+from types import SimpleNamespace
 
 import pytest
 
+from mml_cloud_transfer.cli import profile_command
 from mml_cloud_transfer.cli.__main__ import main
 from mml_cloud_transfer.service.config import load_config
 
@@ -15,6 +17,23 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
+
+
+def _closed_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]  # nothing listens once the socket closes
+
+
+@pytest.fixture
+def oauth_client_json(tmp_path, monkeypatch):
+    path = tmp_path / "client_secret.json"
+    path.write_text(json.dumps({"installed": {
+        "client_id": "x", "client_secret": "y",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }}))
+    monkeypatch.setenv("MMLCT_OAUTH_CLIENT", str(path))
+    return path
 
 
 @pytest.fixture
@@ -121,3 +140,39 @@ def test_add_key_prints_the_you_may_delete_message(host, emulator, emulator_clie
     assert code == 0, out
     assert "delete the original" in out
     assert str(key_file) in out
+
+
+def test_login_checks_the_service_before_any_browser_opens(
+    oauth_client_json, monkeypatch, capsys, tmp_path
+):
+    def browser_must_not_open(*a, **k):
+        raise AssertionError("run_login called before the service was verified")
+    monkeypatch.setattr(profile_command, "run_login", browser_must_not_open)
+    token = tmp_path / "token"; token.write_text("t")
+
+    code = main([
+        "profile", "login", "--name", "n", "--bucket", "b",
+        "--service-url", f"http://127.0.0.1:{_closed_port()}",
+        "--token-file", str(token),
+    ])
+
+    assert code == 1
+    assert "not reachable" in capsys.readouterr().out
+
+
+def test_login_refuses_a_duplicate_name_before_the_browser(
+    oauth_client_json, monkeypatch, capsys
+):
+    monkeypatch.setattr(profile_command, "run_login",
+                        lambda *a, **k: pytest.fail("browser opened"))
+    fake = SimpleNamespace(
+        health=lambda: {"status": "ok"},
+        list_profiles=lambda: [{"name": "taken", "id": 1}],
+    )
+    monkeypatch.setattr(profile_command, "_api_client", lambda args: fake)
+
+    code = main(["profile", "login", "--name", "taken", "--bucket", "b",
+                 "--service-url", "http://127.0.0.1:1"])
+
+    assert code == 1
+    assert "already exists" in capsys.readouterr().out
