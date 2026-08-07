@@ -360,6 +360,16 @@ def create_app(
                     f"cannot modify files while the job is {job['status']} —"
                     " pause it first"
                 ))
+            # Guard against TOCTOU race with worker job pickup: a PENDING job
+            # can be claimed by the worker (marked active in the controller)
+            # before we run the UPDATE, allowing the worker to process a
+            # stale snapshot. The tiny residual window between _pick and
+            # job_started is accepted (same as pause/cancel do).
+            if controller.active_job_id == job_id:
+                raise HTTPException(status_code=409, detail=(
+                    "cannot modify files while the job is being processed —"
+                    " pause it first"
+                ))
             count, kind = action(repo)
             if count:
                 repo.record_event(job_id, kind, f"{category}: {count} file(s)")

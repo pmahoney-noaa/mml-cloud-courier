@@ -320,3 +320,32 @@ def test_error_group_actions_round_trip_and_guard_running_jobs(api):
     response = client.post(f"/jobs/{job_id}/errors/permission_denied/exclude")
     assert response.status_code == 409
     assert "pause" in response.json()["detail"]
+
+
+def test_error_actions_guard_against_controller_claimed_pending_job(api):
+    """Error actions must not race with worker pickup. A PENDING job claimed
+    by the controller (between _pick and job_started) must refuse mutations."""
+    client, config, controller = api
+    job_id = _seed_error_job(config)
+
+    # Simulate worker claiming the job
+    stop = controller.job_started(job_id)
+
+    # Both retry and exclude must refuse while controller owns it
+    response = client.post(f"/jobs/{job_id}/errors/permission_denied/retry")
+    assert response.status_code == 409
+    assert "pause" in response.json()["detail"]
+
+    response = client.post(f"/jobs/{job_id}/errors/permission_denied/exclude")
+    assert response.status_code == 409
+    assert "pause" in response.json()["detail"]
+
+    # Verify failed file rows are unchanged (no silent mutations)
+    conn = connect(config.db_path)
+    all_files = JobRepository(conn).get_files(job_id)
+    conn.close()
+    failed_files = [f for f in all_files if f["state"] == "failed"]
+    assert len(failed_files) == 2
+    assert all(f["error_category"] == "permission_denied" for f in failed_files)
+
+    controller.job_finished()
