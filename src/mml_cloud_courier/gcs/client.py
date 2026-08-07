@@ -52,7 +52,7 @@ def make_context(
 
         endpoint = emulator_endpoint.rstrip("/")
         client = storage.Client(
-            project="mmlct",
+            project="mmlcc",
             credentials=AnonymousCredentials(),
             client_options={"api_endpoint": endpoint},
         )
@@ -77,7 +77,7 @@ def make_context(
             credentials = UserCredentials.from_authorized_user_info(
                 credentials_info, scopes=_SCOPES
             )
-            client_project = project or "mmlct"
+            client_project = project or "mmlcc"
         else:
             raise ValueError(f"unsupported credential type: {kind!r}")
         client = storage.Client(project=client_project, credentials=credentials)

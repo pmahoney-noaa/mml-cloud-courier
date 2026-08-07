@@ -13,27 +13,27 @@ from mml_cloud_courier.gcs.objects import get_meta
 from tests.conftest import _gate_run_prefix
 
 PREFIX_SHAPE = re.compile(
-    r"^(?:[^/]+/)*mmlct-gate/\d{8}T\d{6}Z-[0-9a-f]{8}/$"
+    r"^(?:[^/]+/)*mmlcc-gate/\d{8}T\d{6}Z-[0-9a-f]{8}/$"
 )
 
 
 def test_the_gate_segment_is_never_operator_supplied():
-    """No MMLCC_TEST_PREFIX value can produce a prefix without mmlct-gate/.
+    """No MMLCC_TEST_PREFIX value can produce a prefix without mmlcc-gate/.
 
     Teardown recursively deletes everything under the run prefix. This is the
     assertion standing between a typo in that variable and someone's data.
     Runs without a bucket, so it guards every machine, not just the gate host.
     """
-    for base in ("", "/", "scratch", "scratch/", "/scratch/mmlct/", "a/b/c"):
+    for base in ("", "/", "scratch", "scratch/", "/scratch/mmlcc/", "a/b/c"):
         prefix = _gate_run_prefix(base)
-        assert "/mmlct-gate/" in f"/{prefix}", prefix
+        assert "/mmlcc-gate/" in f"/{prefix}", prefix
         assert PREFIX_SHAPE.match(prefix), prefix
         assert not prefix.startswith("/"), prefix
 
 
 def test_a_prefix_confines_the_run_to_the_scratch_folder():
-    assert _gate_run_prefix("scratch/mmlct").startswith("scratch/mmlct/mmlct-gate/")
-    assert _gate_run_prefix("").startswith("mmlct-gate/")
+    assert _gate_run_prefix("scratch/mmlcc").startswith("scratch/mmlcc/mmlcc-gate/")
+    assert _gate_run_prefix("").startswith("mmlcc-gate/")
 
 
 @pytest.mark.real_bucket

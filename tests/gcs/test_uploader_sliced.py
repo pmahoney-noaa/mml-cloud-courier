@@ -33,8 +33,8 @@ def source(tmp_path):
 
 
 def test_slice_temp_name_is_stable_and_ordered():
-    assert slice_temp_name("archive/big.bin", 0) == "archive/big.bin.mmlct.tmp/0000"
-    assert slice_temp_name("archive/big.bin", 31) == "archive/big.bin.mmlct.tmp/0031"
+    assert slice_temp_name("archive/big.bin", 0) == "archive/big.bin.mmlcc.tmp/0000"
+    assert slice_temp_name("archive/big.bin", 31) == "archive/big.bin.mmlcc.tmp/0031"
 
 
 @pytest.mark.emulator
@@ -56,7 +56,7 @@ def test_temp_objects_are_deleted_after_compose(ctx, source):
         ctx, str(source), "s/clean.bin", 1024 * 1024,
         precondition_generation=0, policy=TINY, chunk_size=CHUNK,
     )
-    leftovers = list(list_prefix(ctx, "s/clean.bin.mmlct.tmp/"))
+    leftovers = list(list_prefix(ctx, "s/clean.bin.mmlcc.tmp/"))
     assert leftovers == []
 
 
@@ -120,7 +120,7 @@ def test_sliced_sha256_is_computed_and_stamped(ctx, source):
     )
     assert result.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
     stamped = ctx.client.bucket(ctx.bucket).get_blob("s/sha.bin")
-    assert stamped.metadata == {"mmlct-sha256": result.sha256}
+    assert stamped.metadata == {"mmlcc-sha256": result.sha256}
 
 
 @pytest.mark.emulator

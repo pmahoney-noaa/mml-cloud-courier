@@ -35,7 +35,7 @@ def test_make_context_from_service_account_info(sa_key_json):
 
     ctx = make_context("bkt", credentials_info=sa_key_json)
     assert isinstance(ctx.client._credentials, service_account.Credentials)
-    assert ctx.client.project == "mmlct-test"
+    assert ctx.client.project == "mmlcc-test"
     assert ctx.bucket == "bkt"
 
 
@@ -60,7 +60,7 @@ def test_make_context_authorized_user_without_project_uses_placeholder():
         "token_uri": "https://oauth2.googleapis.com/token",
     }
     ctx = make_context("bkt", credentials_info=info)
-    assert ctx.client.project == "mmlct"
+    assert ctx.client.project == "mmlcc"
 
 
 def test_make_context_rejects_an_unknown_credential_type():

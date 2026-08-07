@@ -45,7 +45,7 @@ def call_async(fn: Callable, *, parent, on_done=None, on_failed=None) -> Bridge:
             return
         bridge.done.emit(result)
 
-    threading.Thread(target=runner, daemon=True, name="mmlct-gui-call").start()
+    threading.Thread(target=runner, daemon=True, name="mmlcc-gui-call").start()
     return bridge
 
 
@@ -74,7 +74,7 @@ class JobWatcher(QObject):
                 self.settled.emit(final)
 
         self._thread = threading.Thread(
-            target=runner, daemon=True, name=f"mmlct-gui-watch-{job_id}"
+            target=runner, daemon=True, name=f"mmlcc-gui-watch-{job_id}"
         )
         self._thread.start()
 
@@ -100,7 +100,7 @@ class JobsPoller(QObject):
                 on_jobs=_guarded(stop_event, self.jobs.emit),
                 on_down=_guarded(stop_event, self.down.emit),
             ),
-            daemon=True, name="mmlct-gui-poll",
+            daemon=True, name="mmlcc-gui-poll",
         ).start()
 
     def stop(self) -> None:

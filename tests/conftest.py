@@ -80,11 +80,11 @@ def emulator_client(emulator):
     from google.cloud import storage
 
     client = storage.Client(
-        project="mmlct-test",
+        project="mmlcc-test",
         credentials=AnonymousCredentials(),
         client_options={"api_endpoint": emulator.endpoint},
     )
-    bucket_name = f"mmlct-{uuid.uuid4().hex[:12]}"
+    bucket_name = f"mmlcc-{uuid.uuid4().hex[:12]}"
     client.create_bucket(bucket_name)
     yield client, bucket_name
 
@@ -104,10 +104,10 @@ def sa_key_json() -> dict:
     ).decode("ascii")
     return {
         "type": "service_account",
-        "project_id": "mmlct-test",
+        "project_id": "mmlcc-test",
         "private_key_id": "0" * 40,
         "private_key": pem,
-        "client_email": "probe@mmlct-test.iam.gserviceaccount.com",
+        "client_email": "probe@mmlcc-test.iam.gserviceaccount.com",
         "client_id": "0",
         "token_uri": "https://oauth2.googleapis.com/token",
     }
@@ -116,7 +116,7 @@ def sa_key_json() -> dict:
 #: The one path segment an operator can never supply. Teardown deletes
 #: everything under the run prefix, so this segment is what makes that
 #: deletion safe -- see _gate_run_prefix and the guard in real_bucket_ctx.
-GATE_SEGMENT = "mmlct-gate"
+GATE_SEGMENT = "mmlcc-gate"
 
 
 def _gate_run_prefix(base: str) -> str:
@@ -138,7 +138,7 @@ def real_bucket_ctx():
 
     Session-scoped so one prefix covers the whole gate run. Teardown deletes
     every version -- live and noncurrent alike -- of every object under the
-    prefix, including <name>.mmlct.tmp/<nnnn> slice temps (which live under
+    prefix, including <name>.mmlcc.tmp/<nnnn> slice temps (which live under
     it by construction, gcs.uploader.slice_temp_name), and fails the session
     if anything survives, so a leak surfaces as a red test rather than a
     surprise bill.

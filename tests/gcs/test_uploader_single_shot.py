@@ -53,7 +53,7 @@ def test_sha256_is_computed_only_when_asked(ctx, source):
     assert with_hash.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
     # The audit hash travels with the object (spec: custom metadata).
     stamped = ctx.client.bucket(ctx.bucket).get_blob("b.bin")
-    assert stamped.metadata == {"mmlct-sha256": with_hash.sha256}
+    assert stamped.metadata == {"mmlcc-sha256": with_hash.sha256}
     plain = ctx.client.bucket(ctx.bucket).get_blob("a.bin")
     assert not plain.metadata
 

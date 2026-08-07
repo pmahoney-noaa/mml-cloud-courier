@@ -57,10 +57,10 @@ class ServiceHost:
         self.worker.startup_recovery()
         self.threads = [
             threading.Thread(
-                target=self.worker.run_forever, name="mmlct-worker", daemon=True
+                target=self.worker.run_forever, name="mmlcc-worker", daemon=True
             ),
             threading.Thread(
-                target=self._server.run, name="mmlct-api", daemon=True
+                target=self._server.run, name="mmlcc-api", daemon=True
             ),
         ]
         for thread in self.threads:

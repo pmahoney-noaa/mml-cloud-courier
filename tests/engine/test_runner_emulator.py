@@ -98,7 +98,7 @@ def test_scan_remote_skips_zero_byte_directory_marker_objects(ctx, tmp_path):
 def test_scan_remote_skips_transient_preflight_probe_objects(ctx, tmp_path):
     """Final-review finding 2: a preflight running concurrently with a scan
     (profile check or another submission) writes throwaway probe objects
-    under <prefix>/.mmlct-preflight/<hex8>/... and deletes them seconds
+    under <prefix>/.mmlcc-preflight/<hex8>/... and deletes them seconds
     later. If scan_remote planned one, the deletion would leave a row that
     fails NOT_FOUND on every attempt and resume, permanently stuck
     INCOMPLETE. The probe segment must never enter the manifest."""

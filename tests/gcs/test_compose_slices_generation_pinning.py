@@ -24,7 +24,7 @@ from mml_cloud_courier.gcs.objects import ObjectMeta
 from mml_cloud_courier.gcs.uploader import compose_slices
 
 OBJECT_NAME = "dest/object.bin"
-TEMP_PREFIX = f"{OBJECT_NAME}.mmlct.tmp/"
+TEMP_PREFIX = f"{OBJECT_NAME}.mmlcc.tmp/"
 TOTAL_SIZE = 2048
 EXPECTED_CRC = 0x1234ABCD
 

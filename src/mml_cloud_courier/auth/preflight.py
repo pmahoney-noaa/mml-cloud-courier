@@ -22,7 +22,7 @@ from mml_cloud_courier.gcs.objects import delete_object, get_meta
 #: Reserved path segment for transient permission-probe objects. Written
 #: and deleted seconds apart by run_preflight below; engine/runner.py's
 #: scan_remote must never let one into a manifest (final-review finding 2).
-PROBE_SEGMENT = ".mmlct-preflight"
+PROBE_SEGMENT = ".mmlcc-preflight"
 
 
 def _join(words: list[str]) -> str:
@@ -92,7 +92,7 @@ def run_preflight(ctx: GcsContext, prefix: str) -> PreflightResult:
     for name in (f"{probe}/a.bin", f"{probe}/b.bin"):
         try:
             blob = bucket_handle.blob(name)
-            blob.upload_from_string(b"mmlct preflight probe", checksum="crc32c")
+            blob.upload_from_string(b"mmlcc preflight probe", checksum="crc32c")
             written.append((name, int(blob.generation)))
         except Exception as exc:
             can_write = False

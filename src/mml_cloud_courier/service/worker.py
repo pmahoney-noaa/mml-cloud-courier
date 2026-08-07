@@ -295,7 +295,7 @@ class QueueWorker:
         mean unreachable; e.g. a credential failure is 'reachable', so the
         re-run escalates it properly (the job pauses)."""
         try:
-            self._get_meta(ctx, "mmlct-connectivity-probe")
+            self._get_meta(ctx, "mmlcc-connectivity-probe")
         except Exception as exc:
             return classify(exc).category is not ErrorCategory.NETWORK
         return True

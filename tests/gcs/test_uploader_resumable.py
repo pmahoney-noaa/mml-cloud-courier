@@ -157,7 +157,7 @@ def test_sha256_survives_a_resume(ctx, source):
     )
     assert result.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
     stamped = ctx.client.bucket(ctx.bucket).get_blob("r/sha.bin")
-    assert stamped.metadata == {"mmlct-sha256": result.sha256}
+    assert stamped.metadata == {"mmlcc-sha256": result.sha256}
 
 
 def test_chunk_size_must_be_aligned(tmp_path):

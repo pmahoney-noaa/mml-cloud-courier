@@ -311,7 +311,7 @@ def test_preview_counts_objects_and_skips_preflight_probes(emulator_api, emulato
     bucket = storage_client.bucket(bucket_name)
     bucket.blob("data/a.bin").upload_from_string(b"12345")
     bucket.blob("data/sub/b.bin").upload_from_string(b"1234567")
-    bucket.blob("data/.mmlct-preflight/zz/probe.bin").upload_from_string(b"x")
+    bucket.blob("data/.mmlcc-preflight/zz/probe.bin").upload_from_string(b"x")
     bucket.blob("elsewhere/c.bin").upload_from_string(b"xx")
 
     response = client.post(f"/profiles/{profile_id}/preview", json={})

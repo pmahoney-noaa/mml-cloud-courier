@@ -44,7 +44,7 @@ def test_probes_pass_and_clean_up_against_the_emulator(emulator, emulator_client
     assert result.can_list and result.can_read and result.can_write
     assert result.can_compose and result.can_delete
     assert result.messages == ()
-    leftovers = list(client.list_blobs(bucket_name, prefix="data/.mmlct-preflight/"))
+    leftovers = list(client.list_blobs(bucket_name, prefix="data/.mmlcc-preflight/"))
     assert leftovers == []
 
 

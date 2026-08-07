@@ -245,7 +245,7 @@ def test_worker_crash_pauses_the_job_not_the_service(config):
 
 def test_lock_contention_leaves_job_pending_for_retry(config):
     """I3: a held run lock (I1's transient scanner/backup window, or the
-    operator's own `mmlct resume` finishing in 20 minutes) must not pause
+    operator's own `mmlcc resume` finishing in 20 minutes) must not pause
     the job the way a genuine crash does — next_eligible_job never
     re-picks a PAUSED job without a human, turning a transient conflict
     into a permanent stop. It must stay PENDING and be retried on the

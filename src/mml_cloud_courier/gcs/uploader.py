@@ -81,7 +81,7 @@ def upload_single_shot(
     blob = ctx.client.bucket(ctx.bucket).blob(object_name)
     blob.crc32c = crc32c_to_base64(local.crc32c)  # Layer 1: server rejects a bad write
     if local.sha256 is not None:
-        blob.metadata = {"mmlct-sha256": local.sha256}  # audit hash travels with the object
+        blob.metadata = {"mmlcc-sha256": local.sha256}  # audit hash travels with the object
     blob.upload_from_filename(
         source_path,
         checksum=None,  # we set blob.crc32c ourselves — whole-file, not per-chunk
@@ -130,7 +130,7 @@ class _StreamHashes:
 def stamp_sha256(ctx: GcsContext, object_name: str, sha256: str) -> None:
     """Record the audit hash in the object's custom metadata (spec requirement)."""
     blob = ctx.client.bucket(ctx.bucket).blob(object_name)
-    blob.metadata = {"mmlct-sha256": sha256}
+    blob.metadata = {"mmlcc-sha256": sha256}
     blob.patch()
 
 
@@ -261,7 +261,7 @@ SliceProgressFn = Callable[[int, str | None, int, int | None], None]
 
 
 def slice_temp_name(object_name: str, index: int) -> str:
-    return f"{object_name}.mmlct.tmp/{index:04d}"
+    return f"{object_name}.mmlcc.tmp/{index:04d}"
 
 
 def upload_slice(
@@ -360,8 +360,8 @@ def compose_slices(
     # generations are already noncurrent), and a generation mismatch that 404s
     # and is silently swallowed. On a versioning-enabled bucket either one
     # leaves billable bytes that no lifecycle rule can target, because
-    # `.mmlct.tmp/` is an infix and matchesPrefix has no wildcards.
-    temp_prefix = f"{object_name}.mmlct.tmp/"
+    # `.mmlcc.tmp/` is an infix and matchesPrefix has no wildcards.
+    temp_prefix = f"{object_name}.mmlcc.tmp/"
     for blob in list(
         ctx.client.list_blobs(ctx.bucket, prefix=temp_prefix, versions=True)
     ):

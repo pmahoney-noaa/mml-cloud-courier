@@ -161,7 +161,7 @@ def test_multi_gigabyte_kill_and_resume(real_bucket_ctx, big_tree, tmp_path):
     assert meta.crc32c == hash_file(big_tree / "big.bin").crc32c
 
     # No orphaned slice temps anywhere under the run.
-    orphans = [m.name for m in list_prefix(ctx, prefix) if ".mmlct.tmp/" in m.name]
+    orphans = [m.name for m in list_prefix(ctx, prefix) if ".mmlcc.tmp/" in m.name]
     assert orphans == [], f"slice temp objects survived compose: {orphans}"
 
     # The report is the artifact a user is handed in the morning.
