@@ -43,7 +43,8 @@ _CATEGORY_ROLE = Qt.ItemDataRole.UserRole + 1
 _FILLED_ROLE = Qt.ItemDataRole.UserRole + 2
 _LAZY_PAGE = 500
 
-_SUMMARY_ACTIONS_VISIBLE = frozenset({"paused", "stalled", "incomplete", "cancelled"})
+_RESUME_VISIBLE = frozenset({"paused", "stalled", "incomplete", "cancelled"})
+_REPORT_VISIBLE = frozenset({"complete", "paused", "stalled", "incomplete", "cancelled"})
 
 
 class ProgressTab(QWidget):
@@ -362,9 +363,8 @@ class SummaryTab(QWidget):
         self.totals_label.setText(f"{files_total:,} files, {human_bytes(bytes_total)} total")
         self.duration_label.setText(_duration_text(job.get("started_at"), job.get("finished_at")))
 
-        visible = status in _SUMMARY_ACTIONS_VISIBLE
-        self.report_button.setVisible(visible)
-        self.resume_button.setVisible(visible)
+        self.report_button.setVisible(status in _REPORT_VISIBLE)
+        self.resume_button.setVisible(status in _RESUME_VISIBLE)
 
 
 def _verdict_style(status: str) -> str:
