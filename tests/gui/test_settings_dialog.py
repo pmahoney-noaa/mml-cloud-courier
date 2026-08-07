@@ -93,6 +93,30 @@ def test_dialog_edited_non_aligned_stored_policy_sends_new_value(qtbot):
                                                    dialog.slice_spin.value())
 
 
+def test_dialog_prefers_stored_over_running_workers_and_auto_resume(qtbot):
+    """Staged (stored) file_workers/auto_resume must win over the running values.
+
+    Regression test: reopening the dialog used to load the RUNNING values into
+    the spinbox/checkbox, so any Save would silently overwrite a staged change
+    (e.g. workers=8 staged, awaiting restart) with the currently-running value.
+    """
+    stored = {"file_workers": 8, "auto_resume_on_startup": False}
+    client = FakeSettingsClient(stored=stored)
+    dialog = SettingsDialog(client)
+    qtbot.addWidget(dialog)
+    # Running values from get_settings() are file_workers=4, auto_resume=True;
+    # stored overrides should win instead.
+    qtbot.waitUntil(lambda: dialog.workers_spin.value() == 8, timeout=5000)
+
+    assert dialog.workers_spin.value() == 8
+    assert dialog.auto_resume_check.isChecked() is False
+
+    # An untouched Save must round-trip the stored values, not the running ones.
+    payload = dialog.build_payload()
+    assert payload["file_workers"] == 8
+    assert payload["auto_resume_on_startup"] is False
+
+
 def test_dialog_two_save_sequence_refreshes_had_stored_policy(qtbot):
     """Save custom policy, then switch to default → second save sends clear."""
     client = FakeSettingsClient(stored={})

@@ -129,11 +129,21 @@ class SettingsDialog(QDialog):
                    on_done=self._settings_loaded, on_failed=self._load_failed)
 
     def _settings_loaded(self, result):
-        """Update UI with loaded settings."""
+        """Update UI with loaded settings.
+
+        Values in ``stored`` are staged overrides awaiting a service restart;
+        they take priority over the top-level running values so a reopen-then-Save
+        never silently reverts a staged change back to what's currently running.
+        """
         self._loading = True
         try:
-            self.workers_spin.setValue(result.get("file_workers", 1))
-            self.auto_resume_check.setChecked(result.get("auto_resume_on_startup", False))
+            stored = result.get("stored", {})
+            self.workers_spin.setValue(
+                stored.get("file_workers", result.get("file_workers", 1))
+            )
+            self.auto_resume_check.setChecked(
+                stored.get("auto_resume_on_startup", result.get("auto_resume_on_startup", False))
+            )
 
             # Check if there's a stored policy override
             self._had_stored_policy = "size_policy" in result.get("stored", {})
