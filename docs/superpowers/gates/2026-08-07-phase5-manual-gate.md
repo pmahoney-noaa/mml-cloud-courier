@@ -81,7 +81,10 @@ fine for a gate run and exactly what the wizard copy must disclose).
 
 - [x] C1. **PASS.** Workers 4 → 6 saved; "takes effect the next time the
       transfer service starts" shown; `settings.json` in the live data dir
-      carried the staged value; reverted after the restart.
+      carried the staged value. **Post-gate note:** the revert to 4 was
+      not performed — `settings.json` still stages `file_workers: 6`.
+      Either revert via Settings → 4 → Save, or accept 6 as the new
+      operating value; it applies at the next service start.
 - [x] C2. **PASS.** Scheduled job (15) sat under Queued with its start
       time in the rail and ran on time. **Improvement from this check
       (landed at c577c14):** submission now records a
