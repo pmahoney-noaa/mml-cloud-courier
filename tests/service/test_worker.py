@@ -549,3 +549,21 @@ def test_worker_context_builds_from_a_dpapi_profile(tmp_path):
     })
     assert ctx == "CTX"
     assert seen["credentials_info"] == payload
+
+
+def test_startup_recovery_sweeps_orphaned_credential_blobs(tmp_path):
+    from mml_cloud_transfer.auth.credential_store import CredentialStore
+    config = load_config(tmp_path / "data")
+    store = CredentialStore(config.credentials_dir)
+    referenced = store.save({"type": "authorized_user"})
+    orphan = store.save({"type": "authorized_user"})
+    conn = connect(config.db_path)
+    JobRepository(conn).create_profile(
+        name="p", bucket="b", auth_type="oauth_user", credential_ref=referenced,
+    )
+    conn.close()
+
+    QueueWorker(config, JobController()).startup_recovery()
+
+    assert (config.credentials_dir / referenced).exists()
+    assert not (config.credentials_dir / orphan).exists()

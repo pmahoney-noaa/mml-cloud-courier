@@ -72,3 +72,21 @@ def test_credentials_directory_acl_is_cut_and_inheritable(tmp_path):
     ).stdout
     assert "(I)" not in out
     assert "(OI)(CI)" in out
+
+
+def test_sweep_orphans_removes_only_unreferenced_blobs(tmp_path):
+    store = CredentialStore(tmp_path / "credentials")
+    kept = store.save({"type": "service_account", "k": 1})
+    orphan = store.save({"type": "service_account", "k": 2})
+    (tmp_path / "credentials" / "not-a-blob.txt").write_text("keep me")
+
+    removed = store.sweep_orphans({kept})
+
+    assert removed == [orphan]
+    assert store.load(kept)["k"] == 1                       # referenced blob intact
+    assert not (tmp_path / "credentials" / orphan).exists()
+    assert (tmp_path / "credentials" / "not-a-blob.txt").exists()  # pattern-gated
+
+
+def test_sweep_orphans_with_no_store_directory_is_a_noop(tmp_path):
+    assert CredentialStore(tmp_path / "never-created").sweep_orphans(set()) == []

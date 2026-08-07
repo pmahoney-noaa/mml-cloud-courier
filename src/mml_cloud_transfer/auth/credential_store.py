@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from collections.abc import Collection
 from pathlib import Path
 
 from mml_cloud_transfer.auth.dpapi import protect, unprotect
@@ -47,3 +48,20 @@ class CredentialStore:
 
     def delete(self, ref: str) -> None:
         self.path_for(ref).unlink(missing_ok=True)
+
+    def sweep_orphans(self, referenced: Collection[str]) -> list[str]:
+        """Delete blobs no profile references. Startup-only by contract:
+        it must run before the API thread exists so no save() can race it
+        (a blob is written BEFORE its profile row on purpose — see
+        service/app.py create_profile)."""
+        if not self._root.is_dir():
+            return []
+        removed: list[str] = []
+        for path in sorted(self._root.iterdir()):
+            if not _REF_PATTERN.fullmatch(path.name):
+                continue  # never touch files we did not create
+            if path.name in referenced:
+                continue
+            path.unlink(missing_ok=True)
+            removed.append(path.name)
+        return removed
