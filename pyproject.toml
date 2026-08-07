@@ -1,7 +1,7 @@
 [project]
-name = "mml-cloud-transfer"
+name = "mml-cloud-courier"
 version = "0.1.0"
-description = "Verified, resumable file transfers between Windows workstations and Google Cloud Storage"
+description = "MML Cloud Courier: verified, resumable file transfers between Windows workstations and Google Cloud Storage"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "google-crc32c>=1.5.0",
@@ -24,25 +24,25 @@ dev = [
 ]
 
 [project.scripts]
-mmlct = "mml_cloud_transfer.cli.__main__:main"
-mmlct-service = "mml_cloud_transfer.service.windows_service:main"
+mmlcc = "mml_cloud_courier.cli.__main__:main"
+mmlcc-service = "mml_cloud_courier.service.windows_service:main"
 
 [project.gui-scripts]
-mmlct-gui = "mml_cloud_transfer.gui.__main__:main"
+mmlcc-gui = "mml_cloud_courier.gui.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/mml_cloud_transfer"]
+packages = ["src/mml_cloud_courier"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
 markers = [
     "emulator: requires fake-gcs-server (tools/fake-gcs-server.exe); skipped when absent",
-    "real_bucket: requires MMLCT_TEST_BUCKET and real credentials; release gate",
+    "real_bucket: requires MMLCC_TEST_BUCKET and real credentials; release gate",
     "slow: multi-gigabyte; minutes, not seconds",
     "gui: PySide6 widget tests (skipped when PySide6 is absent)",
 ]

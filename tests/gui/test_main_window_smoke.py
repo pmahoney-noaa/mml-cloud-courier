@@ -8,12 +8,12 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
-from mml_cloud_transfer.core.errors import ErrorCategory
-from mml_cloud_transfer.core.models import Direction, JobStatus, PlannedFile
-from mml_cloud_transfer.gui.main_window import MainWindow
-from mml_cloud_transfer.gui.session import discover_session
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.errors import ErrorCategory
+from mml_cloud_courier.core.models import Direction, JobStatus, PlannedFile
+from mml_cloud_courier.gui.main_window import MainWindow
+from mml_cloud_courier.gui.session import discover_session
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 
 def _seed_incomplete_job(config) -> int:

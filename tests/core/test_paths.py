@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from mml_cloud_transfer.core.paths import (
+from mml_cloud_courier.core.paths import (
     extended_path,
     is_unc,
     resolve_mapped_drive,
@@ -78,7 +78,7 @@ def test_to_object_name_joins_and_trims_separators():
 
 
 def test_display_path_strips_the_extended_prefix():
-    from mml_cloud_transfer.core.paths import display_path
+    from mml_cloud_courier.core.paths import display_path
 
     assert display_path("\\\\?\\C:\\data\\run47") == "C:\\data\\run47"
     assert display_path("\\\\?\\UNC\\nas01\\imaging") == "\\\\nas01\\imaging"
@@ -87,7 +87,7 @@ def test_display_path_strips_the_extended_prefix():
 
 
 def test_canonical_source_key_equates_the_same_folder_spelled_differently():
-    from mml_cloud_transfer.core.paths import canonical_source_key
+    from mml_cloud_courier.core.paths import canonical_source_key
 
     assert (
         canonical_source_key(r"C:\Data\Run47")
@@ -98,7 +98,7 @@ def test_canonical_source_key_equates_the_same_folder_spelled_differently():
 
 
 def test_canonical_source_key_resolves_mapped_drives():
-    from mml_cloud_transfer.core.paths import canonical_source_key
+    from mml_cloud_courier.core.paths import canonical_source_key
 
     key = canonical_source_key(
         r"Z:\imaging", resolver=lambda drive: r"\\server\share"

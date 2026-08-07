@@ -5,8 +5,8 @@ import time
 import pytest
 import requests
 
-from mml_cloud_transfer.service.config import load_config
-from mml_cloud_transfer.service.host import ServiceHost
+from mml_cloud_courier.service.config import load_config
+from mml_cloud_courier.service.host import ServiceHost
 
 
 def _free_port() -> int:

@@ -6,7 +6,7 @@ import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is Windows-only")
 
-from mml_cloud_transfer.auth.dpapi import protect, unprotect
+from mml_cloud_courier.auth.dpapi import protect, unprotect
 
 
 def test_round_trip():

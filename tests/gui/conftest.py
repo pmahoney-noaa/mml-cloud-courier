@@ -6,8 +6,8 @@ import socket
 
 import pytest
 
-from mml_cloud_transfer.service.config import load_config
-from mml_cloud_transfer.service.security import read_token
+from mml_cloud_courier.service.config import load_config
+from mml_cloud_courier.service.security import read_token
 
 
 def free_port() -> int:
@@ -18,11 +18,11 @@ def free_port() -> int:
 
 @pytest.fixture
 def gui_host(tmp_path, monkeypatch):
-    from mml_cloud_transfer.service.host import ServiceHost
+    from mml_cloud_courier.service.host import ServiceHost
 
-    monkeypatch.setenv("MMLCT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("MMLCC_DATA_DIR", str(tmp_path / "data"))
     config = load_config(tmp_path / "data", port=free_port())
-    monkeypatch.setenv("MMLCT_SERVICE_URL", config.base_url)
+    monkeypatch.setenv("MMLCC_SERVICE_URL", config.base_url)
     host = ServiceHost(config)
     host.start()
     host.wait_ready()

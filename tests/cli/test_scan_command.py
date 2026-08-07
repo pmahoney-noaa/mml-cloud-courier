@@ -2,11 +2,11 @@ import csv
 
 import pytest
 
-from mml_cloud_transfer.cli.scan_command import run_scan
-from mml_cloud_transfer.cli.__main__ import main
-from mml_cloud_transfer.core.models import FileState
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.cli.scan_command import run_scan
+from mml_cloud_courier.cli.__main__ import main
+from mml_cloud_courier.core.models import FileState
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 
 @pytest.fixture

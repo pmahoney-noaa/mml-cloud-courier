@@ -4,8 +4,8 @@ pytest.importorskip("PySide6")
 
 import requests
 
-from mml_cloud_transfer.cli.service_client import ServiceError
-from mml_cloud_transfer.gui.watcher import detect_transitions, watch_job
+from mml_cloud_courier.cli.service_client import ServiceError
+from mml_cloud_courier.gui.watcher import detect_transitions, watch_job
 
 
 class FakeClient:

@@ -3,7 +3,7 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
-from mml_cloud_transfer.gui.jobs_model import (
+from mml_cloud_courier.gui.jobs_model import (
     GROUP_LABELS, JOB_ID_ROLE, RAIL_GROUPS, STATUS_ROLE,
     build_rail_model, group_for_status, rail_job_ids, sync_rail,
 )

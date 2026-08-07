@@ -4,8 +4,8 @@ many MiB. The final callback (carrying the range CRC) always fires."""
 
 from types import SimpleNamespace
 
-from mml_cloud_transfer.core.slicing import SliceSpec
-from mml_cloud_transfer.gcs.downloader import _fetch_range
+from mml_cloud_courier.core.slicing import SliceSpec
+from mml_cloud_courier.gcs.downloader import _fetch_range
 
 _MIB = 1024 * 1024
 

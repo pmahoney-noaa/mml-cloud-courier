@@ -1,10 +1,10 @@
 import pytest
 
-from mml_cloud_transfer.core.errors import ErrorCategory, classify
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.gcs.objects import get_meta
-from mml_cloud_transfer.gcs.uploader import (
+from mml_cloud_courier.core.errors import ErrorCategory, classify
+from mml_cloud_courier.core.hashing import hash_file
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.gcs.objects import get_meta
+from mml_cloud_courier.gcs.uploader import (
     ChecksumMismatch,
     UploadResult,
     should_skip,
@@ -53,7 +53,7 @@ def test_sha256_is_computed_only_when_asked(ctx, source):
     assert with_hash.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
     # The audit hash travels with the object (spec: custom metadata).
     stamped = ctx.client.bucket(ctx.bucket).get_blob("b.bin")
-    assert stamped.metadata == {"mmlct-sha256": with_hash.sha256}
+    assert stamped.metadata == {"mmlcc-sha256": with_hash.sha256}
     plain = ctx.client.bucket(ctx.bucket).get_blob("a.bin")
     assert not plain.metadata
 
@@ -94,7 +94,7 @@ def test_stale_precondition_raises_conflict(ctx, source, tmp_path):
 
 
 def test_should_skip_needs_size_and_crc_to_match():
-    from mml_cloud_transfer.gcs.objects import ObjectMeta
+    from mml_cloud_courier.gcs.objects import ObjectMeta
 
     meta = ObjectMeta(name="x", size=10, crc32c=42, generation=1)
     assert should_skip(meta, size=10, local_crc32c=42)
@@ -104,7 +104,7 @@ def test_should_skip_needs_size_and_crc_to_match():
 
 
 def test_verify_layer2_raises_on_any_mismatch():
-    from mml_cloud_transfer.gcs.objects import ObjectMeta
+    from mml_cloud_courier.gcs.objects import ObjectMeta
 
     good = ObjectMeta(name="x", size=10, crc32c=42, generation=1)
     verify_layer2(good, size=10, local_crc32c=42)  # no raise

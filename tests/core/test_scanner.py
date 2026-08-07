@@ -3,9 +3,9 @@ import sys
 
 import pytest
 
-from mml_cloud_transfer.core.errors import ErrorCategory, ScanError
-from mml_cloud_transfer.core.models import PlannedFile
-from mml_cloud_transfer.core.scanner import iter_source, summarise
+from mml_cloud_courier.core.errors import ErrorCategory, ScanError
+from mml_cloud_courier.core.models import PlannedFile
+from mml_cloud_courier.core.scanner import iter_source, summarise
 
 
 @pytest.fixture

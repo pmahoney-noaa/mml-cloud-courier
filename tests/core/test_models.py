@@ -1,6 +1,6 @@
 import pytest
 
-from mml_cloud_transfer.core.models import (
+from mml_cloud_courier.core.models import (
     TERMINAL_SUCCESS_STATES,
     Direction,
     FileState,

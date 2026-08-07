@@ -12,12 +12,12 @@ import time
 import pytest
 import requests
 
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.core.models import JobStatus
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.gcs.objects import get_meta
-from mml_cloud_transfer.service.security import read_token
-from mml_cloud_transfer.store.db import connect
+from mml_cloud_courier.core.hashing import hash_file
+from mml_cloud_courier.core.models import JobStatus
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.gcs.objects import get_meta
+from mml_cloud_courier.service.security import read_token
+from mml_cloud_courier.store.db import connect
 
 from tests.service.conftest import free_port
 
@@ -25,7 +25,7 @@ from tests.service.conftest import free_port
 def _start_service(data_dir, port):
     return subprocess.Popen(
         [
-            sys.executable, "-m", "mml_cloud_transfer.service",
+            sys.executable, "-m", "mml_cloud_courier.service",
             "--data-dir", str(data_dir), "--port", str(port),
         ],
         stdout=subprocess.DEVNULL,

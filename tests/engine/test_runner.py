@@ -4,16 +4,16 @@ state transitions are exercised for real."""
 
 import pytest
 
-import mml_cloud_transfer.engine.runner as runner
-from mml_cloud_transfer.core.errors import ErrorCategory
-from mml_cloud_transfer.core.models import Direction, FileState, JobStatus, SliceState
-from mml_cloud_transfer.core.retry import RetrySchedule
-from mml_cloud_transfer.engine.runner import EngineOptions, run_job
-from mml_cloud_transfer.gcs.objects import ObjectMeta
-from mml_cloud_transfer.gcs.uploader import UploadResult
-from mml_cloud_transfer.cli.scan_command import run_scan
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+import mml_cloud_courier.engine.runner as runner
+from mml_cloud_courier.core.errors import ErrorCategory
+from mml_cloud_courier.core.models import Direction, FileState, JobStatus, SliceState
+from mml_cloud_courier.core.retry import RetrySchedule
+from mml_cloud_courier.engine.runner import EngineOptions, run_job
+from mml_cloud_courier.gcs.objects import ObjectMeta
+from mml_cloud_courier.gcs.uploader import UploadResult
+from mml_cloud_courier.cli.scan_command import run_scan
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 
 class FakeApiError(Exception):
@@ -230,7 +230,7 @@ def test_checksum_mismatch_clears_stale_slices(job, monkeypatch):
     state, or the next attempt starts from a sticky, already-broken state
     until the file is quarantined many attempts later.
     """
-    from mml_cloud_transfer.gcs.uploader import ChecksumMismatch
+    from mml_cloud_courier.gcs.uploader import ChecksumMismatch
 
     db, job_id = job
     conn = connect(db)
@@ -402,7 +402,7 @@ def test_stop_between_files_reenqueues_the_job(job, monkeypatch):
 
 
 def test_stopped_file_is_not_marked_failed(job, monkeypatch):
-    from mml_cloud_transfer.core.errors import TransferStopped
+    from mml_cloud_courier.core.errors import TransferStopped
 
     db, job_id = job
     monkeypatch.setattr(

@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from mml_cloud_transfer.gcs.objects import GcsHttpError
-from mml_cloud_transfer.gcs.resumable import (
+from mml_cloud_courier.gcs.objects import GcsHttpError
+from mml_cloud_courier.gcs.resumable import (
     PutResult,
     SessionExpired,
     put_chunk,

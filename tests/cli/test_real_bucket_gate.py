@@ -17,11 +17,11 @@ import time
 
 import pytest
 
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.core.models import FileState, JobStatus
-from mml_cloud_transfer.gcs.objects import get_meta, list_prefix
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.core.hashing import hash_file
+from mml_cloud_courier.core.models import FileState, JobStatus
+from mml_cloud_courier.gcs.objects import get_meta, list_prefix
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 MIB = 1024 * 1024
 BIG_BYTES = 2560 * MIB      # 2.5 GiB -> 3 slices: 1 GiB, 1 GiB, 0.5 GiB
@@ -34,7 +34,7 @@ KILL_DEADLINE_SECONDS = 900
 
 
 def _cli(*args):
-    return [sys.executable, "-m", "mml_cloud_transfer.cli", *args]
+    return [sys.executable, "-m", "mml_cloud_courier.cli", *args]
 
 
 def _write_blocks(path, block_count: int, seed: int) -> None:
@@ -161,7 +161,7 @@ def test_multi_gigabyte_kill_and_resume(real_bucket_ctx, big_tree, tmp_path):
     assert meta.crc32c == hash_file(big_tree / "big.bin").crc32c
 
     # No orphaned slice temps anywhere under the run.
-    orphans = [m.name for m in list_prefix(ctx, prefix) if ".mmlct.tmp/" in m.name]
+    orphans = [m.name for m in list_prefix(ctx, prefix) if ".mmlcc.tmp/" in m.name]
     assert orphans == [], f"slice temp objects survived compose: {orphans}"
 
     # The report is the artifact a user is handed in the morning.

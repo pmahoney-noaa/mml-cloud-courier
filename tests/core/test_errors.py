@@ -5,7 +5,7 @@ import pytest
 import requests.exceptions
 import urllib3.exceptions
 
-from mml_cloud_transfer.core.errors import Classification, ErrorCategory, classify, describe
+from mml_cloud_courier.core.errors import Classification, ErrorCategory, classify, describe
 
 
 class FakeApiError(Exception):

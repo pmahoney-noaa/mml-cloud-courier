@@ -3,8 +3,8 @@ import sys
 
 import pytest
 
-from mml_cloud_transfer.service import security
-from mml_cloud_transfer.service.security import (
+from mml_cloud_courier.service import security
+from mml_cloud_courier.service.security import (
     _acl_grants,
     _current_sid,
     ensure_token,

@@ -5,9 +5,9 @@ import threading
 
 import pytest
 
-from mml_cloud_transfer.core.models import Direction
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository, ProfileInUse
+from mml_cloud_courier.core.models import Direction
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository, ProfileInUse
 
 
 @pytest.fixture
@@ -103,7 +103,7 @@ def test_delete_profile_removes_an_unreferenced_row(repo):
 
 
 def test_find_active_duplicate_blocks_and_releases(repo):
-    from mml_cloud_transfer.core.models import JobStatus
+    from mml_cloud_courier.core.models import JobStatus
 
     pid = repo.create_profile(name="lab", bucket="bkt", auth_type="adc")
     job_id = repo.create_job(name="j", direction=Direction.UPLOAD,

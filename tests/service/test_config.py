@@ -1,6 +1,6 @@
 import json
 
-from mml_cloud_transfer.service.config import (
+from mml_cloud_courier.service.config import (
     DEFAULT_PORT,
     default_data_dir,
     load_config,
@@ -8,7 +8,7 @@ from mml_cloud_transfer.service.config import (
 
 
 def test_env_override_wins(monkeypatch, tmp_path):
-    monkeypatch.setenv("MMLCT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MMLCC_DATA_DIR", str(tmp_path))
     assert default_data_dir() == tmp_path
 
 
@@ -46,7 +46,7 @@ def test_port_argument_beats_settings(tmp_path):
 
 
 def test_credentials_dir_lives_under_the_data_dir(tmp_path):
-    from mml_cloud_transfer.service.config import load_config
+    from mml_cloud_courier.service.config import load_config
 
     config = load_config(tmp_path / "data")
     assert config.credentials_dir == (tmp_path / "data") / "credentials"

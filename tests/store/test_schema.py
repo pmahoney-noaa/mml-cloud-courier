@@ -2,8 +2,8 @@ import sqlite3
 
 import pytest
 
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.schema import SCHEMA_VERSION, apply_migrations
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.schema import SCHEMA_VERSION, apply_migrations
 
 EXPECTED_TABLES = {
     "schema_version",

@@ -11,13 +11,13 @@ import time
 
 import pytest
 
-from mml_cloud_transfer.core.models import JobStatus
-from mml_cloud_transfer.engine.joblock import (
+from mml_cloud_courier.core.models import JobStatus
+from mml_cloud_courier.engine.joblock import (
     JobAlreadyRunning,
     JobLockUnavailable,
     job_run_lock,
 )
-from mml_cloud_transfer.engine.runner import run_job
+from mml_cloud_courier.engine.runner import run_job
 
 # The lock is msvcrt.locking-based and Windows-only by design (see
 # joblock.py); msvcrt itself is imported lazily so the module still
@@ -81,7 +81,7 @@ def test_error_message_names_job_and_lock_path(tmp_path):
 
 _HOLD_SCRIPT = """
 import sys, time
-from mml_cloud_transfer.engine.joblock import job_run_lock
+from mml_cloud_courier.engine.joblock import job_run_lock
 with job_run_lock(sys.argv[1], int(sys.argv[2])):
     print("locked", flush=True)
     time.sleep(60)
@@ -195,10 +195,10 @@ def test_run_job_succeeds_normally_once_no_one_holds_the_lock(tmp_path):
     an empty (no planned files) job still reaches a verdict. audit=False
     because the (empty-manifest) audit step still calls list_prefix(ctx,
     ...) unconditionally, which would need a real ctx."""
-    from mml_cloud_transfer.core.models import Direction
-    from mml_cloud_transfer.engine.runner import EngineOptions
-    from mml_cloud_transfer.store.db import connect
-    from mml_cloud_transfer.store.repository import JobRepository
+    from mml_cloud_courier.core.models import Direction
+    from mml_cloud_courier.engine.runner import EngineOptions
+    from mml_cloud_courier.store.db import connect
+    from mml_cloud_courier.store.repository import JobRepository
 
     db = tmp_path / "jobs.db"
     conn = connect(db)

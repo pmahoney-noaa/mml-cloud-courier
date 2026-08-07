@@ -1,6 +1,6 @@
 import random
 
-from mml_cloud_transfer.core.retry import QUARANTINE_ATTEMPTS, RetrySchedule
+from mml_cloud_courier.core.retry import QUARANTINE_ATTEMPTS, RetrySchedule
 
 
 def test_defaults_match_the_spec():

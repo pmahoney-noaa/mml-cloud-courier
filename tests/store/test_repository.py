@@ -1,15 +1,15 @@
 import pytest
 
-from mml_cloud_transfer.core.errors import ErrorCategory
-from mml_cloud_transfer.core.models import (
+from mml_cloud_courier.core.errors import ErrorCategory
+from mml_cloud_courier.core.models import (
     Direction,
     FileState,
     JobStatus,
     PlannedFile,
     TransferMethod,
 )
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 GIB = 1024**3
 
@@ -361,7 +361,7 @@ def test_state_survives_reopening_the_database(tmp_path):
 
 
 def test_add_planned_files_honours_a_size_policy(repo):
-    from mml_cloud_transfer.core.slicing import SizePolicy
+    from mml_cloud_courier.core.slicing import SizePolicy
 
     tiny = SizePolicy(
         single_shot_max=10,

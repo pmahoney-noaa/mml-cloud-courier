@@ -11,10 +11,10 @@
   every object it writes to that folder, so an in-use bucket is a valid target.
 
 .EXAMPLE
-  pwsh tests/tools/preflight-gcs.ps1 -Bucket mmlct-gate-test
+  pwsh tests/tools/preflight-gcs.ps1 -Bucket mmlcc-gate-test
 
 .EXAMPLE
-  pwsh tests/tools/preflight-gcs.ps1 -Bucket my-research-bucket -Prefix scratch/mmlct
+  pwsh tests/tools/preflight-gcs.ps1 -Bucket my-research-bucket -Prefix scratch/mmlcc
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Bucket,
@@ -138,12 +138,12 @@ if ($code -ne 0) {
     $hasTmpRule = $false
     foreach ($rule in $rules) {
         if ($rule.condition.matchesPrefix -and
-            ($rule.condition.matchesPrefix -join " ") -match "mmlct") { $hasTmpRule = $true }
+            ($rule.condition.matchesPrefix -join " ") -match "mmlcc") { $hasTmpRule = $true }
     }
     if (-not $hasTmpRule) {
-        Report-Warn "no lifecycle rule covering mmlct-gate/ orphans — see the gate record for the JSON"
+        Report-Warn "no lifecycle rule covering mmlcc-gate/ orphans — see the gate record for the JSON"
     } else {
-        Report-Ok "lifecycle rule covering mmlct objects is present"
+        Report-Ok "lifecycle rule covering mmlcc objects is present"
     }
 }
 
@@ -154,11 +154,11 @@ if ($code -ne 0) {
 # than describing the IAM that might allow them, and its delete step is also
 # the real test for a retention policy, which metadata could not tell us about.
 if (-not $script:Failed) {
-    $probePrefix = "$PrefixPath" + "mmlct-preflight/$([guid]::NewGuid().ToString('N').Substring(0,8))"
-    $tmp = Join-Path $env:TEMP "mmlct-probe.bin"
+    $probePrefix = "$PrefixPath" + "mmlcc-preflight/$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    $tmp = Join-Path $env:TEMP "mmlcc-probe.bin"
     $wrote = $false
     try {
-        Set-Content -Path $tmp -Value "mmlct preflight probe" -NoNewline
+        Set-Content -Path $tmp -Value "mmlcc preflight probe" -NoNewline
         $code, $out = Invoke-Gcloud storage cp $tmp "gs://$Bucket/$probePrefix/a.bin"
         if ($code -ne 0) {
             Report-Fail "cannot write to gs://$Bucket/$PrefixPath — $($out -split "`n" | Select-Object -First 1)" `
@@ -214,9 +214,9 @@ if ($script:Failed) {
 }
 Write-Host "Preflight passed. Run the gate with:" -ForegroundColor Green
 Write-Host ""
-Write-Host "  `$env:MMLCT_TEST_BUCKET = `"$Bucket`""
+Write-Host "  `$env:MMLCC_TEST_BUCKET = `"$Bucket`""
 if ($PrefixPath) {
-    Write-Host "  `$env:MMLCT_TEST_PREFIX = `"$($PrefixPath.TrimEnd('/'))`""
+    Write-Host "  `$env:MMLCC_TEST_PREFIX = `"$($PrefixPath.TrimEnd('/'))`""
 }
 Write-Host ""
 exit 0

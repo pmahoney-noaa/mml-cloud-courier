@@ -1,9 +1,9 @@
 import pytest
 
-from mml_cloud_transfer.core.hashing import hash_file
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.gcs.objects import get_meta
-from mml_cloud_transfer.gcs.uploader import upload_resumable
+from mml_cloud_courier.core.hashing import hash_file
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.gcs.objects import get_meta
+from mml_cloud_courier.gcs.uploader import upload_resumable
 
 CHUNK = 256 * 1024
 
@@ -157,7 +157,7 @@ def test_sha256_survives_a_resume(ctx, source):
     )
     assert result.sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
     stamped = ctx.client.bucket(ctx.bucket).get_blob("r/sha.bin")
-    assert stamped.metadata == {"mmlct-sha256": result.sha256}
+    assert stamped.metadata == {"mmlcc-sha256": result.sha256}
 
 
 def test_chunk_size_must_be_aligned(tmp_path):

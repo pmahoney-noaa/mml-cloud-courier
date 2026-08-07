@@ -4,7 +4,7 @@ import threading
 pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
-from mml_cloud_transfer.gui.workers import call_async, _guarded
+from mml_cloud_courier.gui.workers import call_async, _guarded
 
 
 def test_call_async_delivers_the_result_on_the_qt_loop(qtbot, qapp):

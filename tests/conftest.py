@@ -1,9 +1,9 @@
 """Shared fixtures: the fake-gcs-server emulator and marker gating.
 
 The emulator binary lives at tools/fake-gcs-server.exe (fetched by
-tests/tools/get-fake-gcs-server.ps1, overridable via MMLCT_FAKE_GCS).
+tests/tools/get-fake-gcs-server.ps1, overridable via MMLCC_FAKE_GCS).
 Emulator tests skip with an actionable message when it is absent.
-real_bucket tests skip unless MMLCT_TEST_BUCKET is set.
+real_bucket tests skip unless MMLCC_TEST_BUCKET is set.
 """
 
 from __future__ import annotations
@@ -38,11 +38,11 @@ def _free_port() -> int:
 
 @pytest.fixture(scope="session")
 def emulator():
-    exe = Path(os.environ.get("MMLCT_FAKE_GCS", _DEFAULT_EXE))
+    exe = Path(os.environ.get("MMLCC_FAKE_GCS", _DEFAULT_EXE))
     if not exe.exists():
         pytest.skip(
             f"fake-gcs-server not found at {exe} — run "
-            "pwsh tests/tools/get-fake-gcs-server.ps1 (or set MMLCT_FAKE_GCS)"
+            "pwsh tests/tools/get-fake-gcs-server.ps1 (or set MMLCC_FAKE_GCS)"
         )
 
     port = _free_port()
@@ -80,11 +80,11 @@ def emulator_client(emulator):
     from google.cloud import storage
 
     client = storage.Client(
-        project="mmlct-test",
+        project="mmlcc-test",
         credentials=AnonymousCredentials(),
         client_options={"api_endpoint": emulator.endpoint},
     )
-    bucket_name = f"mmlct-{uuid.uuid4().hex[:12]}"
+    bucket_name = f"mmlcc-{uuid.uuid4().hex[:12]}"
     client.create_bucket(bucket_name)
     yield client, bucket_name
 
@@ -104,10 +104,10 @@ def sa_key_json() -> dict:
     ).decode("ascii")
     return {
         "type": "service_account",
-        "project_id": "mmlct-test",
+        "project_id": "mmlcc-test",
         "private_key_id": "0" * 40,
         "private_key": pem,
-        "client_email": "probe@mmlct-test.iam.gserviceaccount.com",
+        "client_email": "probe@mmlcc-test.iam.gserviceaccount.com",
         "client_id": "0",
         "token_uri": "https://oauth2.googleapis.com/token",
     }
@@ -116,13 +116,13 @@ def sa_key_json() -> dict:
 #: The one path segment an operator can never supply. Teardown deletes
 #: everything under the run prefix, so this segment is what makes that
 #: deletion safe -- see _gate_run_prefix and the guard in real_bucket_ctx.
-GATE_SEGMENT = "mmlct-gate"
+GATE_SEGMENT = "mmlcc-gate"
 
 
 def _gate_run_prefix(base: str) -> str:
     """Build a unique run prefix under `base`, always inside GATE_SEGMENT.
 
-    `base` is the operator's MMLCT_TEST_PREFIX -- a scratch folder inside a
+    `base` is the operator's MMLCC_TEST_PREFIX -- a scratch folder inside a
     bucket that may hold real data. It is normalised, never trusted, and can
     never displace the gate segment.
     """
@@ -138,7 +138,7 @@ def real_bucket_ctx():
 
     Session-scoped so one prefix covers the whole gate run. Teardown deletes
     every version -- live and noncurrent alike -- of every object under the
-    prefix, including <name>.mmlct.tmp/<nnnn> slice temps (which live under
+    prefix, including <name>.mmlcc.tmp/<nnnn> slice temps (which live under
     it by construction, gcs.uploader.slice_temp_name), and fails the session
     if anything survives, so a leak surfaces as a red test rather than a
     surprise bill.
@@ -152,19 +152,19 @@ def real_bucket_ctx():
     per blob; a plain delete on a versioning-enabled bucket only creates
     another noncurrent version rather than removing the one just listed.
 
-    MMLCT_TEST_PREFIX confines the run to a scratch folder, so an in-use
+    MMLCC_TEST_PREFIX confines the run to a scratch folder, so an in-use
     bucket is a valid target.
     """
-    bucket = os.environ.get("MMLCT_TEST_BUCKET")
+    bucket = os.environ.get("MMLCC_TEST_BUCKET")
     if not bucket:
         pytest.skip(
-            "set MMLCT_TEST_BUCKET (and ADC credentials) to run the release gate - "
+            "set MMLCC_TEST_BUCKET (and ADC credentials) to run the release gate - "
             "see docs/superpowers/gates/2026-08-05-plan2-release-gate.md"
         )
 
-    from mml_cloud_transfer.gcs.client import make_context
+    from mml_cloud_courier.gcs.client import make_context
 
-    run_prefix = _gate_run_prefix(os.environ.get("MMLCT_TEST_PREFIX", ""))
+    run_prefix = _gate_run_prefix(os.environ.get("MMLCC_TEST_PREFIX", ""))
     ctx = make_context(bucket)
     # Collision check, before any test can write: a fresh <stamp>-<uuid8>/
     # prefix must be virgin. Anything here means we collided with a
@@ -179,7 +179,7 @@ def real_bucket_ctx():
     try:
         yield ctx, run_prefix
     finally:
-        # The guard. Everything below deletes recursively, and MMLCT_TEST_PREFIX
+        # The guard. Everything below deletes recursively, and MMLCC_TEST_PREFIX
         # points into a bucket that may hold real data -- so refuse to delete
         # anything whose path is not demonstrably ours. A typo fails a test
         # instead of destroying data.

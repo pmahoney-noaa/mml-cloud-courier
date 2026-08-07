@@ -9,11 +9,11 @@ from contextlib import redirect_stdout
 import pytest
 import requests
 
-from mml_cloud_transfer.cli.__main__ import main
-from mml_cloud_transfer.cli.service_client import ApiClient, ServiceError
-from mml_cloud_transfer.core.models import JobStatus
-from mml_cloud_transfer.store.db import connect
-from mml_cloud_transfer.store.repository import JobRepository
+from mml_cloud_courier.cli.__main__ import main
+from mml_cloud_courier.cli.service_client import ApiClient, ServiceError
+from mml_cloud_courier.core.models import JobStatus
+from mml_cloud_courier.store.db import connect
+from mml_cloud_courier.store.repository import JobRepository
 
 from tests.service.conftest import free_port, running_host  # noqa: F401
 
@@ -102,7 +102,7 @@ def test_direct_mode_connection_errors_are_not_masked(monkeypatch, tmp_path):
     not the service's ConnectionError and must not be reported as
     'service not reachable'."""
     monkeypatch.setattr(
-        "mml_cloud_transfer.cli.__main__.run_transfer",
+        "mml_cloud_courier.cli.__main__.run_transfer",
         lambda args: (_ for _ in ()).throw(
             requests.exceptions.ConnectionError("gcs down")
         ),
@@ -158,8 +158,8 @@ def test_status_in_service_mode_needs_no_db(running_host):
 
 
 def test_direct_mode_without_db_exits_2_with_guidance(capsys, monkeypatch):
-    # Ensure MMLCT_SERVICE_URL is not set so we're in pure direct mode
-    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)
+    # Ensure MMLCC_SERVICE_URL is not set so we're in pure direct mode
+    monkeypatch.delenv("MMLCC_SERVICE_URL", raising=False)
     with pytest.raises(SystemExit) as excinfo:
         main(["status"])
     assert excinfo.value.code == 2

@@ -9,17 +9,17 @@ import random
 
 import pytest
 
-from mml_cloud_transfer.core.crc32c_combine import combine_all
-from mml_cloud_transfer.core.errors import ErrorCategory, classify
-from mml_cloud_transfer.core.hashing import crc32c_from_base64, crc32c_to_base64, hash_file
-from mml_cloud_transfer.core.slicing import SizePolicy, plan_slices
-from mml_cloud_transfer.gcs.objects import delete_object, get_meta, list_prefix
-from mml_cloud_transfer.gcs.resumable import (
+from mml_cloud_courier.core.crc32c_combine import combine_all
+from mml_cloud_courier.core.errors import ErrorCategory, classify
+from mml_cloud_courier.core.hashing import crc32c_from_base64, crc32c_to_base64, hash_file
+from mml_cloud_courier.core.slicing import SizePolicy, plan_slices
+from mml_cloud_courier.gcs.objects import delete_object, get_meta, list_prefix
+from mml_cloud_courier.gcs.resumable import (
     initiate_upload,
     put_chunk,
     query_offset,
 )
-from mml_cloud_transfer.gcs.uploader import (
+from mml_cloud_courier.gcs.uploader import (
     compose_slices,
     slice_temp_name,
     upload_resumable,
@@ -148,9 +148,9 @@ def test_compose_preserves_slice_order(real_bucket_ctx, composable):
     assert result.state == "verified"
     assert result.remote_crc32c == combined
 
-    leftovers = [m.name for m in list_prefix(ctx, f"{name}.mmlct.tmp/")]
+    leftovers = [m.name for m in list_prefix(ctx, f"{name}.mmlcc.tmp/")]
     assert leftovers == [], f"compose left temp objects behind: {leftovers}"
-    assert slice_temp_name(name, 0) == f"{name}.mmlct.tmp/0000"
+    assert slice_temp_name(name, 0) == f"{name}.mmlcc.tmp/0000"
 
 
 @pytest.mark.real_bucket
@@ -297,7 +297,7 @@ def test_compose_slices_leaves_no_noncurrent_temp_versions(real_bucket_ctx, comp
     assert result.state == "verified"
 
     temp_versions = list(
-        ctx.client.list_blobs(ctx.bucket, prefix=f"{name}.mmlct.tmp/", versions=True)
+        ctx.client.list_blobs(ctx.bucket, prefix=f"{name}.mmlcc.tmp/", versions=True)
     )
     assert temp_versions == [], (
         f"compose_slices left noncurrent temp versions behind: {temp_versions}"

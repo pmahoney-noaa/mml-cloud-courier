@@ -3,7 +3,7 @@ import pytest
 pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
-from mml_cloud_transfer.gui.wizard import (
+from mml_cloud_courier.gui.wizard import (
     WizardState, build_submission, parse_duplicate_job_id, preview_scan,
 )
 
@@ -26,7 +26,7 @@ def test_build_submission_resolves_mapped_drives():
 
 def test_parse_duplicate_job_id():
     detail = ("job 12 (incomplete) already transfers this source to"
-              " gs://b/p — resume it (mmlct resume --job-id 12) or cancel it")
+              " gs://b/p — resume it (mmlcc resume --job-id 12) or cancel it")
     assert parse_duplicate_job_id(detail) == 12
     assert parse_duplicate_job_id("something else entirely") is None
 
@@ -59,7 +59,7 @@ class FakeWizardClient:
 
 
 def test_wizard_walks_to_submission(qtbot, tmp_path):
-    from mml_cloud_transfer.gui.wizard import NewTransferWizard
+    from mml_cloud_courier.gui.wizard import NewTransferWizard
 
     client = FakeWizardClient()
     wizard = NewTransferWizard(client)

@@ -7,12 +7,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from mml_cloud_transfer.core.errors import TransferStopped
-from mml_cloud_transfer.core.slicing import SliceSpec
-from mml_cloud_transfer.gcs.client import make_context
-from mml_cloud_transfer.gcs.downloader import _fetch_range
-from mml_cloud_transfer.gcs.objects import get_meta
-from mml_cloud_transfer.gcs.uploader import upload_resumable
+from mml_cloud_courier.core.errors import TransferStopped
+from mml_cloud_courier.core.slicing import SliceSpec
+from mml_cloud_courier.gcs.client import make_context
+from mml_cloud_courier.gcs.downloader import _fetch_range
+from mml_cloud_courier.gcs.objects import get_meta
+from mml_cloud_courier.gcs.uploader import upload_resumable
 
 _MIB = 1024 * 1024
 
