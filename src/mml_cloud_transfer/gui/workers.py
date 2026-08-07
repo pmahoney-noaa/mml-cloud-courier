@@ -16,6 +16,15 @@ from PySide6.QtCore import QObject, Signal
 from mml_cloud_transfer.gui.watcher import poll_loop, watch_job
 
 
+def _guarded(stop_event, emit):
+    """Suppress emissions from a superseded watch: after stop() the old
+    thread may still drain buffered stream lines."""
+    def wrapped(*args):
+        if not stop_event.is_set():
+            emit(*args)
+    return wrapped
+
+
 class Bridge(QObject):
     done = Signal(object)
     failed = Signal(str)
@@ -58,7 +67,8 @@ class JobWatcher(QObject):
         def runner():
             final = watch_job(
                 client, job_id, stop=stop_event.is_set,
-                on_snapshot=self.snapshot.emit, on_state=self.state.emit,
+                on_snapshot=_guarded(stop_event, self.snapshot.emit),
+                on_state=_guarded(stop_event, self.state.emit),
             )
             if not stop_event.is_set():
                 self.settled.emit(final)
@@ -87,7 +97,8 @@ class JobsPoller(QObject):
         threading.Thread(
             target=lambda: poll_loop(
                 client, stop=stop_event.is_set, interval=interval,
-                on_jobs=self.jobs.emit, on_down=self.down.emit,
+                on_jobs=_guarded(stop_event, self.jobs.emit),
+                on_down=_guarded(stop_event, self.down.emit),
             ),
             daemon=True, name="mmlct-gui-poll",
         ).start()

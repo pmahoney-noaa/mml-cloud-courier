@@ -89,6 +89,25 @@ def test_watcher_stops_when_asked():
     assert len(seen) == 1
 
 
+def test_watcher_survives_service_error_during_health_check():
+    tick1 = {"status": "running", "progress": {}, "events": [], "transferring": []}
+    tick2 = {"status": "complete", "progress": {}, "events": [], "transferring": []}
+    client = FakeClient(
+        stream_steps=[
+            {"yields": [tick1], "raises": requests.exceptions.ConnectionError()},
+            {"yields": [tick2]},
+        ],
+        job_statuses=["complete"],
+        health_steps=[ServiceError(502, "bad gateway"), {"status": "ok"}],
+    )
+    states = []
+
+    final = watch_job(client, 1, sleep=lambda s: None, on_state=states.append)
+
+    assert "reconnecting" in states
+    assert final["status"] == "complete"
+
+
 def test_detect_transitions_flags_only_noteworthy_changes():
     before = {1: "running", 2: "running", 3: "pending"}
     after = {1: "complete", 2: "running", 3: "running", 4: "incomplete"}

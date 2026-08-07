@@ -33,7 +33,7 @@ def _wait_for_service(client, stop, sleep, on_state) -> bool:
         try:
             client.health()
             return True
-        except requests.exceptions.RequestException:
+        except (requests.exceptions.RequestException, ServiceError, ValueError):
             continue
     return False
 
