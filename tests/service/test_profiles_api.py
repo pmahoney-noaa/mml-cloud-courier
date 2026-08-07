@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from mml_cloud_transfer.auth.preflight import PreflightResult
 from mml_cloud_transfer.core.models import Direction
+from mml_cloud_transfer.service import app as app_module
 from mml_cloud_transfer.service.app import create_app
 from mml_cloud_transfer.service.config import load_config
 from mml_cloud_transfer.service.controller import JobController
@@ -320,3 +321,43 @@ def test_preview_counts_objects_and_skips_preflight_probes(emulator_api, emulato
     response = client.post(f"/profiles/{profile_id}/preview",
                            json={"prefix": "elsewhere"})
     assert response.json()["objects"] == 1
+
+
+@pytest.mark.emulator
+def test_preview_exactly_at_cap_is_not_truncated(emulator_api, emulator_client, monkeypatch):
+    """A bucket with exactly PREVIEW_MAX_OBJECTS non-probe objects must NOT
+    be reported truncated — nothing was actually cut off."""
+    monkeypatch.setattr(app_module, "PREVIEW_MAX_OBJECTS", 3)
+    client, config, create = emulator_api
+    storage_client, bucket_name = emulator_client
+    profile_id = create(name="atcap", default_prefix="data").json()["id"]
+    bucket = storage_client.bucket(bucket_name)
+    for i in range(3):
+        bucket.blob(f"data/o{i}.bin").upload_from_string(b"x")
+
+    response = client.post(f"/profiles/{profile_id}/preview", json={})
+    assert response.status_code == 200
+    assert response.json() == {"objects": 3, "bytes": 3, "truncated": False}
+
+
+@pytest.mark.emulator
+def test_preview_one_past_cap_is_truncated_and_excludes_the_extra_object(
+    emulator_api, emulator_client, monkeypatch,
+):
+    """cap+1 objects: only the first `cap` are counted (and their bytes
+    summed) — the (cap+1)th trips truncated without being counted."""
+    monkeypatch.setattr(app_module, "PREVIEW_MAX_OBJECTS", 3)
+    client, config, create = emulator_api
+    storage_client, bucket_name = emulator_client
+    profile_id = create(name="pastcap", default_prefix="data").json()["id"]
+    bucket = storage_client.bucket(bucket_name)
+    for i in range(3):
+        bucket.blob(f"data/o{i}.bin").upload_from_string(b"x")
+    bucket.blob("data/o3-extra.bin").upload_from_string(b"x" * 999)
+
+    response = client.post(f"/profiles/{profile_id}/preview", json={})
+    assert response.status_code == 200
+    body = response.json()
+    assert body["objects"] == 3
+    assert body["truncated"] is True
+    assert body["bytes"] == 3   # the 999-byte 4th object must not be counted

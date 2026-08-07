@@ -666,11 +666,11 @@ def create_app(
             for meta in list_prefix(ctx, lead):
                 if PROBE_SEGMENT in meta.name.split("/"):
                     continue  # transient preflight probes are not user data
-                objects += 1
-                total_bytes += meta.size
                 if objects >= PREVIEW_MAX_OBJECTS:
                     truncated = True
                     break
+                objects += 1
+                total_bytes += meta.size
         except Exception as exc:
             raise HTTPException(status_code=400, detail=(
                 f"cannot list gs://{row['bucket']}/{base}:"
