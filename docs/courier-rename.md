@@ -28,7 +28,15 @@ old names on purpose — they document what actually happened. Objects
 uploaded before the rename keep their `mmlct-sha256` metadata key; nothing
 reads that key back (verification recomputes hashes locally).
 
-The live service migration (reinstall as MMLCloudCourier, in-place data
-directory rename — same volume, ACLs and machine-scope DPAPI blobs
-unaffected) happens as a separate step after this branch merges; this
-paragraph is updated to the completed record at that point.
+The live migration completed 2026-08-07 (merge 62f1ff5): MMLCloudTransfer
+was deregistered (already stopped, zero active jobs — all 15 terminal),
+the data directory renamed in place (same volume; ACLs and machine-scope
+DPAPI blobs unaffected), and the service reinstalled and started as
+MMLCloudCourier (auto-start, restart-on-failure). One deviation from the
+plan: a fresh install registers LocalSystem, so the log-on account was
+restored to `.\pmaho` (the gate-sanctioned named-account config) via
+services.msc afterward. Verified on the migrated install: /health ok,
+all 3 profiles and jobs 1–15 intact, settings.json carried
+`file_workers: 6`, suite green at 526 passed / 13 skipped on merged
+master, and `mmlcc-gui` shows the full history. No user-scoped
+MMLCT_OAUTH_CLIENT env var existed to migrate.
