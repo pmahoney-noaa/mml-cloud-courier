@@ -16,12 +16,19 @@ compatibility aliases.
 | gate segment | mmlct-gate | mmlcc-gate |
 | slice temp infix | .mmlct.tmp/ | .mmlcc.tmp/ |
 | audit metadata key | mmlct-sha256 | mmlcc-sha256 |
+| connectivity probe object | mmlct-connectivity-probe | mmlcc-connectivity-probe |
+| emulator client project | "mmlct" | "mmlcc" |
+| thread names | mmlct-worker / mmlct-api / mmlct-gui-* | mmlcc-worker / mmlcc-api / mmlcc-gui-* |
+| DPAPI blob description | MML Cloud Transfer credential | MML Cloud Courier credential |
+| service class | MmlctService | MmlccService |
+| service display name | MML Cloud Transfer Service | MML Cloud Courier Service |
 
 Historical records under `docs/superpowers/{specs,plans,gates}` keep the
 old names on purpose — they document what actually happened. Objects
 uploaded before the rename keep their `mmlct-sha256` metadata key; nothing
 reads that key back (verification recomputes hashes locally).
 
-The live service was reinstalled as MMLCloudCourier and the data
-directory renamed in place (same volume, ACLs and machine-scope DPAPI
-blobs unaffected); job history 1–15 carried over intact.
+The live service migration (reinstall as MMLCloudCourier, in-place data
+directory rename — same volume, ACLs and machine-scope DPAPI blobs
+unaffected) happens as a separate step after this branch merges; this
+paragraph is updated to the completed record at that point.

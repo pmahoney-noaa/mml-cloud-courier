@@ -530,6 +530,8 @@ if ($old) {
 
 - [ ] **Step 8: Confirm settings carry-over.** `Get-Content "C:\ProgramData\MML Cloud Courier\settings.json"` still shows `"file_workers": 6` (adopted; carried as-is by the directory rename — no edit).
 
+- [ ] **Step 9: Update the rename note to the completed record.** In docs/courier-rename.md, replace the "happens as a separate step after this branch merges" paragraph with the past-tense record of what actually happened (service reinstalled as MMLCloudCourier, data dir renamed in place, job history verified intact — adjusted if reality differed), and commit it on master as `docs: courier rename note - live migration completed`.
+
 ---
 
 ## Out of scope (deliberate)
