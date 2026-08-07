@@ -133,6 +133,12 @@ def _build(category: ErrorCategory) -> Classification:
     )
 
 
+def describe(category: ErrorCategory) -> Classification:
+    """Public taxonomy lookup for callers that hold a category, not an
+    exception — the grouped Errors view and the report."""
+    return _build(category)
+
+
 def _from_http_status(code: int, message: str = "") -> ErrorCategory | None:
     if code in (401, 403):
         return ErrorCategory.CREDENTIAL

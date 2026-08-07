@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from mml_cloud_transfer.auth.context import context_for_profile
 from mml_cloud_transfer.auth.credential_store import CredentialStore
 from mml_cloud_transfer.auth.preflight import run_preflight
-from mml_cloud_transfer.core.errors import classify
+from mml_cloud_transfer.core.errors import ErrorCategory, classify, describe
 from mml_cloud_transfer.core.models import Direction, JobStatus
 from mml_cloud_transfer.core.paths import display_path, extended_path, is_unc
 from mml_cloud_transfer.engine.report import write_report
@@ -311,7 +311,8 @@ def create_app(
 
     @router.get("/jobs/{job_id}/files")
     def get_files(
-        job_id: int, state: str | None = None, limit: int = 500, offset: int = 0
+        job_id: int, state: str | None = None, category: str | None = None,
+        limit: int = 500, offset: int = 0,
     ) -> list[dict]:
         limit = max(1, min(limit, 5000))
         conn, repo = _open()
@@ -320,11 +321,28 @@ def create_app(
             return [
                 _row_dict(r)
                 for r in repo.get_files_page(
-                    job_id, state=state, limit=limit, offset=offset
+                    job_id, state=state, category=category, limit=limit, offset=offset
                 )
             ]
         finally:
             conn.close()
+
+    @router.get("/jobs/{job_id}/errors")
+    def get_error_groups(job_id: int) -> list[dict]:
+        conn, repo = _open()
+        try:
+            _job_or_404(repo, job_id)
+            groups = repo.error_groups(job_id)
+        finally:
+            conn.close()
+        out = []
+        for group in groups:
+            try:
+                info = describe(ErrorCategory(group["category"]))
+            except ValueError:  # a category this build no longer knows
+                info = describe(ErrorCategory.UNKNOWN)
+            out.append({**group, "message": info.message, "action": info.action})
+        return out
 
     @router.get("/jobs/{job_id}/events")
     def get_events(job_id: int, after_id: int = 0) -> list[dict]:

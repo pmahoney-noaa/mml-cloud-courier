@@ -4,7 +4,8 @@ tested by arming the controller directly, exactly as the worker does."""
 import pytest
 from fastapi.testclient import TestClient
 
-from mml_cloud_transfer.core.models import JobStatus
+from mml_cloud_transfer.core.errors import ErrorCategory
+from mml_cloud_transfer.core.models import Direction, JobStatus, PlannedFile
 from mml_cloud_transfer.service.app import create_app
 from mml_cloud_transfer.service.config import load_config
 from mml_cloud_transfer.service.controller import JobController
@@ -275,3 +276,30 @@ def test_deep_download_destination_is_created_via_extended_path(api, tmp_path):
     import os
     from mml_cloud_transfer.core.paths import extended_path
     assert os.path.isdir(extended_path(str(deep)))
+
+
+def _seed_error_job(config) -> int:
+    conn = connect(config.db_path)
+    repo = JobRepository(conn)
+    job_id = repo.create_job(name="e", direction=Direction.UPLOAD,
+                             source_root="C:\\d", dest_prefix="")
+    repo.add_planned_files(job_id, [
+        PlannedFile(f"f{i}.bin", f"C:\\d\\f{i}.bin", 10, 1) for i in range(3)
+    ])
+    files = repo.get_files(job_id)
+    repo.mark_failed(files[0]["id"], ErrorCategory.PERMISSION_DENIED, "denied")
+    repo.mark_failed(files[1]["id"], ErrorCategory.PERMISSION_DENIED, "denied")
+    conn.close()
+    return job_id
+
+
+def test_errors_route_groups_by_cause_with_plain_language(api):
+    client, config, _ = api
+    job_id = _seed_error_job(config)
+    response = client.get(f"/jobs/{job_id}/errors")
+    assert response.status_code == 200
+    top = response.json()[0]
+    assert top["category"] == "permission_denied"
+    assert top["count"] == 2
+    assert "denied" in top["message"].lower()
+    assert top["action"]

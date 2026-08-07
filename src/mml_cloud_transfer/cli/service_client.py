@@ -71,6 +71,24 @@ class ApiClient:
             self._session.post(f"{self._base}/jobs/{job_id}/report", timeout=600)
         )
 
+    def files(
+        self, job_id: int, *, state: str | None = None,
+        category: str | None = None, limit: int = 500, offset: int = 0,
+    ) -> list[dict]:
+        params: dict = {"limit": limit, "offset": offset}
+        if state is not None:
+            params["state"] = state
+        if category is not None:
+            params["category"] = category
+        return self._check(self._session.get(
+            f"{self._base}/jobs/{job_id}/files", params=params, timeout=30
+        ))
+
+    def errors(self, job_id: int) -> list[dict]:
+        return self._check(
+            self._session.get(f"{self._base}/jobs/{job_id}/errors", timeout=30)
+        )
+
     def events(self, job_id: int, after_id: int = 0) -> list[dict]:
         return self._check(
             self._session.get(

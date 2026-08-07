@@ -3,7 +3,7 @@ import pytest
 import requests.exceptions
 import urllib3.exceptions
 
-from mml_cloud_transfer.core.errors import Classification, ErrorCategory, classify
+from mml_cloud_transfer.core.errors import Classification, ErrorCategory, classify, describe
 
 
 class FakeApiError(Exception):
@@ -419,3 +419,10 @@ def test_default_credentials_error_stays_credential():
     from google.auth.exceptions import DefaultCredentialsError
 
     assert classify(DefaultCredentialsError("no ADC")).category is ErrorCategory.CREDENTIAL
+
+
+def test_describe_returns_the_taxonomy_entry():
+    info = describe(ErrorCategory.FILE_LOCKED)
+    assert info.category is ErrorCategory.FILE_LOCKED
+    assert "open in another program" in info.message
+    assert info.action
