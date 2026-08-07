@@ -3,6 +3,7 @@
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -90,3 +91,28 @@ def test_sweep_orphans_removes_only_unreferenced_blobs(tmp_path):
 
 def test_sweep_orphans_with_no_store_directory_is_a_noop(tmp_path):
     assert CredentialStore(tmp_path / "never-created").sweep_orphans(set()) == []
+
+
+def test_sweep_orphans_skips_a_held_file_without_raising(tmp_path, monkeypatch):
+    """A PermissionError (e.g. AV holding a blob at boot) must not propagate
+    through sweep_orphans -> worker.startup_recovery -> ServiceHost.start():
+    the held file is skipped and retried at the next startup instead of
+    failing service startup over a stray file."""
+    store = CredentialStore(tmp_path / "credentials")
+    held = store.save({"type": "service_account", "k": 1})
+    removable = store.save({"type": "service_account", "k": 2})
+
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self, *args, **kwargs):
+        if self.name == held:
+            raise PermissionError("file is in use")
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+    removed = store.sweep_orphans(set())  # neither ref is referenced
+
+    assert removed == [removable]
+    assert (tmp_path / "credentials" / held).exists()            # held file remains
+    assert not (tmp_path / "credentials" / removable).exists()   # other orphan still removed

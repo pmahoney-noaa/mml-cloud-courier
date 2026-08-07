@@ -62,6 +62,11 @@ class CredentialStore:
                 continue  # never touch files we did not create
             if path.name in referenced:
                 continue
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                # A held file (e.g. AV scanning it at boot) is retried at the
+                # next startup; it must never block service startup.
+                continue
             removed.append(path.name)
         return removed
