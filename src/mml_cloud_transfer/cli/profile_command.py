@@ -64,12 +64,18 @@ def run_profile(args) -> int:
 
     if command == "login":
         config = load_client_config(args.client_config)
+        client = _api_client(args)
+        client.health()  # a typo'd URL or stopped service fails HERE — before
+                         # a browser flow mints a refresh token nobody stores
+        if _find_profile(client, args.name) is not None:
+            print(f"a profile named {args.name!r} already exists — remove it"
+                  " first or pick another name")
+            return 1
         print("Tip: for unattended, recurring transfers a least-privilege"
               " service account key (object access to one bucket) is"
               " recommended; Google sign-in suits interactive use.")
         print("A browser window will open for Google sign-in...")
         credential = run_login(config)
-        client = _api_client(args)
         result = client.create_profile({
             "name": args.name, "bucket": args.bucket,
             "auth_type": "oauth_user", "credential": credential,
