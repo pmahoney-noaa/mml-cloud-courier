@@ -26,12 +26,14 @@ class FileTableModel(QAbstractTableModel):
         self._state: str | None = None
         self._category: str | None = None
         self._exhausted = True   # nothing to fetch until set_filter()
+        self.last_error: str | None = None
 
     def set_filter(self, state: str | None = None, category: str | None = None) -> None:
         self.beginResetModel()
         self._state, self._category = state, category
         self._rows = []
         self._exhausted = False
+        self.last_error = None
         self.endResetModel()
         self.fetchMore(QModelIndex())
 
@@ -57,8 +59,14 @@ class FileTableModel(QAbstractTableModel):
     def fetchMore(self, parent: QModelIndex) -> None:
         if self._exhausted:
             return
-        page = self._fetcher(state=self._state, category=self._category,
-                             limit=PAGE, offset=len(self._rows))
+        try:
+            page = self._fetcher(state=self._state, category=self._category,
+                                 limit=PAGE, offset=len(self._rows))
+        except Exception as exc:
+            # Stop hammering a failing endpoint; refresh() retries deliberately.
+            self._exhausted = True
+            self.last_error = str(exc)
+            return
         if len(page) < PAGE:
             self._exhausted = True
         if not page:

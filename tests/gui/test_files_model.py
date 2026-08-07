@@ -54,3 +54,37 @@ def test_set_filter_passes_through_and_resets(qapp):
     assert fetcher.calls[-1]["state"] == "failed"
     assert fetcher.calls[-1]["category"] == "file_locked"
     assert model.rowCount() == 3
+
+
+def test_fetcher_exception_does_not_escape(qapp):
+    class FailingFetcher:
+        def __call__(self, **kw):
+            raise RuntimeError("boom")
+
+    model = FileTableModel(FailingFetcher())
+    model.set_filter()  # should not raise
+    assert model.rowCount() == 0
+    assert not model.canFetchMore(QModelIndex())
+    assert model.last_error == "boom"
+
+
+def test_error_recovery_on_refresh(qapp):
+    class StatefulFetcher:
+        def __init__(self):
+            self.call_count = 0
+
+        def __call__(self, **kw):
+            self.call_count += 1
+            if self.call_count == 1:
+                raise RuntimeError("transient")
+            return _rows(2)
+
+    fetcher = StatefulFetcher()
+    model = FileTableModel(fetcher)
+    model.set_filter()  # first call fails
+    assert model.rowCount() == 0
+    assert model.last_error == "transient"
+
+    model.refresh()  # second call succeeds
+    assert model.rowCount() == 2
+    assert model.last_error is None
