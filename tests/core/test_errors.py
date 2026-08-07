@@ -1,3 +1,5 @@
+import sys
+
 import google.auth.exceptions
 import pytest
 import requests.exceptions
@@ -39,6 +41,41 @@ def test_windows_sharing_violation_maps_to_file_locked():
     result = classify(exc)
     assert result.category is ErrorCategory.FILE_LOCKED
     assert result.transient is True
+
+
+@pytest.mark.skipif(sys.platform != "win32",
+                    reason="sharing violations are a Windows concept")
+def test_a_real_lock_through_io_open_classifies_as_file_locked(tmp_path):
+    """CPython's open() collapses ERROR_SHARING_VIOLATION into plain EACCES
+    (winerror=None), so the winerror check alone never fires in production —
+    Phase 5 gate finding. classify must re-probe via Win32."""
+    import ctypes
+
+    path = tmp_path / "locked.bin"
+    path.write_bytes(b"x" * 10)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    handle = kernel32.CreateFileW(str(path), 0x80000000, 0, None, 3, 0, None)
+    assert handle and handle != ctypes.c_void_p(-1).value, "lock setup failed"
+    try:
+        with pytest.raises(PermissionError) as excinfo:
+            with open(path, "rb") as fh:
+                fh.read()
+        assert excinfo.value.winerror is None   # the premise of the bug
+        assert classify(excinfo.value).category is ErrorCategory.FILE_LOCKED
+    finally:
+        kernel32.CloseHandle(ctypes.c_void_p(handle))
+
+
+def test_permission_error_on_an_accessible_file_stays_permission_denied(tmp_path):
+    """The re-probe only reclassifies on an affirmative sharing violation:
+    a fabricated or stale EACCES naming a perfectly readable file must not
+    flip to file_locked."""
+    path = tmp_path / "readable.bin"
+    path.write_bytes(b"x")
+    exc = PermissionError(13, "denied")
+    exc.filename = str(path)
+    assert classify(exc).category is ErrorCategory.PERMISSION_DENIED
 
 
 def test_filename_too_long_maps_to_path_too_long():

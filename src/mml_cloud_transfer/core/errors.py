@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import errno
 import re
+import sys
 from dataclasses import dataclass
 from enum import Enum
 
@@ -171,6 +172,41 @@ def _from_http_status(code: int, message: str = "") -> ErrorCategory | None:
     return None
 
 
+def _sharing_violation(path) -> bool:
+    """True when a Win32 re-probe of ``path`` reports a sharing violation.
+
+    CPython's ``open()`` funnels CreateFile errors through the C runtime,
+    which collapses ERROR_SHARING_VIOLATION into plain EACCES — the
+    exception arrives with ``winerror=None`` and the code above this one
+    can never see 32/33 for an io-module open. Re-probing with CreateFileW
+    recovers the real code: a file another process holds without sharing
+    refuses ANY new open with 32/33 regardless of the share mode we ask
+    for, while a genuine ACL denial refuses with 5. Only an affirmative
+    32/33 reclassifies; a probe that succeeds (the lock vanished in the
+    gap) stays PERMISSION_DENIED — conservative, and a resume rereads the
+    file anyway.
+    """
+    if sys.platform != "win32":
+        return False
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.restype = ctypes.c_void_p
+    GENERIC_READ = 0x80000000
+    SHARE_ALL = 0x1 | 0x2 | 0x4  # read | write | delete
+    OPEN_EXISTING = 3
+    handle = kernel32.CreateFileW(
+        str(path), GENERIC_READ, SHARE_ALL, None, OPEN_EXISTING, 0, None
+    )
+    invalid = ctypes.c_void_p(-1).value
+    if not handle or handle == invalid:
+        return ctypes.get_last_error() in (
+            _ERROR_SHARING_VIOLATION, _ERROR_LOCK_VIOLATION,
+        )
+    kernel32.CloseHandle(ctypes.c_void_p(handle))
+    return False
+
+
 def _from_os_error(exc: OSError) -> ErrorCategory:
     winerror = getattr(exc, "winerror", None)
     if winerror in (_ERROR_SHARING_VIOLATION, _ERROR_LOCK_VIOLATION):
@@ -178,6 +214,9 @@ def _from_os_error(exc: OSError) -> ErrorCategory:
     if winerror == _ERROR_FILENAME_EXCED_RANGE:
         return ErrorCategory.PATH_TOO_LONG
     if isinstance(exc, PermissionError):
+        filename = getattr(exc, "filename", None)
+        if winerror is None and filename and _sharing_violation(filename):
+            return ErrorCategory.FILE_LOCKED
         return ErrorCategory.PERMISSION_DENIED
     if isinstance(exc, (ConnectionError, TimeoutError)):
         return ErrorCategory.NETWORK
