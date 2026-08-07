@@ -19,7 +19,7 @@ CRYPTPROTECT_LOCAL_MACHINE = 0x04
 _FLAGS = CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN
 
 
-def protect(data: bytes, *, description: str = "MML Cloud Transfer credential") -> bytes:
+def protect(data: bytes, *, description: str = "MML Cloud Courier credential") -> bytes:
     if sys.platform != "win32":
         raise NotImplementedError("DPAPI is Windows-only")
     import win32crypt

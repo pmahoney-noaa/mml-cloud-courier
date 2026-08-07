@@ -1,7 +1,7 @@
 """Service configuration: the data directory layout and settings.json.
 
 Everything the host, worker, and API must agree on lives here. The data
-directory defaults to %ProgramData%\\MML Cloud Transfer; tests and console
+directory defaults to %ProgramData%\\MML Cloud Courier; tests and console
 runs point MMLCC_DATA_DIR (or --data-dir) at a temp directory instead.
 """
 
@@ -21,7 +21,7 @@ def default_data_dir() -> Path:
     env = os.environ.get("MMLCC_DATA_DIR")
     if env:
         return Path(env)
-    return Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "MML Cloud Transfer"
+    return Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "MML Cloud Courier"
 
 
 @dataclass(frozen=True)

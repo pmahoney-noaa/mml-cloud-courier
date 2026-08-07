@@ -30,7 +30,7 @@ def discover_session() -> ServiceSession:
     except (OSError, ValueError):
         return ServiceSession(base_url, token_path, None, error=(
             "Cannot read the service access token at"
-            f" {token_path}.\nIs the MML Cloud Transfer service installed,"
+            f" {token_path}.\nIs the MML Cloud Courier service installed,"
             " and does your Windows account have access to its data folder?"
         ))
     return ServiceSession(base_url, token_path, ApiClient(base_url, token))

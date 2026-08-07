@@ -153,7 +153,7 @@ def create_app(
     *,
     preflight_fn=run_preflight,
 ) -> FastAPI:
-    app = FastAPI(title="MML Cloud Transfer", version=VERSION)
+    app = FastAPI(title="MML Cloud Courier", version=VERSION)
     app.state.config = config
     app.state.controller = controller
     app.state.token = ensure_token(config.token_path)

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sys
 
-SERVICE_NAME = "MMLCloudTransfer"
+SERVICE_NAME = "MMLCloudCourier"
 
 
 def start_service_elevated(shell_execute=None) -> bool:

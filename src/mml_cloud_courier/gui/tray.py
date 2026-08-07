@@ -23,7 +23,7 @@ _MESSAGES = {
     ),
     "incomplete": (
         "Transfer needs attention",
-        "'{name}' finished with problems. Open MML Cloud Transfer to see"
+        "'{name}' finished with problems. Open MML Cloud Courier to see"
         " what and why.",
     ),
     "stalled": (
@@ -33,7 +33,7 @@ _MESSAGES = {
 }
 
 STILL_RUNNING_MESSAGE = (
-    "MML Cloud Transfer is still running here. Transfers continue in the"
+    "MML Cloud Courier is still running here. Transfers continue in the"
     " background."
 )
 
@@ -54,7 +54,7 @@ class TrayController:
             return
 
         self.icon = QSystemTrayIcon(app_icon(), parent)
-        self.icon.setToolTip("MML Cloud Transfer")
+        self.icon.setToolTip("MML Cloud Courier")
 
         self.menu = QMenu()
         open_action = QAction("Open", self.menu)
@@ -99,7 +99,7 @@ class TrayController:
         if not self._balloon_shown:
             self._balloon_shown = True
             self.icon.showMessage(
-                "MML Cloud Transfer", STILL_RUNNING_MESSAGE,
+                "MML Cloud Courier", STILL_RUNNING_MESSAGE,
                 QSystemTrayIcon.MessageIcon.Information,
             )
         return True

@@ -13,7 +13,7 @@ def test_service_class_shape():
     )
 
     cls = _build_service_class()
-    assert cls._svc_name_ == SERVICE_NAME == "MMLCloudTransfer"
+    assert cls._svc_name_ == SERVICE_NAME == "MMLCloudCourier"
     assert cls._svc_display_name_ == DISPLAY_NAME
     assert issubclass(cls, win32serviceutil.ServiceFramework)
 

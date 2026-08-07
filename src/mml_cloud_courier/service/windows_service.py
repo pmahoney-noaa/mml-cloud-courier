@@ -24,8 +24,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-SERVICE_NAME = "MMLCloudTransfer"
-DISPLAY_NAME = "MML Cloud Transfer Service"
+SERVICE_NAME = "MMLCloudCourier"
+DISPLAY_NAME = "MML Cloud Courier Service"
 
 
 def _build_service_class():
@@ -37,7 +37,7 @@ def _build_service_class():
     from mml_cloud_courier.service.config import load_config
     from mml_cloud_courier.service.host import ServiceHost
 
-    class MmlctService(win32serviceutil.ServiceFramework):
+    class MmlccService(win32serviceutil.ServiceFramework):
         _svc_name_ = SERVICE_NAME
         _svc_display_name_ = DISPLAY_NAME
         _svc_description_ = (
@@ -68,7 +68,7 @@ def _build_service_class():
                 self._host.stop()
             win32event.SetEvent(self._stop)
 
-    return MmlctService
+    return MmlccService
 
 
 def _configure_restart_on_failure() -> None:

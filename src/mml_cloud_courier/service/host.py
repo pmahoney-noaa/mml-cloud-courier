@@ -47,7 +47,7 @@ class ServiceHost:
             self._lock_file.close()
             self._lock_file = None
             raise RuntimeError(
-                f"another MML Cloud Transfer service already owns"
+                f"another MML Cloud Courier service already owns"
                 f" {self.config.data_dir} — refusing to start a second instance"
             ) from exc
 
@@ -111,7 +111,7 @@ def run_console(config: ServiceConfig) -> None:
     host = ServiceHost(config)
     host.start()
     host.wait_ready()
-    print(f"MML Cloud Transfer service on {config.base_url} (Ctrl+C to stop)")
+    print(f"MML Cloud Courier service on {config.base_url} (Ctrl+C to stop)")
     try:
         while True:
             time.sleep(1)

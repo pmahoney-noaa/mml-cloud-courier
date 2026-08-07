@@ -13,7 +13,7 @@ def main() -> int:
     from mml_cloud_courier.gui.session import discover_session
 
     app = QApplication(sys.argv)
-    app.setApplicationName("MML Cloud Transfer")
+    app.setApplicationName("MML Cloud Courier")
     app.setWindowIcon(app_icon())
     if QSystemTrayIcon.isSystemTrayAvailable():
         # Without this, Qt quits as soon as the last *visible* window closes.

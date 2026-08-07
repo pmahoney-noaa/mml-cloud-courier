@@ -61,7 +61,7 @@ class MainWindow(QMainWindow):
         self.session = session
         self.client = session.client
         self._poll_interval = poll_interval
-        self.setWindowTitle("MML Cloud Transfer")
+        self.setWindowTitle("MML Cloud Courier")
         self.resize(1100, 700)
 
         self._selected_job_id: int | None = None
@@ -278,7 +278,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Couldn't start the service",
                 "Windows refused or the prompt was cancelled. Ask your"
-                " administrator to start the 'MML Cloud Transfer' service.",
+                " administrator to start the 'MML Cloud Courier' service.",
             )
 
     def closeEvent(self, event) -> None:
