@@ -20,9 +20,9 @@ def free_port() -> int:
 def gui_host(tmp_path, monkeypatch):
     from mml_cloud_courier.service.host import ServiceHost
 
-    monkeypatch.setenv("MMLCT_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("MMLCC_DATA_DIR", str(tmp_path / "data"))
     config = load_config(tmp_path / "data", port=free_port())
-    monkeypatch.setenv("MMLCT_SERVICE_URL", config.base_url)
+    monkeypatch.setenv("MMLCC_SERVICE_URL", config.base_url)
     host = ServiceHost(config)
     host.start()
     host.wait_ready()

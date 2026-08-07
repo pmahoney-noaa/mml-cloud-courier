@@ -205,7 +205,7 @@ class NewConnectionDialog(QDialog):
         fields = self._fields()
         if fields is None:
             return
-        source = os.environ.get("MMLCT_OAUTH_CLIENT")
+        source = os.environ.get("MMLCC_OAUTH_CLIENT")
         if not source:
             path, _filter = QFileDialog.getOpenFileName(
                 self, "Choose the OAuth client configuration",

@@ -13,7 +13,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="mml_cloud_courier.service")
     parser.add_argument("--data-dir", default=None,
                         help="Data directory (default: %%ProgramData%%\\MML Cloud Transfer,"
-                             " or MMLCT_DATA_DIR)")
+                             " or MMLCC_DATA_DIR)")
     parser.add_argument("--port", type=int, default=None)
     args = parser.parse_args(argv)
     run_console(load_config(args.data_dir, port=args.port))

@@ -33,7 +33,7 @@ def _print_created(result: dict) -> None:
 def run_profile(args) -> int:
     if not args.service_url:
         print("profile commands need the service: pass --service-url"
-              " (or set MMLCT_SERVICE_URL)")
+              " (or set MMLCC_SERVICE_URL)")
         return 2
 
     command = args.profile_command

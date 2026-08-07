@@ -158,8 +158,8 @@ def test_status_in_service_mode_needs_no_db(running_host):
 
 
 def test_direct_mode_without_db_exits_2_with_guidance(capsys, monkeypatch):
-    # Ensure MMLCT_SERVICE_URL is not set so we're in pure direct mode
-    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)
+    # Ensure MMLCC_SERVICE_URL is not set so we're in pure direct mode
+    monkeypatch.delenv("MMLCC_SERVICE_URL", raising=False)
     with pytest.raises(SystemExit) as excinfo:
         main(["status"])
     assert excinfo.value.code == 2

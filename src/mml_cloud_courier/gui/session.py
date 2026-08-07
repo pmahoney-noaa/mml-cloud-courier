@@ -23,8 +23,8 @@ class ServiceSession:
 
 def discover_session() -> ServiceSession:
     config = load_config()
-    base_url = os.environ.get("MMLCT_SERVICE_URL") or config.base_url
-    token_path = Path(os.environ.get("MMLCT_TOKEN_FILE") or config.token_path)
+    base_url = os.environ.get("MMLCC_SERVICE_URL") or config.base_url
+    token_path = Path(os.environ.get("MMLCC_TOKEN_FILE") or config.token_path)
     try:
         token = read_token(token_path)
     except (OSError, ValueError):

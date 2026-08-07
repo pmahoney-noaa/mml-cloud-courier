@@ -32,7 +32,7 @@ def oauth_client_json(tmp_path, monkeypatch):
         "client_id": "x", "client_secret": "y",
         "token_uri": "https://oauth2.googleapis.com/token",
     }}))
-    monkeypatch.setenv("MMLCT_OAUTH_CLIENT", str(path))
+    monkeypatch.setenv("MMLCC_OAUTH_CLIENT", str(path))
     return path
 
 
@@ -59,7 +59,7 @@ def _profile_args(config, *extra):
 
 
 def test_profile_commands_require_the_service(tmp_path, capsys, monkeypatch):
-    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)
+    monkeypatch.delenv("MMLCC_SERVICE_URL", raising=False)
     code = main(["profile", "list"])
     assert code == 2
     assert "--service-url" in capsys.readouterr().out

@@ -95,12 +95,12 @@ def test_load_client_config_reads_a_file(tmp_path):
 def test_load_client_config_falls_back_to_the_env_var(tmp_path, monkeypatch):
     path = tmp_path / "client.json"
     path.write_text(json.dumps(CLIENT_CONFIG), encoding="utf-8")
-    monkeypatch.setenv("MMLCT_OAUTH_CLIENT", str(path))
+    monkeypatch.setenv("MMLCC_OAUTH_CLIENT", str(path))
     assert load_client_config(None) == CLIENT_CONFIG
 
 
 def test_load_client_config_without_any_source_explains_how(monkeypatch):
-    monkeypatch.delenv("MMLCT_OAUTH_CLIENT", raising=False)
+    monkeypatch.delenv("MMLCC_OAUTH_CLIENT", raising=False)
     with pytest.raises(ValueError, match="--client-config"):
         load_client_config(None)
 

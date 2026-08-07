@@ -2,7 +2,7 @@
 
 Everything the host, worker, and API must agree on lives here. The data
 directory defaults to %ProgramData%\\MML Cloud Transfer; tests and console
-runs point MMLCT_DATA_DIR (or --data-dir) at a temp directory instead.
+runs point MMLCC_DATA_DIR (or --data-dir) at a temp directory instead.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ DEFAULT_PORT = 47821
 
 
 def default_data_dir() -> Path:
-    env = os.environ.get("MMLCT_DATA_DIR")
+    env = os.environ.get("MMLCC_DATA_DIR")
     if env:
         return Path(env)
     return Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "MML Cloud Transfer"

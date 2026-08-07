@@ -18,7 +18,7 @@ PREFIX_SHAPE = re.compile(
 
 
 def test_the_gate_segment_is_never_operator_supplied():
-    """No MMLCT_TEST_PREFIX value can produce a prefix without mmlct-gate/.
+    """No MMLCC_TEST_PREFIX value can produce a prefix without mmlct-gate/.
 
     Teardown recursively deletes everything under the run prefix. This is the
     assertion standing between a typo in that variable and someone's data.

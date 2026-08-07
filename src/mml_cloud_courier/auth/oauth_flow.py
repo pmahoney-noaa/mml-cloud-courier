@@ -8,7 +8,7 @@ unattended after logoff.
 
 No desktop OAuth client ID ships yet, so the client configuration is
 injected (a client_secret_*.json from Google Cloud Console) via
---client-config or MMLCT_OAUTH_CLIENT. For installed apps the
+--client-config or MMLCC_OAUTH_CLIENT. For installed apps the
 "client secret" is not genuinely secret — standard, and stated plainly
 in the spec. Phase 6 packages a default client ID.
 """
@@ -23,11 +23,11 @@ SCOPES = ["https://www.googleapis.com/auth/devstorage.read_write"]
 
 
 def load_client_config(path: str | None) -> dict:
-    source = path or os.environ.get("MMLCT_OAUTH_CLIENT")
+    source = path or os.environ.get("MMLCC_OAUTH_CLIENT")
     if not source:
         raise ValueError(
             "no OAuth client configuration: pass --client-config (or set"
-            " MMLCT_OAUTH_CLIENT) to a client_secret_*.json downloaded from"
+            " MMLCC_OAUTH_CLIENT) to a client_secret_*.json downloaded from"
             " Google Cloud Console > APIs & Services > Credentials >"
             " Create credentials > OAuth client ID > Desktop app"
         )

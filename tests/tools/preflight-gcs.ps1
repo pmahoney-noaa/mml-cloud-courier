@@ -214,9 +214,9 @@ if ($script:Failed) {
 }
 Write-Host "Preflight passed. Run the gate with:" -ForegroundColor Green
 Write-Host ""
-Write-Host "  `$env:MMLCT_TEST_BUCKET = `"$Bucket`""
+Write-Host "  `$env:MMLCC_TEST_BUCKET = `"$Bucket`""
 if ($PrefixPath) {
-    Write-Host "  `$env:MMLCT_TEST_PREFIX = `"$($PrefixPath.TrimEnd('/'))`""
+    Write-Host "  `$env:MMLCC_TEST_PREFIX = `"$($PrefixPath.TrimEnd('/'))`""
 }
 Write-Host ""
 exit 0

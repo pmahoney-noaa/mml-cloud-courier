@@ -314,7 +314,7 @@ def test_workers_negative_is_rejected_on_resume_before_any_network(tmp_path, cap
 def test_transfer_profile_requires_service_url(tmp_path, capsys, monkeypatch):
     # The env var default would silently turn this into service mode on a
     # machine (like the dev box) where the live install exports it.
-    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)
+    monkeypatch.delenv("MMLCC_SERVICE_URL", raising=False)
     code = main([
         "transfer", "--db", str(tmp_path / "j.db"), "--name", "j",
         "--source", str(tmp_path), "--profile", "lab",
@@ -328,7 +328,7 @@ def test_direct_mode_reissue_after_crash_is_refused(tmp_path, capsys, monkeypatc
     `resume`) for a destination an active job owns exits 3 with the
     resume command — no second writer. The guard must fire before any
     GCS context is built, so this needs no credentials and no network."""
-    monkeypatch.delenv("MMLCT_SERVICE_URL", raising=False)  # force direct mode
+    monkeypatch.delenv("MMLCC_SERVICE_URL", raising=False)  # force direct mode
 
     db = tmp_path / "jobs.db"
     src = tmp_path / "src"; src.mkdir()

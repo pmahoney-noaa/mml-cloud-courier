@@ -8,7 +8,7 @@ from mml_cloud_courier.service.config import (
 
 
 def test_env_override_wins(monkeypatch, tmp_path):
-    monkeypatch.setenv("MMLCT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("MMLCC_DATA_DIR", str(tmp_path))
     assert default_data_dir() == tmp_path
 
 

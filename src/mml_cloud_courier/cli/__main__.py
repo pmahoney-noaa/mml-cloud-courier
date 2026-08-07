@@ -27,7 +27,7 @@ from mml_cloud_courier.engine.joblock import JobLockError
 def add_service_options(sub):
     sub.add_argument(
         "--service-url",
-        default=os.environ.get("MMLCT_SERVICE_URL"),
+        default=os.environ.get("MMLCC_SERVICE_URL"),
         help="Drive this command through the service API at this URL",
     )
     sub.add_argument(
@@ -131,7 +131,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_profile_target_options(login)
     login.add_argument("--client-config", default=None,
-                       help="OAuth desktop client JSON (default: MMLCT_OAUTH_CLIENT)")
+                       help="OAuth desktop client JSON (default: MMLCC_OAUTH_CLIENT)")
     add_service_options(login)
 
     plist = profile_sub.add_parser("list", help="List profiles")
