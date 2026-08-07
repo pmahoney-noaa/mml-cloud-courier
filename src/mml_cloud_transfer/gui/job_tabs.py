@@ -41,10 +41,24 @@ from mml_cloud_transfer.gui.format import (
 
 _CATEGORY_ROLE = Qt.ItemDataRole.UserRole + 1
 _FILLED_ROLE = Qt.ItemDataRole.UserRole + 2
-_LAZY_PAGE = 500
 
 _RESUME_VISIBLE = frozenset({"paused", "stalled", "incomplete", "cancelled"})
 _REPORT_VISIBLE = frozenset({"complete", "paused", "stalled", "incomplete", "cancelled"})
+
+
+def group_fill_rows(page: list[str], group_count: int) -> list[str]:
+    """Rows to display for a lazily-filled error group.
+
+    ``page`` is a single (already page-size-bounded) fetch of paths; the
+    trailing "...and N more" row is sized from the group's already-known
+    ``group_count`` rather than by fetching every remaining page, so
+    expanding a large group costs exactly one round trip.
+    """
+    rows = list(page)
+    remaining = group_count - len(page)
+    if remaining > 0:
+        rows.append(f"…and {remaining:,} more")
+    return rows
 
 
 class ProgressTab(QWidget):
@@ -276,19 +290,30 @@ class ErrorsTab(QWidget):
 
     # -- lazy fill ------------------------------------------------------
 
+    def _group_count(self, category: str) -> int:
+        for group in self._groups:
+            if group.category == category:
+                return group.count
+        return 0
+
     def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
         if item.parent() is not None or item.data(0, _FILLED_ROLE):
             return
         item.setData(0, _FILLED_ROLE, True)
         category = item.data(0, _CATEGORY_ROLE)
-        paths = self._on_expand(category) if self._on_expand is not None else []
+        try:
+            page = self._on_expand(category) if self._on_expand is not None else []
+            rows = group_fill_rows(page, self._group_count(category))
+        except Exception as exc:
+            # Leave the group re-expandable (clear _FILLED_ROLE) so the user
+            # can retry instead of being stuck at "Loading..." forever.
+            item.setData(0, _FILLED_ROLE, False)
+            item.takeChildren()
+            item.addChild(QTreeWidgetItem([f"Failed to load: {exc}"]))
+            return
         item.takeChildren()
-        shown = paths[:_LAZY_PAGE]
-        for path in shown:
-            item.addChild(QTreeWidgetItem([path]))
-        remaining = len(paths) - len(shown)
-        if remaining > 0:
-            item.addChild(QTreeWidgetItem([f"…and {remaining:,} more"]))
+        for row in rows:
+            item.addChild(QTreeWidgetItem([row]))
 
     # -- buttons ----------------------------------------------------------
 

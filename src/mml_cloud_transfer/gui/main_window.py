@@ -24,7 +24,11 @@ from PySide6.QtWidgets import (
 )
 
 from mml_cloud_transfer.gui.connection_dialogs import ConnectionsDialog
-from mml_cloud_transfer.gui.errors_model import build_error_groups, fetch_group_paths
+from mml_cloud_transfer.gui.errors_model import (
+    build_error_groups,
+    fetch_group_page,
+    fetch_group_paths,
+)
 from mml_cloud_transfer.gui.job_tabs import ErrorsTab, FilesTab, ProgressTab, SummaryTab
 from mml_cloud_transfer.gui.jobs_model import (
     JOB_ID_ROLE,
@@ -401,10 +405,16 @@ class MainWindow(QMainWindow):
     # -- errors tab callbacks -----------------------------------------
 
     def _on_expand_error_group(self, category: str) -> list[str]:
+        # Deliberately bounded to a single page: this runs synchronously on the
+        # Qt thread from the tree-expand slot, so an unbounded multi-page walk
+        # (fetch_group_paths' cap=20000, up to 40 sequential GETs) would jam the
+        # UI. One localhost page is the documented FilesTab trade-off; the
+        # "...and N more" trailer is sized from the group's already-known count
+        # instead (see ErrorsTab._on_item_expanded).
         job_id = self._selected_job_id
         if job_id is None:
             return []
-        return fetch_group_paths(self.client, job_id, category)
+        return fetch_group_page(self.client, job_id, category)
 
     def _on_retry_errors(self, category: str) -> None:
         job_id = self._selected_job_id

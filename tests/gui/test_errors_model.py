@@ -3,7 +3,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from mml_cloud_transfer.gui.errors_model import (
-    ErrorGroup, build_error_groups, fetch_group_paths,
+    ErrorGroup, build_error_groups, fetch_group_page, fetch_group_paths,
 )
 
 
@@ -38,3 +38,21 @@ def test_fetch_group_paths_pages_until_short_page():
 def test_fetch_group_paths_respects_the_cap():
     client = PagingFakeClient(5000)
     assert len(fetch_group_paths(client, 1, "network", cap=1000)) == 1000
+
+
+def test_fetch_group_page_fetches_exactly_one_page():
+    """The errors-tab tree-expand path must never walk multiple pages
+    (that's fetch_group_paths' job, run async for copy-to-clipboard) —
+    a bounded single GET keeps the synchronous Qt-thread expand fast."""
+    client = PagingFakeClient(5000)
+    page = fetch_group_page(client, 1, "network")
+    assert len(page) == 500
+    assert client.calls == 1
+    assert page == [f"f{i}.bin" for i in range(500)]
+
+
+def test_fetch_group_page_returns_short_page_without_extra_call():
+    client = PagingFakeClient(200)
+    page = fetch_group_page(client, 1, "network")
+    assert len(page) == 200
+    assert client.calls == 1
