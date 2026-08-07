@@ -89,6 +89,14 @@ class ApiClient:
             self._session.get(f"{self._base}/jobs/{job_id}/errors", timeout=30)
         )
 
+    def retry_errors(self, job_id: int, category: str) -> dict:
+        return self._check(self._session.post(
+            f"{self._base}/jobs/{job_id}/errors/{category}/retry", timeout=30))
+
+    def exclude_errors(self, job_id: int, category: str) -> dict:
+        return self._check(self._session.post(
+            f"{self._base}/jobs/{job_id}/errors/{category}/exclude", timeout=30))
+
     def events(self, job_id: int, after_id: int = 0) -> list[dict]:
         return self._check(
             self._session.get(

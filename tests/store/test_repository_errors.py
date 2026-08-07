@@ -40,3 +40,24 @@ def test_category_filter_only_returns_failed_and_quarantined_rows(tmp_path):
     rows = repo.get_files_page(job_id, category="permission_denied")
     assert sorted(r["relative_path"] for r in rows) == ["f0.bin", "f1.bin"]
     conn.close()
+
+
+def test_retry_files_revives_failed_and_quarantined_with_fresh_attempts(tmp_path):
+    conn, repo, job_id, files = _seeded_repo(tmp_path)
+    count = repo.retry_files(job_id, "file_locked")
+    assert count == 1
+    row = repo.get_file(files[2]["id"])
+    assert (row["state"], row["attempts"], row["error_category"]) == ("pending", 0, None)
+    # the other category was untouched
+    assert repo.get_file(files[0]["id"])["state"] == "failed"
+    conn.close()
+
+
+def test_exclude_files_quarantines_failed_rows_and_keeps_the_error(tmp_path):
+    conn, repo, job_id, files = _seeded_repo(tmp_path)
+    count = repo.exclude_files(job_id, "permission_denied")
+    assert count == 2
+    row = repo.get_file(files[0]["id"])
+    assert row["state"] == "quarantined"
+    assert row["error_category"] == "permission_denied"  # cause stays visible
+    conn.close()

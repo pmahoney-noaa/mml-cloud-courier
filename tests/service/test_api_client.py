@@ -28,3 +28,12 @@ def test_files_and_errors_round_trip(running_host):
     assert groups[0]["category"] == "file_locked"
     rows = client.files(job_id, category="file_locked")
     assert rows[0]["relative_path"] == "a.bin"
+
+
+def test_retry_and_exclude_error_groups(running_host):
+    host, config, token = running_host
+    job_id = _seed_failed_job(config)
+    client = ApiClient(config.base_url, token)
+    assert client.exclude_errors(job_id, "file_locked")["count"] == 1
+    assert client.retry_errors(job_id, "file_locked")["count"] == 1
+    assert client.files(job_id, state="pending")[0]["relative_path"] == "a.bin"

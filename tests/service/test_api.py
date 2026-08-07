@@ -303,3 +303,20 @@ def test_errors_route_groups_by_cause_with_plain_language(api):
     assert top["count"] == 2
     assert "denied" in top["message"].lower()
     assert top["action"]
+
+
+def test_error_group_actions_round_trip_and_guard_running_jobs(api):
+    client, config, _ = api
+    job_id = _seed_error_job(config)          # 2 permission_denied failures
+
+    assert client.post(f"/jobs/{job_id}/errors/nonsense/retry").status_code == 422
+
+    response = client.post(f"/jobs/{job_id}/errors/permission_denied/retry")
+    assert response.status_code == 200 and response.json()["count"] == 2
+
+    conn = connect(config.db_path)
+    JobRepository(conn).set_job_status(job_id, JobStatus.RUNNING)
+    conn.close()
+    response = client.post(f"/jobs/{job_id}/errors/permission_denied/exclude")
+    assert response.status_code == 409
+    assert "pause" in response.json()["detail"]

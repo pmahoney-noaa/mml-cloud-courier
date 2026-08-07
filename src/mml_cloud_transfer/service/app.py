@@ -344,6 +344,39 @@ def create_app(
             out.append({**group, "message": info.message, "action": info.action})
         return out
 
+    _ERROR_ACTION_BLOCKED = (
+        JobStatus.RUNNING.value, JobStatus.SCANNING.value, JobStatus.STALLED.value,
+    )
+
+    def _error_action(job_id: int, category: str, action) -> dict:
+        if category not in {c.value for c in ErrorCategory}:
+            raise HTTPException(status_code=422,
+                                detail=f"unknown error category {category!r}")
+        conn, repo = _open()
+        try:
+            job = _job_or_404(repo, job_id)
+            if job["status"] in _ERROR_ACTION_BLOCKED:
+                raise HTTPException(status_code=409, detail=(
+                    f"cannot modify files while the job is {job['status']} —"
+                    " pause it first"
+                ))
+            count, kind = action(repo)
+            if count:
+                repo.record_event(job_id, kind, f"{category}: {count} file(s)")
+        finally:
+            conn.close()
+        return {"count": count}
+
+    @router.post("/jobs/{job_id}/errors/{category}/retry")
+    def retry_error_group(job_id: int, category: str) -> dict:
+        return _error_action(job_id, category, lambda repo: (
+            repo.retry_files(job_id, category), "files_retried"))
+
+    @router.post("/jobs/{job_id}/errors/{category}/exclude")
+    def exclude_error_group(job_id: int, category: str) -> dict:
+        return _error_action(job_id, category, lambda repo: (
+            repo.exclude_files(job_id, category), "files_excluded"))
+
     @router.get("/jobs/{job_id}/events")
     def get_events(job_id: int, after_id: int = 0) -> list[dict]:
         conn, repo = _open()

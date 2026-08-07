@@ -383,6 +383,34 @@ class JobRepository:
         )
         return cursor.rowcount
 
+    def retry_files(self, job_id: int, category: str) -> int:
+        """Reset a cause-group for another go. attempts=0 on purpose: retry
+        must also revive quarantined files, and the cumulative 15-attempt cap
+        would re-quarantine them on the next failure otherwise."""
+        cursor = self._conn.execute(
+            "UPDATE job_files SET state = ?, attempts = 0, error_category = NULL,"
+            " error_message = NULL, heartbeat_at = NULL"
+            " WHERE job_id = ? AND state IN (?, ?)"
+            " AND COALESCE(error_category, 'unknown') = ?",
+            (FileState.PENDING.value, job_id, FileState.FAILED.value,
+             FileState.QUARANTINED.value, category),
+        )
+        return cursor.rowcount
+
+    def exclude_files(self, job_id: int, category: str) -> int:
+        """The Errors tab's 'stop retrying these'. Quarantine, NOT skipped:
+        skipped means 'verified present at destination' and the Layer 3
+        audit would fail user-skipped files as missing. The error columns
+        stay so the report still names the cause."""
+        cursor = self._conn.execute(
+            "UPDATE job_files SET state = ?, heartbeat_at = NULL, finished_at = ?"
+            " WHERE job_id = ? AND state = ?"
+            " AND COALESCE(error_category, 'unknown') = ?",
+            (FileState.QUARANTINED.value, _now(), job_id,
+             FileState.FAILED.value, category),
+        )
+        return cursor.rowcount
+
     # ---- reporting ------------------------------------------------------
 
     def count_by_state(self, job_id: int) -> dict[FileState, int]:
