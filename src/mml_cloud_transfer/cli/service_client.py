@@ -39,9 +39,17 @@ class ApiClient:
     def health(self) -> dict:
         return self._check(self._session.get(f"{self._base}/health", timeout=10))
 
-    def submit_job(self, payload: dict) -> int:
-        response = self._session.post(f"{self._base}/jobs", json=payload, timeout=30)
-        return int(self._check(response)["job_id"])
+    def submit_job(self, payload: dict) -> dict:
+        """Full creation response: job_id, scheduled_start_at, profile_id,
+        preflight_summary. (Returned an int before Phase 5.)"""
+        response = self._session.post(f"{self._base}/jobs", json=payload, timeout=120)
+        return self._check(response)
+
+    def preview_remote(self, profile_id: int, prefix: str | None = None) -> dict:
+        return self._check(self._session.post(
+            f"{self._base}/profiles/{profile_id}/preview",
+            json={"prefix": prefix}, timeout=300,
+        ))
 
     def list_jobs(self) -> list[dict]:
         return self._check(self._session.get(f"{self._base}/jobs", timeout=30))

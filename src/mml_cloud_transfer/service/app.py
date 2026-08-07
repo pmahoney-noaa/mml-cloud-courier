@@ -22,13 +22,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from mml_cloud_transfer.auth.context import context_for_profile
 from mml_cloud_transfer.auth.credential_store import CredentialStore
-from mml_cloud_transfer.auth.preflight import run_preflight
+from mml_cloud_transfer.auth.preflight import PROBE_SEGMENT, run_preflight
 from mml_cloud_transfer.core.errors import ErrorCategory, classify, describe
 from mml_cloud_transfer.core.models import Direction, JobStatus
 from mml_cloud_transfer.core.slicing import SizePolicy
 from mml_cloud_transfer.core.paths import display_path, extended_path, is_unc
 from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.gcs.client import make_context
+from mml_cloud_transfer.gcs.objects import list_prefix
 from mml_cloud_transfer.service.config import ServiceConfig
 from mml_cloud_transfer.service.controller import JobController
 from mml_cloud_transfer.service.security import ensure_token
@@ -67,6 +68,13 @@ class ProfileCreate(BaseModel):
 
 class ProfileCheck(BaseModel):
     direction: Literal["upload", "download"] | None = None
+    prefix: str | None = None
+
+
+PREVIEW_MAX_OBJECTS = 20_000
+
+
+class ProfilePreviewRequest(BaseModel):
     prefix: str | None = None
 
 
@@ -634,6 +642,41 @@ def create_app(
             finally:
                 conn.close()
         return {"ok": ok, "summary": result.summary(), "preflight": asdict(result)}
+
+    @router.post("/profiles/{profile_id}/preview")
+    def preview_profile(profile_id: int, body: ProfilePreviewRequest) -> dict:
+        conn, repo = _open()
+        try:
+            row = _profile_or_404(repo, profile_id)
+        finally:
+            conn.close()
+        try:
+            ctx = context_for_profile(row, CredentialStore(config.credentials_dir))
+        except Exception as exc:
+            reason = str(exc) if isinstance(exc, ValueError) else classify(exc).message
+            raise HTTPException(status_code=400, detail=(
+                f"stored credential could not be loaded: {reason}"
+            )) from exc
+        prefix = body.prefix if body.prefix is not None else row["default_prefix"]
+        base = prefix.strip("/")
+        lead = f"{base}/" if base else ""
+        objects = total_bytes = 0
+        truncated = False
+        try:
+            for meta in list_prefix(ctx, lead):
+                if PROBE_SEGMENT in meta.name.split("/"):
+                    continue  # transient preflight probes are not user data
+                objects += 1
+                total_bytes += meta.size
+                if objects >= PREVIEW_MAX_OBJECTS:
+                    truncated = True
+                    break
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=(
+                f"cannot list gs://{row['bucket']}/{base}:"
+                f" {classify(exc).message}"
+            )) from exc
+        return {"objects": objects, "bytes": total_bytes, "truncated": truncated}
 
     @router.delete("/profiles/{profile_id}")
     def delete_profile(profile_id: int) -> dict:

@@ -300,3 +300,23 @@ def test_check_with_corrupted_auth_type_is_a_400_naming_the_type(tmp_path):
     response = client.post(f"/profiles/{profile_id}/check", json={})
     assert response.status_code == 400
     assert "mystery" in response.json()["detail"]
+
+
+@pytest.mark.emulator
+def test_preview_counts_objects_and_skips_preflight_probes(emulator_api, emulator_client):
+    client, config, create = emulator_api
+    storage_client, bucket_name = emulator_client
+    profile_id = create(name="prev", default_prefix="data").json()["id"]
+    bucket = storage_client.bucket(bucket_name)
+    bucket.blob("data/a.bin").upload_from_string(b"12345")
+    bucket.blob("data/sub/b.bin").upload_from_string(b"1234567")
+    bucket.blob("data/.mmlct-preflight/zz/probe.bin").upload_from_string(b"x")
+    bucket.blob("elsewhere/c.bin").upload_from_string(b"xx")
+
+    response = client.post(f"/profiles/{profile_id}/preview", json={})
+    assert response.status_code == 200
+    assert response.json() == {"objects": 2, "bytes": 12, "truncated": False}
+
+    response = client.post(f"/profiles/{profile_id}/preview",
+                           json={"prefix": "elsewhere"})
+    assert response.json()["objects"] == 1

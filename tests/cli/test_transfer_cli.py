@@ -362,7 +362,8 @@ def test_service_submission_resolves_mapped_drives(tmp_path, monkeypatch, capsys
     class StubClient:
         def submit_job(self, payload):
             submitted.update(payload)
-            return 1
+            return {"job_id": 1, "scheduled_start_at": None,
+                    "profile_id": None, "preflight_summary": None}
 
     monkeypatch.setattr(transfer_command, "_api_client", lambda args: StubClient())
     monkeypatch.setattr(

@@ -44,3 +44,15 @@ def test_settings_round_trip(running_host):
     client = ApiClient(config.base_url, token)
     assert client.put_settings({"file_workers": 6})["stored"]["file_workers"] == 6
     assert client.get_settings()["restart_required"] is True
+
+
+def test_submit_job_returns_the_full_response(running_host, tmp_path):
+    host, config, token = running_host
+    client = ApiClient(config.base_url, token)
+    source = tmp_path / "src"; source.mkdir(); (source / "a.txt").write_text("x")
+    result = client.submit_job({
+        "name": "j", "direction": "upload", "source_root": str(source),
+        "dest_prefix": "p", "bucket": "b", "audit_hash": False,
+    })
+    assert isinstance(result, dict) and result["job_id"] >= 1
+    assert "preflight_summary" in result
