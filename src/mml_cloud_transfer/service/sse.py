@@ -46,6 +46,7 @@ def snapshot(repo: JobRepository, job_id: int, after_event_id: int) -> dict:
         "job_id": job_id,
         "status": job["status"],
         "progress": asdict(repo.job_progress(job_id)),
+        "transferring": repo.transferring_files(job_id),
         "events": [
             {"id": e["id"], "at": e["at"], "kind": e["kind"], "detail": e["detail"]}
             for e in repo.events_after(job_id, after_event_id)

@@ -436,6 +436,21 @@ class JobRepository:
             state_counts=counts,
         )
 
+    def transferring_files(self, job_id: int, *, limit: int = 10) -> list[dict]:
+        """Slice rollups for files currently in flight — the SSE snapshot's
+        'transferring' section. Plain dicts: this goes straight to JSON."""
+        rows = self._conn.execute(
+            "SELECT f.id AS file_id, f.relative_path, f.size_bytes, f.method,"
+            " COUNT(s.id) AS slices_total,"
+            " COALESCE(SUM(CASE WHEN s.state = ? THEN 1 ELSE 0 END), 0) AS slices_done,"
+            " COALESCE(SUM(s.bytes_transferred), 0) AS bytes_transferred"
+            " FROM job_files f LEFT JOIN file_slices s ON s.file_id = f.id"
+            " WHERE f.job_id = ? AND f.state = ?"
+            " GROUP BY f.id ORDER BY f.id LIMIT ?",
+            (SliceState.UPLOADED.value, job_id, FileState.TRANSFERRING.value, limit),
+        ).fetchall()
+        return [{key: r[key] for key in r.keys()} for r in rows]
+
     def get_files_page(
         self, job_id: int, *, state: str | None = None,
         limit: int = 500, offset: int = 0,
