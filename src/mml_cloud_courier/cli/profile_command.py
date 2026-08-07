@@ -1,4 +1,4 @@
-"""mmlct profile subcommands.
+"""mmlcc profile subcommands.
 
 Always a client of the service API: credentials live in the service's
 DPAPI store, so there is no direct-engine mode here. The OAuth browser

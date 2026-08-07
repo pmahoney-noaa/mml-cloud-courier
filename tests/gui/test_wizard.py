@@ -26,7 +26,7 @@ def test_build_submission_resolves_mapped_drives():
 
 def test_parse_duplicate_job_id():
     detail = ("job 12 (incomplete) already transfers this source to"
-              " gs://b/p — resume it (mmlct resume --job-id 12) or cancel it")
+              " gs://b/p — resume it (mmlcc resume --job-id 12) or cancel it")
     assert parse_duplicate_job_id(detail) == 12
     assert parse_duplicate_job_id("something else entirely") is None
 

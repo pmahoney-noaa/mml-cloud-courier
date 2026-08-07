@@ -1,4 +1,4 @@
-"""pywin32 Windows Service wrapper: mmlct-service install|start|stop|remove.
+"""pywin32 Windows Service wrapper: mmlcc-service install|start|stop|remove.
 
 Runs in session 0, which is the point — jobs survive user logoff. The
 class is built inside a factory so importing this module (e.g. on a

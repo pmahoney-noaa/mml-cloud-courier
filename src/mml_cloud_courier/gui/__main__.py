@@ -1,4 +1,4 @@
-"""GUI entry point: `mmlct-gui`."""
+"""GUI entry point: `mmlcc-gui`."""
 
 from __future__ import annotations
 

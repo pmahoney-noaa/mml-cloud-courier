@@ -37,7 +37,7 @@ def add_service_options(sub):
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="mmlct", description="MML Cloud Transfer")
+    parser = argparse.ArgumentParser(prog="mmlcc", description="MML Cloud Courier")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     scan = subparsers.add_parser("scan", help="Build a transfer manifest from a folder")

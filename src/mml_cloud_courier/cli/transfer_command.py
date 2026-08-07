@@ -159,7 +159,7 @@ def run_transfer_via_service(args) -> int:
     print(f"Job {job_id} submitted")
     if args.scheduled_at:
         print(f"Scheduled to start at {args.scheduled_at}; check progress with"
-              f" 'mmlct status --service-url {args.service_url}'")
+              f" 'mmlcc status --service-url {args.service_url}'")
         return 0
     return _finish_via_service(client, job_id, _watch_until_settled(client, job_id))
 
@@ -191,7 +191,7 @@ def run_transfer(args) -> int:
         print(
             f"job {duplicate['id']} ({duplicate['status']}) already transfers"
             f" this source to gs://{args.bucket}/{args.prefix or ''} — run:"
-            f" mmlct resume --db {args.db} --job-id {duplicate['id']}"
+            f" mmlcc resume --db {args.db} --job-id {duplicate['id']}"
             f" --bucket {args.bucket}"
         )
         return 3

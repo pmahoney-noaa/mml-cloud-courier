@@ -279,7 +279,7 @@ def create_app(
                         f"job {duplicate['id']} ({duplicate['status']}) already"
                         f" transfers this source to"
                         f" gs://{bucket}/{dest_prefix or ''} — resume it"
-                        f" (mmlct resume --job-id {duplicate['id']}) or cancel"
+                        f" (mmlcc resume --job-id {duplicate['id']}) or cancel"
                         " it instead of creating a second writer"
                     ))
                 if profile_id is None:

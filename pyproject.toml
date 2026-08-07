@@ -24,11 +24,11 @@ dev = [
 ]
 
 [project.scripts]
-mmlct = "mml_cloud_courier.cli.__main__:main"
-mmlct-service = "mml_cloud_courier.service.windows_service:main"
+mmlcc = "mml_cloud_courier.cli.__main__:main"
+mmlcc-service = "mml_cloud_courier.service.windows_service:main"
 
 [project.gui-scripts]
-mmlct-gui = "mml_cloud_courier.gui.__main__:main"
+mmlcc-gui = "mml_cloud_courier.gui.__main__:main"
 
 [build-system]
 requires = ["hatchling"]
