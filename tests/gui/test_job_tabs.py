@@ -100,6 +100,28 @@ def test_errors_tab_expand_failure_clears_filled_role_and_shows_error(qtbot):
     assert item.child(0).text(0) == "ok.bin"
 
 
+def test_errors_tab_shows_the_selected_groups_action_text(qtbot):
+    """The taxonomy's suggested action ("what to do about it") must be
+    visible in the tab, not just delivered by the API — with the first
+    group auto-selected so a single-cause job needs no click."""
+    locked = ErrorGroup(category="file_locked", count=1, quarantined=0,
+                        message="The file is open in another program.",
+                        action="Close the program holding the file, then resume the job.")
+    denied = ErrorGroup(category="permission_denied", count=3, quarantined=0,
+                        message="Access to this file was denied.",
+                        action="Grant the transfer service account read access to this path.")
+    tab = _errors_tab(qtbot, on_expand=lambda category: [])
+
+    tab.load_groups([locked, denied])
+    assert tab.action_label.text() == locked.action   # auto-selected first group
+
+    tab.tree.setCurrentItem(tab.tree.topLevelItem(1))
+    assert tab.action_label.text() == denied.action
+
+    tab.load_groups([])
+    assert tab.action_label.text() == ""
+
+
 def test_summary_tab_report_button_shows_for_a_complete_job(qtbot):
     """The spec's core "morning verdict, then open the report" flow: a
     COMPLETE job must still offer Open report, even though there is

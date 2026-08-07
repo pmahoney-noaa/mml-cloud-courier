@@ -244,6 +244,13 @@ class ErrorsTab(QWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderHidden(True)
         self.tree.itemExpanded.connect(self._on_item_expanded)
+        self.tree.currentItemChanged.connect(self._on_current_changed)
+
+        # The taxonomy's suggested action for the selected group — the
+        # spec's "what to do about it" line, shown right above the buttons
+        # that act on it.
+        self.action_label = QLabel("")
+        self.action_label.setWordWrap(True)
 
         self.retry_button = QPushButton("Retry these files")
         self.exclude_button = QPushButton("Stop retrying these files")
@@ -260,17 +267,38 @@ class ErrorsTab(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.tree, 1)
+        layout.addWidget(self.action_label)
         layout.addLayout(buttons)
 
     def load_groups(self, groups: list[ErrorGroup]) -> None:
         self._groups = list(groups)
         self.tree.clear()
+        self.action_label.setText("")
         for group in self._groups:
             item = QTreeWidgetItem([group.label])
             item.setData(0, _CATEGORY_ROLE, group.category)
             item.setData(0, _FILLED_ROLE, False)
+            item.setToolTip(0, group.action)
             item.addChild(QTreeWidgetItem(["Loading…"]))   # placeholder for the arrow
             self.tree.addTopLevelItem(item)
+        if self._groups:
+            # Auto-select the first group: single-cause jobs (the common
+            # case) show their guidance without a click, and the action
+            # buttons have a target immediately.
+            self.tree.setCurrentItem(self.tree.topLevelItem(0))
+
+    def _on_current_changed(self, current, _previous) -> None:
+        item = current
+        while item is not None and item.parent() is not None:
+            item = item.parent()
+        text = ""
+        if item is not None:
+            category = item.data(0, _CATEGORY_ROLE)
+            for group in self._groups:
+                if group.category == category:
+                    text = group.action
+                    break
+        self.action_label.setText(text)
 
     # -- test/UI hooks ------------------------------------------------
 
