@@ -4,6 +4,7 @@ so payload extraction is tested against the true shape. The full
 browser-to-bucket path is the Phase 4 manual gate."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from google.oauth2.credentials import Credentials
@@ -109,3 +110,19 @@ def test_load_client_config_rejects_a_non_installed_app_config(tmp_path):
     path.write_text(json.dumps({"web": {}}), encoding="utf-8")
     with pytest.raises(ValueError, match="installed"):
         load_client_config(str(path))
+
+
+def test_run_login_forwards_the_timeout():
+    captured = {}
+
+    class FakeFlow:
+        def run_local_server(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                client_id="i", client_secret="s", refresh_token="r",
+                token_uri="t", scopes=["x"],
+            )
+
+    run_login({"installed": {}}, flow_factory=lambda cfg, scopes: FakeFlow(),
+              timeout_seconds=300)
+    assert captured["timeout_seconds"] == 300
