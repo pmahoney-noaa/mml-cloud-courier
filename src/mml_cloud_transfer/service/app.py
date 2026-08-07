@@ -222,9 +222,9 @@ def create_app(
                     row, CredentialStore(config.credentials_dir)
                 )
             except Exception as exc:
+                reason = str(exc) if isinstance(exc, ValueError) else classify(exc).message
                 raise HTTPException(status_code=400, detail=(
-                    f"stored credential could not be loaded:"
-                    f" {classify(exc).message}"
+                    f"stored credential could not be loaded: {reason}"
                 )) from exc
             result = preflight_fn(ctx, dest_prefix)
             if not result.ok_for(Direction(submission.direction)):
@@ -538,8 +538,9 @@ def create_app(
         try:
             ctx = context_for_profile(row, CredentialStore(config.credentials_dir))
         except Exception as exc:
+            reason = str(exc) if isinstance(exc, ValueError) else classify(exc).message
             raise HTTPException(status_code=400, detail=(
-                f"stored credential could not be loaded: {classify(exc).message}"
+                f"stored credential could not be loaded: {reason}"
             )) from exc
         prefix = body.prefix if body.prefix is not None else row["default_prefix"]
         result = preflight_fn(ctx, prefix)

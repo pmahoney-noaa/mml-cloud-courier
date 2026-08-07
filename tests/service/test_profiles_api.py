@@ -288,3 +288,15 @@ def test_resubmitting_with_a_slash_variant_prefix_is_still_409(emulator_api, tmp
     assert second.status_code == 409
     detail = second.json()["detail"]
     assert str(first.json()["job_id"]) in detail
+
+
+def test_check_with_corrupted_auth_type_is_a_400_naming_the_type(tmp_path):
+    client, config = _make_client(tmp_path)
+    conn = connect(config.db_path)
+    profile_id = JobRepository(conn).create_profile(
+        name="bad", bucket="b", auth_type="mystery", credential_ref=None,
+    )
+    conn.close()
+    response = client.post(f"/profiles/{profile_id}/check", json={})
+    assert response.status_code == 400
+    assert "mystery" in response.json()["detail"]
