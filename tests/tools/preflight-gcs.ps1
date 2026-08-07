@@ -154,7 +154,9 @@ if ($code -ne 0) {
 # than describing the IAM that might allow them, and its delete step is also
 # the real test for a retention policy, which metadata could not tell us about.
 if (-not $script:Failed) {
-    $probePrefix = "$PrefixPath" + "mmlcc-preflight/$([guid]::NewGuid().ToString('N').Substring(0,8))"
+    # Leading dot matches auth/preflight.py's PROBE_SEGMENT (".mmlcc-preflight"),
+    # so a probe orphaned by a failed delete is skipped by scan_remote and previews.
+    $probePrefix = "$PrefixPath" + ".mmlcc-preflight/$([guid]::NewGuid().ToString('N').Substring(0,8))"
     $tmp = Join-Path $env:TEMP "mmlcc-probe.bin"
     $wrote = $false
     try {
