@@ -11,6 +11,7 @@ from __future__ import annotations
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -33,8 +34,10 @@ from mml_cloud_transfer.gui.jobs_model import (
     rail_job_ids as _rail_job_ids,
     sync_rail,
 )
+from mml_cloud_transfer.gui.service_control import start_service_elevated
 from mml_cloud_transfer.gui.session import ServiceSession, discover_session
 from mml_cloud_transfer.gui.settings_dialog import SettingsDialog
+from mml_cloud_transfer.gui.tray import TrayController
 from mml_cloud_transfer.gui.wizard import NewTransferWizard
 from mml_cloud_transfer.gui.workers import JobWatcher, JobsPoller, call_async
 
@@ -60,10 +63,12 @@ class MainWindow(QMainWindow):
         self._selected_job_id: int | None = None
         self._selected_status: str | None = None
         self._pending_select: int | None = None
+        self._last_statuses: dict[int, str] = {}
         self.poller: JobsPoller | None = None
         self.watcher: JobWatcher | None = None
         self.rail_model = None
         self.rail_view: QTreeView | None = None
+        self._tray: TrayController | None = None
 
         if self.client is None:
             self._build_error_ui(session)
@@ -96,9 +101,16 @@ class MainWindow(QMainWindow):
     # -- normal UI --------------------------------------------------------
 
     def _build_full_ui(self) -> None:
-        self.banner = QLabel(BANNER_TEXT)
-        self.banner.setWordWrap(True)
-        self.banner.setStyleSheet("background-color: #f2dede; padding: 6px;")
+        self.banner = QWidget()
+        self.banner.setStyleSheet("background-color: #f2dede;")
+        banner_layout = QHBoxLayout(self.banner)
+        banner_layout.setContentsMargins(6, 6, 6, 6)
+        self.banner_label = QLabel(BANNER_TEXT)
+        self.banner_label.setWordWrap(True)
+        banner_layout.addWidget(self.banner_label, 1)
+        self.banner_start_button = QPushButton("Start the service")
+        self.banner_start_button.clicked.connect(self._on_start_service)
+        banner_layout.addWidget(self.banner_start_button)
         self.banner.hide()
 
         self.rail_model = build_rail_model()
@@ -146,6 +158,8 @@ class MainWindow(QMainWindow):
 
         self._build_toolbar()
         self.statusBar()
+
+        self._tray = TrayController(self)
 
         self.watcher = JobWatcher(self)
         self.watcher.snapshot.connect(self._on_watcher_snapshot)
@@ -229,6 +243,9 @@ class MainWindow(QMainWindow):
 
     def _on_jobs(self, jobs: list[dict]) -> None:
         self.banner.hide()
+        if self._tray is not None:
+            self._tray.notify_transitions(self._last_statuses, jobs)
+        self._last_statuses = {job["id"]: job["status"] for job in jobs}
         sync_rail(self.rail_model, jobs)
         target = self._pending_select or self._selected_job_id
         if target is None:
@@ -242,6 +259,21 @@ class MainWindow(QMainWindow):
 
     def _on_down(self, _message: str) -> None:
         self.banner.show()
+
+    def _on_start_service(self) -> None:
+        if start_service_elevated():
+            self.statusBar().showMessage("Start requested — waiting for the service…")
+        else:
+            QMessageBox.warning(
+                self, "Couldn't start the service",
+                "Windows refused or the prompt was cancelled. Ask your"
+                " administrator to start the 'MML Cloud Transfer' service.",
+            )
+
+    def closeEvent(self, event) -> None:
+        if self._tray is not None and self._tray.handle_close(event):
+            return
+        super().closeEvent(event)
 
     # -- test/UI hooks ------------------------------------------------
 
