@@ -341,6 +341,7 @@ def test_google_api_core_retry_error_is_transient_network():
 import json as _json
 import socket
 import threading
+import time as _time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
@@ -396,7 +397,18 @@ def invalid_grant_endpoint():
 
 
 def test_a_real_invalid_grant_refresh_is_credential_and_pauses(invalid_grant_endpoint):
-    exc = _harvest_refresh_exception(invalid_grant_endpoint)
+    from google.auth.exceptions import TransportError
+
+    # The endpoint is loopback, but one full-suite run still produced a
+    # TransportError blip (2026-08-07). This test's subject is RefreshError
+    # classification, so retry the harvest and skip if loopback stays down.
+    for _attempt in range(3):
+        exc = _harvest_refresh_exception(invalid_grant_endpoint)
+        if not isinstance(exc, TransportError):
+            break
+        _time.sleep(0.5)
+    else:
+        pytest.skip(f"local invalid_grant endpoint unreachable: {exc!r}")
     assert type(exc).__name__ == "RefreshError"  # the real library type
     result = classify(exc)
     assert result.category is ErrorCategory.CREDENTIAL
