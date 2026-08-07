@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import getpass
 import importlib.metadata
+import json
 import os
 import secrets
 import sqlite3
@@ -17,13 +18,14 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from mml_cloud_transfer.auth.context import context_for_profile
 from mml_cloud_transfer.auth.credential_store import CredentialStore
 from mml_cloud_transfer.auth.preflight import run_preflight
 from mml_cloud_transfer.core.errors import ErrorCategory, classify, describe
 from mml_cloud_transfer.core.models import Direction, JobStatus
+from mml_cloud_transfer.core.slicing import SizePolicy
 from mml_cloud_transfer.core.paths import display_path, extended_path, is_unc
 from mml_cloud_transfer.engine.report import write_report
 from mml_cloud_transfer.gcs.client import make_context
@@ -66,6 +68,22 @@ class ProfileCreate(BaseModel):
 class ProfileCheck(BaseModel):
     direction: Literal["upload", "download"] | None = None
     prefix: str | None = None
+
+
+class SettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    file_workers: int | None = Field(default=None, ge=1, le=16)
+    size_policy: str | None = None          # CSV for SizePolicy.parse; "" clears
+    auto_resume_on_startup: bool | None = None
+
+
+_TUNABLE_KEYS = ("file_workers", "size_policy", "auto_resume_on_startup")
+
+
+def _policy_text(policy) -> str | None:
+    if policy is None:
+        return None
+    return f"{policy.single_shot_max},{policy.resumable_max},{policy.min_slice}"
 
 
 def _normalize_schedule(text: str) -> str:
@@ -634,6 +652,51 @@ def create_app(
         if row["auth_type"] in ("service_account_key", "oauth_user") and row["credential_ref"]:
             CredentialStore(config.credentials_dir).delete(row["credential_ref"])
         return {"deleted": profile_id}
+
+    def _read_stored_settings() -> dict:
+        if config.settings_path.exists():
+            return json.loads(config.settings_path.read_text(encoding="utf-8"))
+        return {}
+
+    def _settings_view() -> dict:
+        stored = _read_stored_settings()
+        running = {
+            "file_workers": config.file_workers,
+            "size_policy": _policy_text(config.size_policy),
+            "auto_resume_on_startup": config.auto_resume_on_startup,
+        }
+        # The running config is a startup snapshot; a stored value that
+        # disagrees with it is waiting for the next service start.
+        restart_required = any(
+            key in stored and stored[key] != running[key] for key in _TUNABLE_KEYS
+        )
+        return {**running, "stored": stored, "restart_required": restart_required}
+
+    @router.get("/settings")
+    def get_settings() -> dict:
+        return _settings_view()
+
+    @router.put("/settings")
+    def put_settings(body: SettingsUpdate) -> dict:
+        if body.size_policy:
+            try:
+                SizePolicy.parse(body.size_policy)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+        stored = _read_stored_settings()
+        for key in _TUNABLE_KEYS:
+            value = getattr(body, key)
+            if value is None:
+                continue
+            if key == "size_policy" and value == "":
+                stored.pop(key, None)
+            else:
+                stored[key] = value
+        config.data_dir.mkdir(parents=True, exist_ok=True)
+        tmp = config.settings_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(stored, indent=2), encoding="utf-8")
+        os.replace(tmp, config.settings_path)   # atomic: never a torn file
+        return _settings_view()
 
     app.include_router(router)
     return app

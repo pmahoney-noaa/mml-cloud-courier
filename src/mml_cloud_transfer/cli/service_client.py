@@ -139,3 +139,11 @@ class ApiClient:
         return self._check(
             self._session.delete(f"{self._base}/profiles/{profile_id}", timeout=30)
         )
+
+    def get_settings(self) -> dict:
+        return self._check(self._session.get(f"{self._base}/settings", timeout=30))
+
+    def put_settings(self, payload: dict) -> dict:
+        return self._check(
+            self._session.put(f"{self._base}/settings", json=payload, timeout=30)
+        )

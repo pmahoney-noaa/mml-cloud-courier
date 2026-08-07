@@ -37,3 +37,10 @@ def test_retry_and_exclude_error_groups(running_host):
     assert client.exclude_errors(job_id, "file_locked")["count"] == 1
     assert client.retry_errors(job_id, "file_locked")["count"] == 1
     assert client.files(job_id, state="pending")[0]["relative_path"] == "a.bin"
+
+
+def test_settings_round_trip(running_host):
+    host, config, token = running_host
+    client = ApiClient(config.base_url, token)
+    assert client.put_settings({"file_workers": 6})["stored"]["file_workers"] == 6
+    assert client.get_settings()["restart_required"] is True
