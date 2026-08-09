@@ -162,6 +162,12 @@ class NewTransferWizard(QDialog):
         for button in (self.upload_button, self.download_button):
             button.setObjectName("segmentButton")
             button.setCheckable(True)
+            # Every QPushButton in a QDialog is autoDefault by default, and
+            # an autoDefault button with no explicit default elsewhere
+            # becomes THE default the moment the dialog is active -- without
+            # this, Enter pressed in any field (e.g. the prefix edit) would
+            # click upload_button (first in the hierarchy) instead of Start.
+            button.setAutoDefault(False)
         self.upload_button.setChecked(True)
 
         self._direction_group = QButtonGroup(self)
@@ -184,6 +190,7 @@ class NewTransferWizard(QDialog):
         self.source_label = QLabel()
         self.source_edit = QLineEdit()
         self.source_browse = QPushButton("Browse…")
+        self.source_browse.setAutoDefault(False)
         self.source_browse.clicked.connect(self._browse_source)
         self.mapped_label = QLabel("")
         self.mapped_label.setWordWrap(True)
@@ -204,6 +211,8 @@ class NewTransferWizard(QDialog):
         self.profile_combo = QComboBox()
         self.refresh_button = QPushButton("Refresh")
         self.new_button = QPushButton("New connection…")
+        self.refresh_button.setAutoDefault(False)
+        self.new_button.setAutoDefault(False)
         self.refresh_button.clicked.connect(self._refresh)
         self.new_button.clicked.connect(self._open_new_connection)
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
@@ -289,6 +298,8 @@ class NewTransferWizard(QDialog):
         self.cancel_button = QPushButton("Cancel")
         self.start_button = QPushButton("Start transfer")
         self.start_button.setObjectName("primaryButton")
+        self.cancel_button.setAutoDefault(False)
+        self.start_button.setDefault(True)
         self.cancel_button.clicked.connect(self.reject)
         self.start_button.clicked.connect(self.accept_and_submit)
 
@@ -404,6 +415,11 @@ class NewTransferWizard(QDialog):
 
     def _on_prefix_changed(self, text: str) -> None:
         self.state.prefix = text.strip()
+        # Prefix only drives the live preview on the download path (upload
+        # previews the local source tree); rescanning the bucket on every
+        # upload-side prefix keystroke would be pure waste.
+        if self.state.direction == "download":
+            self._preview_timer.start()
 
     def set_source(self, path: str) -> None:
         self.source_edit.setText(path)
@@ -480,7 +496,8 @@ class NewTransferWizard(QDialog):
             prefix = state.prefix or None
             call_async(
                 lambda: self.client.preview_remote(profile_id, prefix),
-                parent=self, on_done=self._remote_preview_done,
+                parent=self,
+                on_done=lambda r, ev=cancel_event: self._maybe_remote_preview_done(r, ev),
                 on_failed=self._preview_failed,
             )
 
@@ -497,6 +514,15 @@ class NewTransferWizard(QDialog):
         if totals.error_count:
             text += f" — {totals.error_count} unreadable"
         self.preview_label.setText(text)
+
+    def _maybe_remote_preview_done(self, result: dict, event: threading.Event) -> None:
+        # Mirrors guarded_emit's supersede check on the upload path: a
+        # preview_remote call is dispatched on a plain daemon thread, and if
+        # the source/direction/profile changes again before it returns, the
+        # cancel_event captured at dispatch time is set and this stale
+        # result must be dropped instead of overwriting a newer preview.
+        if not event.is_set():
+            self._remote_preview_done(result)
 
     def _remote_preview_done(self, result: dict) -> None:
         objects = result["objects"]

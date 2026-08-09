@@ -49,6 +49,51 @@ def test_event_kind_token_mapping():
     assert event_kind_token("run_started") == "muted"
 
 
+def test_state_card_legend_not_rebuilt_when_counts_unchanged(qtbot):
+    """Two SSE ticks reporting the same counts must not tear down and
+    rebuild the legend row widgets -- otherwise every unchanged tick churns
+    fresh QLabel/QWidget objects for no visible difference."""
+    from mml_cloud_courier.gui.progress_widgets import StateBarCard
+
+    card = StateBarCard()
+    qtbot.addWidget(card)
+    card.set_counts({"verified": 5, "failed": 1})
+
+    def _legend_widget_ids():
+        return [
+            id(card._legend_layout.itemAt(i).widget())
+            for i in range(card._legend_layout.count())
+            if card._legend_layout.itemAt(i).widget() is not None
+        ]
+
+    before = _legend_widget_ids()
+    card.set_counts({"verified": 5, "failed": 1})   # identical counts
+    assert _legend_widget_ids() == before
+
+    card.set_counts({"verified": 5, "failed": 2})   # actually changed
+    assert _legend_widget_ids() != before
+
+
+def test_state_card_theme_replay_bypasses_the_unchanged_guard(qapp, qtbot):
+    """_on_theme replays set_counts with the SAME counts after a theme swap
+    (so legend swatch colors repaint) -- that replay must not be swallowed
+    by the same-counts early return the SSE-tick guard relies on."""
+    from mml_cloud_courier.gui import theme
+    from mml_cloud_courier.gui.progress_widgets import StateBarCard
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    card = StateBarCard()
+    qtbot.addWidget(card)
+    card.set_counts({"verified": 5})
+    before_id = id(card._legend_layout.itemAt(0).widget())
+
+    theme.apply_theme(qapp, theme.DARK)
+    after_id = id(card._legend_layout.itemAt(0).widget())
+    assert after_id != before_id   # rebuilt with the new theme's swatch color
+
+    theme.apply_theme(qapp, theme.LIGHT)   # leave the session qapp in LIGHT
+
+
 def test_inflight_detail_text():
     from mml_cloud_courier.gui.progress_widgets import inflight_detail_text
     entry = {"relative_path": "a/b.tif", "bytes_transferred": 100, "size_bytes": 1000,

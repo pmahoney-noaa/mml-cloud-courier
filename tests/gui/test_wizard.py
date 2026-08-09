@@ -191,6 +191,61 @@ def test_preferred_profile_selected_on_load(qtbot, make_wizard):
     assert wizard.state.profile_name == "gate-oauth"
 
 
+def test_enter_in_any_field_does_not_flip_direction_to_upload(qtbot, wizard):
+    # Every autoDefault QPushButton in a QDialog implicitly becomes THE
+    # default button once the window is active and nothing is explicitly
+    # marked default -- upload_button being first in the widget hierarchy
+    # meant Enter pressed anywhere (e.g. the prefix field, while direction
+    # is download) triggered *it* instead of Start. Reproducing this
+    # requires the dialog to actually be shown/active (isDefault() is
+    # False for everyone on an unshown QDialog), matching the live-app bug.
+    from PySide6.QtCore import Qt
+
+    wizard.show()
+    qtbot.waitExposed(wizard)
+    wizard.set_direction("download")
+    wizard.prefix_edit.setFocus()
+    qtbot.keyClick(wizard.prefix_edit, Qt.Key.Key_Return)
+    assert wizard.state.direction == "download"
+    assert not wizard.upload_button.isDefault()
+
+
+def test_stale_remote_preview_dropped_when_superseded(wizard):
+    # The download-path preview_remote result had no supersede guard (unlike
+    # the upload path's guarded_emit): a slow bucket-listing response that
+    # lands after the source/direction/profile changed again would still
+    # overwrite the preview label with stale data.
+    import threading
+
+    result = {"objects": 5, "bytes": 100, "truncated": False}
+
+    live_event = threading.Event()
+    wizard.preview_label.setText("")
+    wizard._maybe_remote_preview_done(result, live_event)
+    assert "5" in wizard.preview_label.text()
+
+    stale_event = threading.Event()
+    stale_event.set()
+    wizard.preview_label.setText("unchanged")
+    wizard._maybe_remote_preview_done(result, stale_event)
+    assert wizard.preview_label.text() == "unchanged"
+
+
+def test_prefix_edit_restarts_preview_timer_only_for_download(wizard):
+    # An upload rescan on prefix edits would be waste -- prefix is only the
+    # live-preview driver on the download path (upload previews the local
+    # source tree instead).
+    wizard.set_direction("download")
+    wizard._preview_timer.stop()
+    wizard.prefix_edit.setText("some/prefix")
+    assert wizard._preview_timer.isActive()
+
+    wizard.set_direction("upload")
+    wizard._preview_timer.stop()
+    wizard.prefix_edit.setText("some/other/prefix")
+    assert not wizard._preview_timer.isActive()
+
+
 def test_remember_connection_roundtrip(tmp_path, monkeypatch):
     from PySide6.QtCore import QSettings
     from mml_cloud_courier.gui import wizard as wizard_module

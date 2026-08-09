@@ -383,6 +383,7 @@ class MainWindow(QMainWindow):
         # as anything typed into the source field by hand.
         path = str(Path(event.mimeData().urls()[0].toLocalFile()))
         self._open_new_transfer(prefill_source=path)
+        event.acceptProposedAction()
 
     # -- test/UI hooks ------------------------------------------------
 
@@ -531,12 +532,13 @@ class MainWindow(QMainWindow):
     # -- errors tab callbacks -----------------------------------------
 
     def _on_expand_error_group(self, category: str) -> list[str]:
-        # Deliberately bounded to a single page: this runs synchronously on the
-        # Qt thread from the tree-expand slot, so an unbounded multi-page walk
-        # (fetch_group_paths' cap=20000, up to 40 sequential GETs) would jam the
-        # UI. One localhost page is the documented FilesTab trade-off; the
-        # "...and N more" trailer is sized from the group's already-known count
-        # instead (see ErrorsTab._on_item_expanded).
+        # Deliberately bounded to a single page: ErrorsTab.load_groups calls
+        # this once per always-expanded group, synchronously on the Qt
+        # thread, so an unbounded multi-page walk (fetch_group_paths'
+        # cap=20000, up to 40 sequential GETs) would jam the UI. One
+        # localhost page is the documented FilesTab trade-off; the
+        # "...and N more" trailer is sized from the group's already-known
+        # count instead (see errors_view.group_fill_rows).
         job_id = self._selected_job_id
         if job_id is None:
             return []

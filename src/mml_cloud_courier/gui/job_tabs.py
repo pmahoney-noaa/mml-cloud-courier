@@ -66,6 +66,7 @@ class ProgressTab(QWidget):
         font.setWeight(QFont.Weight(600))
         self.headline_name.setFont(font)
         self.headline_route = QLabel("")
+        self.headline_route.setObjectName("headlineRoute")
         self.headline_route.setFont(theme.mono_font(8.5))
         self.percent_label = QLabel("")
         self.percent_label.setFont(theme.mono_font(19.5, 600))

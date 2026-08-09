@@ -17,6 +17,10 @@ def test_group_tone():
     assert group_tone("file_locked") == "warn"
     assert group_tone("source_changed") == "warn"
     assert group_tone("network") == "accent"
+    # quota's action text ("No action needed -- this retries automatically
+    # with backoff.") is identical in spirit to network's; the taxonomy
+    # marks it transient too, so the card must not tag it "Needs you".
+    assert group_tone("quota") == "accent"
     assert group_tone("never_heard_of_it") == "danger"   # unknown = needs you
 
 
@@ -125,9 +129,11 @@ def test_error_card_samples_degrade_gracefully_when_expand_fails(qtbot):
     _FILLED_ROLE flag so a later re-expand would retry. There is no per-item
     expand state anymore — on_expand runs once per group inside load_groups,
     so a raised exception must not crash card construction (samples just fall
-    back to the "…and N more" trailer for the whole group), and calling
-    load_groups again (the natural retry path — e.g. the next refresh) with a
-    working on_expand recovers cleanly."""
+    back to the "…and N more" trailer for the whole group), and a later
+    refresh whose groups actually changed (load_groups now short-circuits a
+    truly-unchanged reload — see test_load_groups_skips_rebuild_when_groups_are_unchanged
+    — so the retry has to be a real one: one file's count dropped by one)
+    with a working on_expand recovers cleanly."""
     group = ErrorGroup(category="network", count=750, quarantined=0,
                         message="Network error.", action="Retry.")
 
@@ -147,10 +153,41 @@ def test_error_card_samples_degrade_gracefully_when_expand_fails(qtbot):
         return ["ok.bin"]
 
     tab._on_expand = now_succeeds
-    tab.load_groups([group])
+    updated_group = ErrorGroup(category="network", count=749, quarantined=0,
+                               message="Network error.", action="Retry.")
+    tab.load_groups([updated_group])
 
     assert calls == ["network"]
-    assert tab.card(0).samples_label.text() == "ok.bin · …and 749 more"
+    assert tab.card(0).samples_label.text() == "ok.bin · …and 748 more"
+
+
+def test_load_groups_skips_rebuild_when_groups_are_unchanged(qtbot):
+    """A live job's error groups are re-fetched and re-pushed through
+    load_groups on every SSE event, even when nothing about the groups
+    actually changed. Rebuilding all the ErrorCards (and re-running each
+    group's bounded on_expand page-fetch) on every one of those no-op
+    pushes is exactly the "repeated sync page-fetch churn during event
+    storms" this guard exists to kill. ErrorGroup is a frozen dataclass, so
+    list equality is enough to detect "truly unchanged"."""
+    calls = []
+
+    def on_expand(category):
+        calls.append(category)
+        return []
+
+    tab = _errors_tab(qtbot, on_expand=on_expand)
+    groups = [_group("network", 5)]
+    tab.load_groups(groups)
+    card_before = tab.card(0)
+    assert calls == ["network"]
+
+    tab.load_groups(list(groups))   # same values, a different list object
+    assert tab.card(0) is card_before
+    assert calls == ["network"]     # on_expand not called again
+
+    tab.load_groups([_group("network", 6)])   # an actual change
+    assert tab.card(0) is not card_before
+    assert calls == ["network", "network"]
 
 
 def test_error_card_action_text_shown_per_card_not_via_selection(qtbot):

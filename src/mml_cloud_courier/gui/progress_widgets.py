@@ -5,7 +5,6 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QRect, QSize
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import (
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QStyledItemDelegate,
@@ -136,12 +135,21 @@ class StateBarCard(QWidget):
 
     def _on_theme(self, _t) -> None:
         if hasattr(self, "_raw_counts"):
-            self.set_counts(dict(self._raw_counts))
+            # A theme swap replays the SAME counts to repaint the legend
+            # swatches' inline colors -- it must bypass set_counts' own
+            # unchanged-counts guard below, which exists to skip this exact
+            # rebuild when nothing (not even the theme) has changed.
+            self.set_counts(dict(self._raw_counts), force=True)
 
     def legend_labels(self) -> list[tuple[str, int]]:
         return list(self._legend)
 
-    def set_counts(self, counts: dict[str, int]) -> None:
+    def set_counts(self, counts: dict[str, int], *, force: bool = False) -> None:
+        # A live job streams an SSE snapshot several times a second; most
+        # ticks report the exact same state_counts. Rebuilding the legend
+        # row widgets on every one of those no-op ticks is pure churn.
+        if not force and dict(counts) == getattr(self, "_raw_counts", None):
+            return
         self._raw_counts = dict(counts)
         self.bar.set_counts(counts)
         ordered = [(state, counts[state]) for state in STATE_ORDER

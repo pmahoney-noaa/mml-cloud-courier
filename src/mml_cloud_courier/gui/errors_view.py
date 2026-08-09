@@ -12,7 +12,10 @@ from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.errors_model import ErrorGroup
 
 SELF_CLEARING_WARN = frozenset({"file_locked", "source_changed"})
-SELF_CLEARING_ACCENT = frozenset({"network"})
+# quota is backend-marked transient (core/errors._TABLE) with the same
+# "retries automatically" action text as network -- tagging it "Needs you"
+# would contradict the card's own action copy.
+SELF_CLEARING_ACCENT = frozenset({"network", "quota"})
 
 
 def group_tone(category: str) -> str:
@@ -144,7 +147,16 @@ class ErrorsTab(QWidget):
         self.header_label.setText(header_sentence(self._groups, total))
 
     def load_groups(self, groups: list[ErrorGroup]) -> None:
-        self._groups = order_groups(groups)
+        ordered = order_groups(groups)
+        # A live job re-pushes its error groups through here on every SSE
+        # event, even when nothing about them changed. Rebuilding every
+        # ErrorCard (and re-running each group's bounded on_expand
+        # page-fetch) on every such no-op tick is needless sync churn
+        # during event storms -- ErrorGroup is a frozen dataclass, so list
+        # equality is a cheap, reliable "truly unchanged" check.
+        if ordered == self._groups and self._cards:
+            return
+        self._groups = ordered
         self.header_label.setText(header_sentence(self._groups, self._files_total))
         for card in self._cards:
             card.deleteLater()

@@ -110,7 +110,8 @@ def test_mono_font_prefers_cascadia():
 def test_qss_mentions_every_bound_object_name():
     text = theme.qss(theme.LIGHT)
     for name in ("primaryButton", "segmentWell", "textButton",
-                 "statusPill", "pillDot", "serviceBanner", "filesHeader"):
+                 "statusPill", "pillDot", "serviceBanner", "filesHeader",
+                 "headlineRoute"):
         assert name in text
 
 

@@ -135,16 +135,23 @@ def test_rail_shows_stalled_override_when_down(qapp):
 @pytest.mark.gui
 def test_drop_event_opens_prefilled_wizard(window, tmp_path, monkeypatch):
     opened = {}
+    accepted = {"called": False}
     monkeypatch.setattr(window, "_open_new_transfer",
                         lambda prefill_source=None: opened.setdefault("src", prefill_source))
     from PySide6.QtCore import QMimeData, QUrl
     from PySide6.QtGui import QDropEvent
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(tmp_path))])
-    event = type("E", (), {"mimeData": lambda self=None: mime,
-                           "acceptProposedAction": lambda self=None: None})()
+    event = type("E", (), {
+        "mimeData": lambda self=None: mime,
+        "acceptProposedAction": lambda self=None: accepted.__setitem__("called", True),
+    })()
     window.dropEvent(event)
     assert opened["src"] == str(tmp_path)
+    # A drop that successfully opens the wizard must tell Qt/the OS the
+    # drop was handled -- otherwise the source shows the "rejected" cursor
+    # and, on some platforms, animates the dragged item snapping back.
+    assert accepted["called"]
 
 
 class _DragStub:
