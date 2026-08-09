@@ -1,9 +1,11 @@
 """The left rail: jobs grouped by status, Needs attention pinned on top.
 
 A QStandardItemModel with four permanent group rows; sync_rail replaces
-each group's children on every poll. Cheap and correct for the tens of
-jobs a workstation accumulates; selection is preserved by the view
-re-selecting the remembered job id after sync.
+each group's children when the incoming jobs actually differ from the
+last sync (see the signature check below) -- otherwise it's a no-op.
+Cheap and correct for the tens of jobs a workstation accumulates;
+selection is preserved by the view re-selecting the remembered job id
+after a sync that actually rebuilt rows.
 """
 
 from __future__ import annotations
@@ -73,15 +75,52 @@ def _job_item(job: dict, service_up: bool = True) -> QStandardItem:
     return item
 
 
-def sync_rail(model: QStandardItemModel, jobs: list[dict], service_up: bool = True) -> None:
+def _grouped_and_sorted(jobs: list[dict]) -> dict[str, list[dict]]:
     buckets: dict[str, list[dict]] = {group: [] for group in RAIL_GROUPS}
     for job in jobs:
         buckets[group_for_status(job["status"])].append(job)
+    for group in RAIL_GROUPS:
+        buckets[group].sort(key=lambda j: j["id"], reverse=True)
+    return buckets
+
+
+def _rail_signature(buckets: dict[str, list[dict]], service_up: bool) -> tuple:
+    # Ordered per group, same sort sync_rail itself applies -- a reorder
+    # (e.g. a new job landing above an old one) must count as a change.
+    # service_up is included: a stall/recovery flips every "running"/
+    # "scanning" row's second line (STALLED_OVERRIDE) without touching any
+    # job's own fields, so it must force a rebuild on its own.
+    return (
+        service_up,
+        tuple(
+            tuple((job["id"], job["status"], job["name"], job.get("scheduled_start_at"))
+                 for job in buckets[group])
+            for group in RAIL_GROUPS
+        ),
+    )
+
+
+def sync_rail(model: QStandardItemModel, jobs: list[dict], service_up: bool = True) -> bool:
+    """Rebuild the rail's job rows from `jobs`, returning True iff rows
+    were actually rebuilt. When nothing has changed since the last sync
+    (same signature) and the groups already have children, this is a
+    deliberate no-op -- MainWindow._on_jobs only re-selects/re-shows the
+    remembered job when this returns True, because QTreeView.setCurrentIndex
+    auto-expands the selection's ancestors, which would silently reopen a
+    group the user just collapsed on every poll tick otherwise."""
+    buckets = _grouped_and_sorted(jobs)
+    signature = _rail_signature(buckets, service_up)
+    already_populated = any(model.item(i).rowCount() for i in range(len(RAIL_GROUPS)))
+    if signature == getattr(model, "_rail_signature", None) and already_populated:
+        return False
+    model._rail_signature = signature
+
     for index, group in enumerate(RAIL_GROUPS):
         parent = model.item(index)
         parent.removeRows(0, parent.rowCount())
-        for job in sorted(buckets[group], key=lambda j: j["id"], reverse=True):
+        for job in buckets[group]:
             parent.appendRow(_job_item(job, service_up))
+    return True
 
 
 def rail_job_ids(model: QStandardItemModel) -> list[int]:

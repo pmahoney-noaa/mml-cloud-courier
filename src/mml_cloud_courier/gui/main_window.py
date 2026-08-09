@@ -317,6 +317,45 @@ class MainWindow(QMainWindow):
                     return self.rail_model.indexFromItem(child)
         return None
 
+    def _sync_rail_preserving_expansion(self, jobs: list[dict], *, service_up: bool) -> None:
+        """sync_rail, then restore each group's expand state and only
+        touch the visible selection if a rebuild actually happened.
+
+        QTreeView.setCurrentIndex auto-expands the selection's ancestors
+        to make it visible -- with every job living in Completed, that
+        silently reopened a Completed the user had just collapsed on the
+        very next poll tick, even though nothing about the jobs changed.
+        sync_rail returning False (no-op: same signature as last time)
+        is what lets a real collapse stick; when it DOES rebuild, the
+        expand states captured before the rebuild are reapplied after,
+        and the remembered selection is only re-shown (setCurrentIndex)
+        if its own group is still expanded once that's done -- honoring
+        a deliberate collapse of the group holding the selection.
+        _selected_job_id keeps tracking the job either way; only the rail's
+        visual selection is skipped, not the tabs, which stay driven by
+        _selected_job_id independently of rail_view's current index.
+        """
+        expanded_before = {
+            group: self.rail_view.isExpanded(self.rail_model.index(i, 0))
+            for i, group in enumerate(RAIL_GROUPS)
+        }
+        rebuilt = sync_rail(self.rail_model, jobs, service_up=service_up)
+        if not rebuilt:
+            return
+        for i, group in enumerate(RAIL_GROUPS):
+            self.rail_view.setExpanded(self.rail_model.index(i, 0), expanded_before[group])
+
+        target = self._pending_select or self._selected_job_id
+        if target is None:
+            return
+        index = self._find_rail_index(target)
+        if index is None:
+            return
+        if self.rail_view.isExpanded(index.parent()):
+            self.rail_view.setCurrentIndex(index)
+        if self._pending_select is not None:
+            self._pending_select = None
+
     def _on_jobs(self, jobs: list[dict]) -> None:
         self._last_jobs = jobs
         self._service_up = True
@@ -326,17 +365,8 @@ class MainWindow(QMainWindow):
         if self._tray is not None:
             self._tray.notify_transitions(self._last_statuses, jobs)
         self._last_statuses = {job["id"]: job["status"] for job in jobs}
-        sync_rail(self.rail_model, jobs, service_up=self._service_up)
+        self._sync_rail_preserving_expansion(jobs, service_up=self._service_up)
         self._update_first_run()
-        target = self._pending_select or self._selected_job_id
-        if target is None:
-            return
-        index = self._find_rail_index(target)
-        if index is None:
-            return
-        self.rail_view.setCurrentIndex(index)
-        if self._pending_select is not None:
-            self._pending_select = None
 
     def _on_down(self, _message: str) -> None:
         was_up = self._service_up
@@ -350,11 +380,7 @@ class MainWindow(QMainWindow):
         # transition; a repeat failed tick would otherwise clear the user's
         # selection on every miss.
         if was_up:
-            sync_rail(self.rail_model, self._last_jobs, service_up=False)
-            if self._selected_job_id is not None:
-                index = self._find_rail_index(self._selected_job_id)
-                if index is not None:
-                    self.rail_view.setCurrentIndex(index)
+            self._sync_rail_preserving_expansion(self._last_jobs, service_up=False)
 
     def _on_profiles(self, profiles: list) -> None:
         self._no_connections = not profiles

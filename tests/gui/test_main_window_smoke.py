@@ -174,6 +174,40 @@ def test_rail_click_on_header_toggles_and_job_click_does_not_collapse(window):
 
 
 @pytest.mark.gui
+def test_collapsed_completed_group_stays_collapsed_across_identical_polls(window):
+    # The reported bug: every poll tick rebuilt the rail and re-selected
+    # the remembered job, and QTreeView.setCurrentIndex auto-expands the
+    # selection's ancestors -- reopening a Completed the user had just
+    # collapsed, since every live job lives there.
+    from mml_cloud_courier.gui.jobs_model import RAIL_GROUPS, STATUS_ROLE
+
+    jobs = [{"id": 1, "name": "j", "status": "complete"}]
+    window._on_jobs(jobs)
+    completed_index = window.rail_model.index(RAIL_GROUPS.index("completed"), 0)
+
+    job_index = window._find_rail_index(1)
+    window.rail_view.setCurrentIndex(job_index)
+    assert window.selected_job_id == 1
+    window.rail_view.collapse(completed_index)
+    assert not window.rail_view.isExpanded(completed_index)
+
+    # Two more identical poll ticks -- the actual failure mode.
+    window._on_jobs(jobs)
+    window._on_jobs(jobs)
+    assert not window.rail_view.isExpanded(completed_index)
+    assert window.selected_job_id == 1
+
+    # A real change (status flips, same group) must still rebuild the
+    # rows -- but the collapse the user chose is honored afterward.
+    changed_jobs = [{"id": 1, "name": "j", "status": "cancelled"}]
+    window._on_jobs(changed_jobs)
+    rebuilt_index = window._find_rail_index(1)
+    assert rebuilt_index.data(STATUS_ROLE) == "cancelled"   # proves the rebuild happened
+    assert not window.rail_view.isExpanded(completed_index)   # collapse preserved
+    assert window.selected_job_id == 1
+
+
+@pytest.mark.gui
 def test_drop_event_opens_prefilled_wizard(window, tmp_path, monkeypatch):
     opened = {}
     accepted = {"called": False}

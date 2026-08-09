@@ -310,12 +310,10 @@ class NewTransferWizard(QDialog):
         button_row.addWidget(self.start_button)
         layout.addLayout(button_row)
 
-        # Measured (offscreen sizeHint, stacked-row layout): natural width
-        # is ~218px, not the ~400px this was sized against -- so 2x is
-        # taken from that measurement, rounded to a sensible number,
-        # rather than literally doubling an assumed ~400.
-        # ~2x the natural stacked-row width, per user request
-        self.setMinimumWidth(440)
+        # The 440px minimum came from an offscreen sizeHint that
+        # under-reports the shown width.
+        # ~2x the shown stacked-row width, per user request
+        self.setMinimumWidth(800)
 
         # Loading on construction means the combo is already populating
         # the moment the dialog exists.
