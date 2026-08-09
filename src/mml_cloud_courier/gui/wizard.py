@@ -369,6 +369,11 @@ class NewTransferWizard(QDialog):
         dialog = NewConnectionDialog(self.client, self)
         dialog.created.connect(lambda _result: self._refresh())
         dialog.exec()
+        # A cancelled dialog can still have a create that landed server-side
+        # (no create-cancel in the fixed API; the stepper's generation guard
+        # only discards the late GUI result) — refresh unconditionally so a
+        # profile that saved anyway still surfaces.
+        self._refresh()
 
     def _on_profile_changed(self, index: int) -> None:
         if 0 <= index < len(self._profiles):

@@ -30,6 +30,9 @@ class FakeClient:
         self.check_result = {"ok": True, "preflight": {}, "summary":
             "This credential can list, read, write, compose and delete to gs://b/p."}
 
+    def health(self):
+        return {"status": "ok"}
+
     def list_profiles(self):
         return self.profiles
 
@@ -141,3 +144,23 @@ def test_empty_state_and_new_button(qtbot):
     qtbot.addWidget(dialog)
     qtbot.waitUntil(lambda: dialog.empty_label.isVisibleTo(dialog), timeout=5000)
     assert dialog.empty_label.text() == "No connections yet."
+
+
+def test_new_connection_refreshes_the_list_after_close(qtbot, monkeypatch):
+    from mml_cloud_courier.gui import connection_dialogs as mod
+    client = FakeClient([profile(1)])
+    calls = {"n": 0}
+    original = client.list_profiles
+
+    def counting_list():
+        calls["n"] += 1
+        return original()
+
+    client.list_profiles = counting_list
+    dialog = ConnectionsDialog(client)
+    qtbot.addWidget(dialog)
+    wait_cards(qtbot, dialog, 1)
+    before = calls["n"]
+    monkeypatch.setattr(mod.NewConnectionDialog, "exec", lambda self: 0)
+    dialog._new_connection()
+    qtbot.waitUntil(lambda: calls["n"] > before, timeout=5000)

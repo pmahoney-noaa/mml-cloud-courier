@@ -430,3 +430,20 @@ def test_check_the_bucket_name_returns_to_step1_bucket_focused(qtbot, tmp_path, 
     qtbot.waitUntil(lambda: dialog._phase == "failed", timeout=5000)
     dialog.check_bucket_button.click()
     assert dialog._step == 1
+
+
+def test_cancel_during_validating_discards_the_late_result(qtbot, tmp_path, monkeypatch):
+    client = CreateClient()
+    client.result = {"id": 9, "name": "MML imagery", "summary": "s"}
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    created = []
+    dialog.created.connect(created.append)
+    _choose_good_key(qtbot, dialog, tmp_path, monkeypatch)
+    assert dialog._phase == "validating"
+    dialog.reject()
+    client.release.set()
+    qtbot.wait(200)
+    assert created == []
+    assert dialog._stack.currentWidget() is dialog.page_validating
+    assert dialog._phase == "validating"

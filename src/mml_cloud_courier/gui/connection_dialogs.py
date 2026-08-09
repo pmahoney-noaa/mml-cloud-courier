@@ -793,10 +793,14 @@ class NewConnectionDialog(QDialog):
         self.done_button.hide()
         self.retry_button.hide()
         self.probe_list.start()
+        generation = self._login_generation
         call_async(lambda: self.client.create_profile(payload), parent=self,
-                   on_done=self._profile_created, on_failed=self._flow_failed)
+                   on_done=lambda result: self._profile_created(result, generation),
+                   on_failed=lambda message: self._flow_failed(message, generation))
 
-    def _profile_created(self, result) -> None:
+    def _profile_created(self, result, generation: int) -> None:
+        if generation != self._login_generation:
+            return                          # cancelled; discard the late result
         self.probe_list.finish_all()
         self._phase = "verified"
         self.verified_title.setText(f"{result.get('name', '')} is ready to use")
@@ -835,7 +839,9 @@ class NewConnectionDialog(QDialog):
         self.done_button.hide()
         self._go_to_step(1)
 
-    def _flow_failed(self, message: str) -> None:
+    def _flow_failed(self, message: str, generation: int) -> None:
+        if generation != self._login_generation:
+            return                          # cancelled; discard the late result
         self.probe_list.stop()
         code, detail = split_service_error(message)
         if code == 409 and "already exists" in detail:
@@ -863,7 +869,13 @@ class NewConnectionDialog(QDialog):
         # Escape during sign-in must abandon the pending run_login: there is
         # no server-side cancel hook (flow.run_local_server blocks), so the
         # generation bump makes the eventual result a no-op and the local
-        # listener times out on its own.
+        # listener times out on its own. The same counter now also guards
+        # create_profile: the fixed API has no create-cancel either, and a
+        # cancel here must not surface a "verified"/"failed" page (or fire
+        # `created`) for a flow the user already dismissed — the late result
+        # is discarded by `_profile_created`/`_flow_failed`'s generation
+        # check. If the server did save the profile, both `created` call
+        # sites re-fetch on close, so it still surfaces there instead.
         self._login_generation += 1
         self.signin_spinner.stop()
         super().reject()
@@ -1014,3 +1026,8 @@ class ConnectionsDialog(QDialog):
         dialog = NewConnectionDialog(self.client, self)
         dialog.created.connect(lambda _result: self.refresh())
         dialog.exec()
+        # A cancelled dialog can still have a create that landed server-side
+        # (no create-cancel in the fixed API; the stepper's generation guard
+        # only discards the late GUI result) — refresh unconditionally so a
+        # profile that saved anyway still surfaces.
+        self.refresh()

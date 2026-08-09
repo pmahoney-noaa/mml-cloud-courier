@@ -143,7 +143,10 @@ footer primary).
   advances the rows while the single `create_profile` call is pending; the last probe
   stays "running" until the response lands. On 400 the timer stops and the failed screen
   takes over — individual probes are never marked failed, since which one failed is
-  unknown.
+  unknown. Cancel stays enabled during validating; a cancelled dialog discards late
+  create results (generation guard), and both call sites re-fetch profiles when the
+  stepper closes, so a create that completed server-side still surfaces (ruled in
+  review).
 - **Step 3 — Verified**: `accent` check circle, "{name} is ready to use", `WHAT THE
   SERVICE FOUND` card with the response's `summary` **verbatim** (a mixed summary — e.g.
   read-only — appears as-is; that is decision 2), five `accent_soft` capability chips,

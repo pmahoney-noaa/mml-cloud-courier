@@ -49,6 +49,9 @@ class FakeWizardClient:
     def __init__(self):
         self.submissions = []
 
+    def health(self):
+        return {"status": "ok"}
+
     def list_profiles(self):
         return [{"id": 1, "name": "lab", "bucket": "b", "default_prefix": "d",
                  "auth_type": "service_account_key", "validated_at": None}]
@@ -250,6 +253,23 @@ def test_prefix_edit_restarts_preview_timer_only_for_download(wizard):
     wizard._preview_timer.stop()
     wizard.prefix_edit.setText("some/other/prefix")
     assert not wizard._preview_timer.isActive()
+
+
+def test_new_connection_from_wizard_refreshes_profiles_after_close(qtbot, wizard, monkeypatch):
+    from mml_cloud_courier.gui import wizard as wizard_mod
+
+    calls = {"n": 0}
+    original = wizard.client.list_profiles
+
+    def counting_list():
+        calls["n"] += 1
+        return original()
+
+    wizard.client.list_profiles = counting_list
+    before = calls["n"]
+    monkeypatch.setattr(wizard_mod.NewConnectionDialog, "exec", lambda self: 0)
+    wizard._open_new_connection()
+    qtbot.waitUntil(lambda: calls["n"] > before, timeout=5000)
 
 
 def test_remember_connection_roundtrip(tmp_path, monkeypatch):
