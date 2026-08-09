@@ -85,11 +85,11 @@ def test_banner_carries_no_inline_hex(window):
 @pytest.mark.gui
 def test_rail_shows_stalled_override_when_down(qapp):
     # unused; build_rail_model draws QPixmap icons and needs a live QApplication
-    from mml_cloud_courier.gui.jobs_model import build_rail_model, sync_rail
+    from mml_cloud_courier.gui.jobs_model import SECOND_LINE_ROLE, build_rail_model, sync_rail
     model = build_rail_model()
     jobs = [{"id": 7, "name": "leg3", "status": "running"}]
     sync_rail(model, jobs, service_up=False)
     running_group = model.item(1)          # RAIL_GROUPS order: needs_attention, running, ...
-    assert "Stalled — service stopped" in running_group.child(0).text()
+    assert running_group.child(0).data(SECOND_LINE_ROLE) == "Stalled — service stopped"
     sync_rail(model, jobs, service_up=True)
-    assert "Stalled — service stopped" not in model.item(1).child(0).text()
+    assert model.item(1).child(0).data(SECOND_LINE_ROLE) != "Stalled — service stopped"

@@ -12,7 +12,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from mml_cloud_courier.gui.format import STATUS_LABELS, human_schedule
-from mml_cloud_courier.gui.icons import group_icon
 
 RAIL_GROUPS = ("needs_attention", "running", "queued", "completed")
 GROUP_LABELS = {
@@ -33,6 +32,7 @@ _GROUP_FOR_STATUS = {
 }
 JOB_ID_ROLE = Qt.ItemDataRole.UserRole + 1
 STATUS_ROLE = Qt.ItemDataRole.UserRole + 2
+SECOND_LINE_ROLE = Qt.ItemDataRole.UserRole + 3
 
 
 def group_for_status(status: str) -> str:
@@ -44,23 +44,27 @@ def build_rail_model() -> QStandardItemModel:
     model = QStandardItemModel()
     for group in RAIL_GROUPS:
         item = QStandardItem(GROUP_LABELS[group])
-        item.setIcon(group_icon(group))
         item.setFlags(Qt.ItemFlag.ItemIsEnabled)   # a header, not a choice
         model.appendRow(item)
     return model
 
 
-def _job_item(job: dict, service_up: bool = True) -> QStandardItem:
+def rail_row_lines(job: dict, service_up: bool = True) -> tuple[str, str]:
     if not service_up and job["status"] in ("running", "scanning"):
-        label = "Stalled — service stopped"
+        status = "Stalled — service stopped"
     else:
-        label = STATUS_LABELS.get(job["status"], job["status"])
-    text = f"#{job['id']} {job['name']} — {label}"
+        status = STATUS_LABELS.get(job["status"], job["status"])
     if job["status"] == "pending" and job.get("scheduled_start_at"):
-        text += f" — starts {human_schedule(job['scheduled_start_at'])}"
-    item = QStandardItem(text)
+        status += f" — starts {human_schedule(job['scheduled_start_at'])}"
+    return f"#{job['id']} {job['name']}", status
+
+
+def _job_item(job: dict, service_up: bool = True) -> QStandardItem:
+    line1, line2 = rail_row_lines(job, service_up)
+    item = QStandardItem(line1)
     item.setData(job["id"], JOB_ID_ROLE)
     item.setData(job["status"], STATUS_ROLE)
+    item.setData(line2, SECOND_LINE_ROLE)
     item.setEditable(False)
     return item
 

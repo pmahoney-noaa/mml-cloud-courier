@@ -4,7 +4,7 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
 from mml_cloud_courier.gui.jobs_model import (
-    GROUP_LABELS, JOB_ID_ROLE, RAIL_GROUPS, STATUS_ROLE,
+    GROUP_LABELS, JOB_ID_ROLE, RAIL_GROUPS, SECOND_LINE_ROLE, STATUS_ROLE,
     build_rail_model, group_for_status, rail_job_ids, sync_rail,
 )
 
@@ -41,7 +41,7 @@ def test_sync_rail_places_jobs_and_roles(qapp):
     child = attention.child(0)
     assert child.data(JOB_ID_ROLE) == 2
     assert child.data(STATUS_ROLE) == "incomplete"
-    assert "needs attention" in child.text().lower()
+    assert "needs attention" in child.data(SECOND_LINE_ROLE).lower()
     assert rail_job_ids(model) == [2, 3, 1]
 
 
@@ -49,7 +49,7 @@ def test_sync_rail_annotates_scheduled_jobs(qapp):
     model = build_rail_model()
     sync_rail(model, [_job(5, "pending", scheduled="2026-08-07T02:30:00+00:00")])
     queued = model.item(RAIL_GROUPS.index("queued"))
-    assert "starts" in queued.child(0).text()
+    assert "starts" in queued.child(0).data(SECOND_LINE_ROLE)
 
 
 def test_sync_rail_is_idempotent_and_moves_jobs(qapp):
@@ -59,3 +59,28 @@ def test_sync_rail_is_idempotent_and_moves_jobs(qapp):
     assert rail_job_ids(model) == [1]
     assert model.item(RAIL_GROUPS.index("completed")).rowCount() == 1
     assert model.item(RAIL_GROUPS.index("running")).rowCount() == 0
+
+
+def test_rail_row_lines_split_name_and_status():
+    from mml_cloud_courier.gui.jobs_model import rail_row_lines
+    job = {"id": 121, "name": "IceSeal_Survey_2026_Leg3", "status": "running"}
+    line1, line2 = rail_row_lines(job)
+    assert line1 == "#121 IceSeal_Survey_2026_Leg3"
+    assert line2 == "Running"
+    _, down = rail_row_lines(job, service_up=False)
+    assert down == "Stalled — service stopped"
+
+
+def test_rail_row_lines_keeps_schedule_suffix():
+    from mml_cloud_courier.gui.jobs_model import rail_row_lines
+    job = {"id": 5, "name": "n", "status": "pending",
+           "scheduled_start_at": "2026-08-09T02:00:00+00:00"}
+    _, line2 = rail_row_lines(job)
+    assert line2.startswith("Queued — starts ")
+
+
+def test_job_item_roles_carry_second_line():
+    from mml_cloud_courier.gui.jobs_model import SECOND_LINE_ROLE, _job_item
+    item = _job_item({"id": 7, "name": "leg3", "status": "running"})
+    assert item.text() == "#7 leg3"
+    assert item.data(SECOND_LINE_ROLE) == "Running"

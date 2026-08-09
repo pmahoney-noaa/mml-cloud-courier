@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.connection_dialogs import ConnectionsDialog
 from mml_cloud_courier.gui.errors_model import (
     build_error_groups,
@@ -39,6 +40,7 @@ from mml_cloud_courier.gui.jobs_model import (
     rail_job_ids as _rail_job_ids,
     sync_rail,
 )
+from mml_cloud_courier.gui.rail_delegate import RailDelegate
 from mml_cloud_courier.gui.service_control import start_service_elevated
 from mml_cloud_courier.gui.session import ServiceSession, discover_session
 from mml_cloud_courier.gui.settings_dialog import SettingsDialog
@@ -76,6 +78,7 @@ class MainWindow(QMainWindow):
         self.rail_model = None
         self.rail_view: QTreeView | None = None
         self._tray: TrayController | None = None
+        self._theme_changed_slot = None
 
         if self.client is None:
             self._build_error_ui(session)
@@ -123,14 +126,24 @@ class MainWindow(QMainWindow):
 
         self.rail_model = build_rail_model()
         self.rail_view = QTreeView()
+        self.rail_view.setObjectName("railView")
         self.rail_view.setModel(self.rail_model)
         self.rail_view.setHeaderHidden(True)
+        self.rail_view.setItemDelegate(RailDelegate(self.rail_view))
+        self.rail_view.setFixedWidth(262)
         self.rail_view.expandAll()
         completed_index = self.rail_model.index(RAIL_GROUPS.index("completed"), 0)
         self.rail_view.collapse(completed_index)   # once, at startup only
         self.rail_view.selectionModel().currentChanged.connect(
             self._on_rail_current_changed
         )
+        # theme.notifier is a module-level singleton that outlives this window,
+        # so a bound-and-tracked slot (disconnected in shutdown()) is used
+        # instead of an anonymous lambda -- Qt won't auto-drop the connection
+        # when rail_view's C++ object is deleted, and a live test suite creates
+        # and destroys many MainWindows against the same notifier.
+        self._theme_changed_slot = lambda _t: self.rail_view.viewport().update()
+        theme.notifier.changed.connect(self._theme_changed_slot)
 
         self.progress_tab = ProgressTab()
         self.files_tab = FilesTab()
@@ -331,6 +344,9 @@ class MainWindow(QMainWindow):
             self.poller.stop()
         if self.watcher is not None:
             self.watcher.stop()
+        if self._theme_changed_slot is not None:
+            theme.notifier.changed.disconnect(self._theme_changed_slot)
+            self._theme_changed_slot = None
 
     # -- job rendering --------------------------------------------------
 
