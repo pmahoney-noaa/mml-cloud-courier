@@ -110,3 +110,29 @@ def test_qss_mentions_every_bound_object_name():
     for name in ("primaryButton", "segmentWell", "textButton",
                  "statusPill", "pillDot", "serviceBanner", "filesHeader"):
         assert name in text
+
+
+def test_qcolor_hex_round_trip():
+    from mml_cloud_courier.gui.theme import _qcolor
+    color = _qcolor("#006ea0")
+    assert color.name() == "#006ea0"
+
+
+def test_qcolor_rgba_from_dark_theme():
+    from mml_cloud_courier.gui.theme import _qcolor
+    # theme.DARK.rail_selected == "rgba(120,175,255,.09)"
+    color = _qcolor(theme.DARK.rail_selected)
+    assert color.red() == 120
+    assert color.green() == 175
+    assert color.blue() == 255
+    assert color.alpha() == round(0.09 * 255)
+
+
+def test_qcolor_rgba_with_spaces():
+    from mml_cloud_courier.gui.theme import _qcolor
+    # Variant with spaces: "rgba(18, 24, 31, .12)"
+    color = _qcolor("rgba(18, 24, 31, .12)")
+    assert color.red() == 18
+    assert color.green() == 24
+    assert color.blue() == 31
+    assert color.alpha() == round(0.12 * 255)
