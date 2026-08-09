@@ -83,7 +83,8 @@ def test_banner_carries_no_inline_hex(window):
 
 
 @pytest.mark.gui
-def test_rail_shows_stalled_override_when_down():
+def test_rail_shows_stalled_override_when_down(qapp):
+    # unused; build_rail_model draws QPixmap icons and needs a live QApplication
     from mml_cloud_courier.gui.jobs_model import build_rail_model, sync_rail
     model = build_rail_model()
     jobs = [{"id": 7, "name": "leg3", "status": "running"}]
