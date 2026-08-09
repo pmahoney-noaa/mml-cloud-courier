@@ -27,12 +27,16 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from mml_cloud_courier.auth.oauth_flow import load_client_config, run_login
-from mml_cloud_courier.gui.connection_widgets import ConnectionCard
+from mml_cloud_courier.gui.connection_widgets import (
+    ConnectionCard, Dot, Pill, ProbeList, RingSpinner, SectionLabel,
+    StepRail, repolish,
+)
 from mml_cloud_courier.gui.format import split_service_error
 from mml_cloud_courier.gui.workers import call_async
 
@@ -98,9 +102,11 @@ def oauth_profile_payload(*, name: str, bucket: str, prefix: str, project: str,
 
 
 class NewConnectionDialog(QDialog):
-    """Name/bucket/prefix/project fields plus the two credential paths.
-    Nothing credential-shaped (browsing for a key, opening a sign-in
-    browser tab) is reachable until the service has answered /health."""
+    """Three-step stepper: Where → Credential → Verify. Nothing
+    credential-shaped (browsing for a key, opening a sign-in browser tab) is
+    reachable until the service has answered /health — the gate covers step 2
+    as a whole. The copy strings are gate-findings-bound; tests assert on
+    their phrases, so they are not to be reworded."""
 
     created = Signal(dict)
 
@@ -108,147 +114,367 @@ class NewConnectionDialog(QDialog):
         super().__init__(parent)
         self.client = client
         self.setWindowTitle("New connection")
+        self.setFixedWidth(600)
+        self._step = 1
+        self._phase = "idle"
+        self._health_ok = False
+        self._credential: dict | None = None
+        self._key_path: str | None = None
+        self._login_generation = 0
 
-        self.name_edit = QLineEdit()
-        self.bucket_edit = QLineEdit()
-        self.prefix_edit = QLineEdit()
-        self.project_edit = QLineEdit()
+        header = QWidget()
+        header.setObjectName("connHeader")
+        header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(20, 18, 20, 15)
+        header_layout.setSpacing(14)
+        title = QLabel("New connection")
+        title.setObjectName("connTitle")
+        self.step_rail = StepRail()
+        header_layout.addWidget(title)
+        header_layout.addWidget(self.step_rail)
 
-        form = QFormLayout()
-        form.addRow("Name:", self.name_edit)
-        form.addRow("Bucket:", self.bucket_edit)
-        form.addRow("Prefix (optional):", self.prefix_edit)
-        form.addRow("Project ID (optional):", self.project_edit)
+        self._stack = QStackedWidget()
+        self.page_where = self._build_page_where()
+        self.page_credential = self._build_page_credential()
+        self._stack.addWidget(self.page_where)
+        self._stack.addWidget(self.page_credential)
 
-        key_label = QLabel(COPY_CHOOSE_KEY)
-        key_label.setWordWrap(True)
-        self.key_button = QPushButton("Choose a key file")
-        self.key_button.setWhatsThis(COPY_CHOOSE_KEY)
-        self.key_button.clicked.connect(self._choose_key)
-        # The key path is the one COPY_CHOOSE_KEY itself calls out as
-        # "recommended for unattended, recurring transfers" -- the create
-        # action a new connection should default toward.
-        self.key_button.setObjectName("primaryButton")
-
-        signin_label = QLabel(COPY_CHOOSE_SIGNIN)
-        signin_label.setWordWrap(True)
-        self.signin_button = QPushButton("Sign in with Google")
-        self.signin_button.setWhatsThis(COPY_CHOOSE_SIGNIN)
-        self.signin_button.clicked.connect(self._choose_signin)
-
-        self.status_label = QLabel("")
-        self.status_label.setWordWrap(True)
+        footer = QWidget()
+        footer.setObjectName("connFooter")
+        footer.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(20, 13, 20, 13)
+        footer_layout.setSpacing(9)
+        self.back_button = QPushButton("Back")
+        self.back_button.setAutoDefault(False)
+        self.back_button.clicked.connect(self._on_back)
+        self.cancel_button = QPushButton("Cancel")
+        self.cancel_button.setAutoDefault(False)
+        self.cancel_button.clicked.connect(self.reject)
+        self.next_button = QPushButton("Next: credential")
+        self.next_button.setObjectName("primaryButton")
+        self.next_button.clicked.connect(lambda: self._go_to_step(2))
+        footer_layout.addWidget(self.back_button)
+        footer_layout.addStretch(1)
+        footer_layout.addWidget(self.cancel_button)
+        footer_layout.addWidget(self.next_button)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(15, 15, 15, 15)
-        layout.setSpacing(11)
-        layout.addLayout(form)
-        layout.addWidget(key_label)
-        layout.addWidget(self.key_button)
-        layout.addWidget(signin_label)
-        layout.addWidget(self.signin_button)
-        layout.addWidget(self.status_label)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(header)
+        layout.addWidget(self._stack, 1)
+        layout.addWidget(footer)
 
-        self.key_button.setEnabled(False)
-        self.signin_button.setEnabled(False)
-        self.status_label.setText("Checking the transfer service…")
+        # gate: both credential paths dead until /health answers (synchronous,
+        # before the check is even dispatched)
+        self._set_paths_enabled(False)
         call_async(self.client.health, parent=self,
                    on_done=self._service_ok, on_failed=self._service_down)
+        self._go_to_step(1)
 
-    def _service_ok(self, _result):
-        self.key_button.setEnabled(True)
-        self.signin_button.setEnabled(True)
-        self.status_label.setText("")
+    # -- pages -----------------------------------------------------------
 
-    def _service_down(self, _message):
-        self.key_button.setEnabled(False)
-        self.signin_button.setEnabled(False)
-        self.status_label.setText(COPY_SERVICE_FIRST)
+    def _build_page_where(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(15)
+        layout.addWidget(SectionLabel("Where the data goes"))
+
+        def field(label_text, optional=False):
+            row = QHBoxLayout()
+            row.setSpacing(7)
+            label = QLabel(label_text)
+            label.setObjectName("connBody")
+            row.addWidget(label)
+            if optional:
+                marker = QLabel("optional")
+                marker.setObjectName("helperText")
+                row.addWidget(marker)
+            row.addStretch(1)
+            return row
+
+        self.name_edit = QLineEdit()
+        self.name_error = QLabel("")
+        self.name_error.setObjectName("connDangerLine")
+        self.name_error.setWordWrap(True)
+        self.name_error.hide()
+        name_helper = QLabel("How this appears when you start a transfer.")
+        self.bucket_edit = QLineEdit()
+        bucket_helper = QLabel(
+            "The bucket your administrator set up for this lab.")
+        self.prefix_edit = QLineEdit()
+        prefix_helper = QLabel(
+            "A folder inside the bucket that transfers start from. Leave it"
+            " blank to start at the root.")
+        self.project_edit = QLineEdit()
+        self.project_edit.setPlaceholderText("Taken from the key file")
+        project_helper = QLabel(
+            "Only needed when the credential does not name a project.")
+        for helper in (name_helper, bucket_helper, prefix_helper,
+                       project_helper):
+            helper.setObjectName("helperText")
+            helper.setWordWrap(True)
+
+        # bucket field: static gs:// prefix inside the field frame
+        bucket_frame = QWidget()
+        bucket_frame.setObjectName("connField")
+        bucket_frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        bucket_row = QHBoxLayout(bucket_frame)
+        bucket_row.setContentsMargins(11, 8, 11, 8)
+        bucket_row.setSpacing(2)
+        gs_label = QLabel("gs://")
+        gs_label.setObjectName("connFieldPrefix")
+        bucket_row.addWidget(gs_label)
+        bucket_row.addWidget(self.bucket_edit, 1)
+
+        layout.addLayout(field("Name"))
+        layout.addWidget(self.name_edit)
+        layout.addWidget(self.name_error)
+        layout.addWidget(name_helper)
+        layout.addLayout(field("Bucket"))
+        layout.addWidget(bucket_frame)
+        layout.addWidget(bucket_helper)
+        layout.addLayout(field("Default prefix", optional=True))
+        layout.addWidget(self.prefix_edit)
+        layout.addWidget(prefix_helper)
+        layout.addLayout(field("Project ID", optional=True))
+        layout.addWidget(self.project_edit)
+        layout.addWidget(project_helper)
+        layout.addStretch(1)
+
+        self.name_edit.textChanged.connect(self._update_next)
+        self.bucket_edit.textChanged.connect(self._update_next)
+        return page
+
+    def _build_page_credential(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(11)
+
+        self.gate_banner = QWidget()
+        self.gate_banner.setObjectName("connNotice")
+        self.gate_banner.setProperty("tone", "danger")
+        self.gate_banner.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, True)
+        gate_layout = QVBoxLayout(self.gate_banner)
+        gate_layout.setContentsMargins(15, 13, 15, 13)
+        gate_layout.setSpacing(9)
+        gate_row = QHBoxLayout()
+        gate_row.setSpacing(9)
+        gate_row.addWidget(Dot(tone="danger"),
+                           alignment=Qt.AlignmentFlag.AlignTop)
+        self.status_label = QLabel("Checking the transfer service…")
+        self.status_label.setObjectName("connNoticeText")
+        self.status_label.setProperty("tone", "danger")
+        self.status_label.setWordWrap(True)
+        gate_row.addWidget(self.status_label, 1)
+        gate_layout.addLayout(gate_row)
+        gate_buttons = QHBoxLayout()
+        gate_buttons.setSpacing(9)
+        self.check_again_button = QPushButton("Check again")
+        self.check_again_button.setObjectName("dangerButton")
+        self.check_again_button.clicked.connect(self._check_again)
+        self.open_main_button = QPushButton("Open the main window")
+        self.open_main_button.setObjectName("dangerOutline")
+        self.open_main_button.clicked.connect(self._open_main_window)
+        for button in (self.check_again_button, self.open_main_button):
+            button.setAutoDefault(False)
+        gate_buttons.addWidget(self.check_again_button)
+        gate_buttons.addWidget(self.open_main_button)
+        gate_buttons.addStretch(1)
+        gate_layout.addLayout(gate_buttons)
+        self.gate_banner.hide()
+        layout.addWidget(self.gate_banner)
+
+        layout.addWidget(SectionLabel("How the service signs in"))
+
+        # Card A — service account key (recommended)
+        self.card_key = QWidget()
+        self.card_key.setObjectName("connCard")
+        self.card_key.setProperty("accent", "true")
+        self.card_key.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        key_layout = QVBoxLayout(self.card_key)
+        key_layout.setContentsMargins(17, 15, 17, 15)
+        key_layout.setSpacing(9)
+        key_head = QHBoxLayout()
+        key_head.setSpacing(9)
+        key_heading = QLabel("Service account key")
+        key_heading.setObjectName("connCardHeading")
+        key_head.addWidget(key_heading)
+        key_head.addWidget(Pill("Recommended", tone="accent"))
+        key_head.addStretch(1)
+        key_layout.addLayout(key_head)
+        key_body = QLabel(COPY_CHOOSE_KEY)
+        key_body.setObjectName("connBody")
+        key_body.setWordWrap(True)
+        key_layout.addWidget(key_body)
+        self.key_error_block = QWidget()
+        self.key_error_block.setObjectName("connNotice")
+        self.key_error_block.setProperty("tone", "danger")
+        self.key_error_block.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, True)
+        key_error_layout = QVBoxLayout(self.key_error_block)
+        key_error_layout.setContentsMargins(13, 11, 13, 11)
+        key_error_layout.setSpacing(7)
+        self.key_error_mono = QLabel("")
+        self.key_error_mono.setObjectName("connDangerMono")
+        self.key_error_mono.setWordWrap(True)
+        self.key_error_plain = QLabel(
+            "That file is an OAuth client configuration, not a key. Use it"
+            " under Google sign-in below, or ask your administrator for a"
+            " service-account key.")
+        self.key_error_plain.setObjectName("connBody")
+        self.key_error_plain.setWordWrap(True)
+        key_error_layout.addWidget(self.key_error_mono)
+        key_error_layout.addWidget(self.key_error_plain)
+        self.key_error_block.hide()
+        key_layout.addWidget(self.key_error_block)
+        key_action = QHBoxLayout()
+        key_action.setSpacing(9)
+        self.key_button = QPushButton("Choose a key file…")
+        self.key_button.setObjectName("primaryButton")
+        self.key_button.setAutoDefault(False)
+        self.key_button.clicked.connect(self._choose_key)
+        key_note = QLabel("A .json file your administrator sends you.")
+        key_note.setObjectName("helperText")
+        key_action.addWidget(self.key_button)
+        key_action.addWidget(key_note)
+        key_action.addStretch(1)
+        key_layout.addLayout(key_action)
+        layout.addWidget(self.card_key)
+
+        # Card B — Google sign-in
+        self.card_signin = QWidget()
+        self.card_signin.setObjectName("connCard")
+        self.card_signin.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, True)
+        signin_layout = QVBoxLayout(self.card_signin)
+        signin_layout.setContentsMargins(17, 15, 17, 15)
+        signin_layout.setSpacing(9)
+        signin_head = QHBoxLayout()
+        signin_head.setSpacing(9)
+        signin_heading = QLabel("Google sign-in")
+        signin_heading.setObjectName("connCardHeading")
+        signin_head.addWidget(signin_heading)
+        signin_head.addWidget(Pill("Can expire in ~7 days", tone="warn"))
+        signin_head.addStretch(1)
+        signin_layout.addLayout(signin_head)
+        signin_body = QLabel(COPY_CHOOSE_SIGNIN)
+        signin_body.setObjectName("connBody")
+        signin_body.setWordWrap(True)
+        signin_layout.addWidget(signin_body)
+        self.signin_error_label = QLabel("")
+        self.signin_error_label.setObjectName("connDangerLine")
+        self.signin_error_label.setWordWrap(True)
+        self.signin_error_label.hide()
+        signin_layout.addWidget(self.signin_error_label)
+        signin_action = QHBoxLayout()
+        signin_action.setSpacing(9)
+        self.signin_button = QPushButton("Sign in with Google…")
+        self.signin_button.setAutoDefault(False)
+        self.signin_button.clicked.connect(self._choose_signin)
+        signin_note = QLabel("Opens your browser.")
+        signin_note.setObjectName("helperText")
+        signin_action.addWidget(self.signin_button)
+        signin_action.addWidget(signin_note)
+        signin_action.addStretch(1)
+        signin_layout.addLayout(signin_action)
+        layout.addWidget(self.card_signin)
+
+        self.either_way_label = QLabel("")
+        self.either_way_label.setObjectName("helperText")
+        self.either_way_label.setWordWrap(True)
+        layout.addWidget(self.either_way_label)
+        layout.addStretch(1)
+        return page
+
+    # -- navigation ------------------------------------------------------
+
+    def _target_path(self) -> str:
+        target = (f"gs://{self.bucket_edit.text().strip()}/"
+                  f"{self.prefix_edit.text().strip()}")
+        return target.rstrip("/")
+
+    def _go_to_step(self, step: int) -> None:
+        self._step = step
+        self.step_rail.set_current(step)
+        if step == 1:
+            self._stack.setCurrentWidget(self.page_where)
+            self.back_button.setEnabled(False)
+            self.back_button.setText("Back")
+            self.next_button.show()
+            self.next_button.setDefault(True)
+            self._update_next()
+            self.name_edit.setFocus()
+        elif step == 2:
+            self._phase = "idle"
+            self.name_error.hide()
+            self._stack.setCurrentWidget(self.page_credential)
+            self.back_button.setEnabled(True)
+            self.back_button.setText("Back")
+            self.next_button.hide()      # step 2 has no footer primary
+            self.either_way_label.setText(
+                "Either way, the service tests the credential against"
+                f" {self._target_path()} before it saves anything.")
+            self._apply_gate()
+
+    def _on_back(self) -> None:
+        if self._step == 2:
+            self._go_to_step(1)
+
+    def _update_next(self) -> None:
+        ready = bool(self.name_edit.text().strip()) and bool(
+            self.bucket_edit.text().strip())
+        self.next_button.setEnabled(ready and self._step == 1)
+
+    # -- health gate -----------------------------------------------------
 
     def _set_paths_enabled(self, enabled: bool) -> None:
         self.key_button.setEnabled(enabled)
         self.signin_button.setEnabled(enabled)
 
-    def _fields(self) -> tuple[str, str, str, str] | None:
-        name = self.name_edit.text().strip()
-        bucket = self.bucket_edit.text().strip()
-        if not name or not bucket:
-            self.status_label.setText("Name and bucket are required.")
-            return None
-        return name, bucket, self.prefix_edit.text().strip(), self.project_edit.text().strip()
+    def _apply_gate(self) -> None:
+        gated = not self._health_ok
+        self.gate_banner.setVisible(gated)
+        for card in (self.card_key, self.card_signin):
+            card.setProperty("state", "disabled" if gated else "")
+            repolish(card)
+        self._set_paths_enabled(not gated)
 
-    # -- service-account key path -------------------------------------
+    def _service_ok(self, _result) -> None:
+        self._health_ok = True
+        self._apply_gate()
+
+    def _service_down(self, _message) -> None:
+        self._health_ok = False
+        self.status_label.setText(COPY_SERVICE_FIRST)
+        self._apply_gate()
+
+    def _check_again(self) -> None:
+        self.status_label.setText("Checking the transfer service…")
+        call_async(self.client.health, parent=self,
+                   on_done=self._service_ok, on_failed=self._service_down)
+
+    def _open_main_window(self) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        top = parent.window()
+        top.show()
+        top.raise_()
+        top.activateWindow()
+
+    # -- credential paths (Task 5) ---------------------------------------
 
     def _choose_key(self):
-        fields = self._fields()
-        if fields is None:
-            return
-        path, _filter = QFileDialog.getOpenFileName(
-            self, "Choose a service account key",
-            filter="OAuth/service-account JSON (*.json)",
-        )
-        if not path:
-            return
-        try:
-            key = load_key_file(path)
-        except ValueError as exc:
-            self.status_label.setText(str(exc))
-            return
-        name, bucket, prefix, project = fields
-        payload = key_profile_payload(
-            name=name, bucket=bucket, prefix=prefix, project=project, key=key
-        )
-        self.status_label.setText("Validating the connection against the bucket…")
-        self._set_paths_enabled(False)
-        call_async(lambda: self.client.create_profile(payload), parent=self,
-                   on_done=self._profile_created, on_failed=self._flow_failed)
-
-    def _profile_created(self, result):
-        self._set_paths_enabled(True)
-        self.status_label.setText(result["summary"] + "\n\n" + COPY_DELETE_ORIGINAL)
-        self.created.emit(result)
-
-    # -- Google sign-in path --------------------------------------------
+        pass
 
     def _choose_signin(self):
-        fields = self._fields()
-        if fields is None:
-            return
-        source = os.environ.get("MMLCC_OAUTH_CLIENT")
-        if not source:
-            path, _filter = QFileDialog.getOpenFileName(
-                self, "Choose the OAuth client configuration",
-                filter="OAuth client JSON (*.json)",
-            )
-            if not path:
-                return
-            source = path
-        try:
-            config = load_client_config(source)
-        except ValueError as exc:
-            self.status_label.setText(str(exc))
-            return
-        self._pending_fields = fields
-        self.status_label.setText("A browser window will open for Google sign-in…")
-        self._set_paths_enabled(False)
-        call_async(lambda: run_login(config, timeout_seconds=300), parent=self,
-                   on_done=self._signed_in, on_failed=self._flow_failed)
-
-    def _signed_in(self, credential):
-        name, bucket, prefix, project = self._pending_fields
-        payload = oauth_profile_payload(
-            name=name, bucket=bucket, prefix=prefix, project=project,
-            credential=credential,
-        )
-        self.status_label.setText("Validating the connection against the bucket…")
-        call_async(lambda: self.client.create_profile(payload), parent=self,
-                   on_done=self._profile_created, on_failed=self._flow_failed)
-
-    # -- shared -----------------------------------------------------------
-
-    def _flow_failed(self, message):
-        self._set_paths_enabled(True)
-        self.status_label.setText(message)
+        pass
 
 
 class ConnectionsDialog(QDialog):
