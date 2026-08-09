@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import PurePath
 
-from PySide6.QtCore import QDateTime, Qt, QTimer, Signal
+from PySide6.QtCore import QDateTime, QSettings, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -49,6 +49,26 @@ from mml_cloud_courier.gui.format import human_bytes
 from mml_cloud_courier.gui.workers import call_async
 
 _DUPLICATE = re.compile(r"\bjob (\d+) \(")
+
+
+# ---------------------------------------------------------------------------
+# Last-used connection: persisted the same way theme.py persists its
+# setting, so a freshly opened wizard can preselect it.
+# ---------------------------------------------------------------------------
+
+
+def _qsettings() -> QSettings:
+    return QSettings("MML", "Cloud Courier")
+
+
+def last_connection_name() -> str | None:
+    value = _qsettings().value("last_connection")
+    return value or None
+
+
+def remember_connection(name: str | None) -> None:
+    if name:
+        _qsettings().setValue("last_connection", name)
 
 
 # ---------------------------------------------------------------------------
@@ -113,7 +133,7 @@ class NewTransferWizard(QDialog):
     jobSubmitted = Signal(int)
     previewUpdated = Signal(int, int, int)
 
-    def __init__(self, client, parent=None):
+    def __init__(self, client, parent=None, preferred_profile: str | None = None):
         super().__init__(parent)
         self.client = client
         self.state = WizardState()
@@ -121,6 +141,10 @@ class NewTransferWizard(QDialog):
         self._profiles: list[dict] = []
         self._name_touched = False
         self._scan_cancel = threading.Event()
+        self._preferred_profile = (
+            preferred_profile if preferred_profile is not None else last_connection_name()
+        )
+        self._preferred_applied = False
         self.setWindowTitle("New transfer")
 
         self._preview_timer = QTimer(self)
@@ -183,6 +207,11 @@ class NewTransferWizard(QDialog):
         self.refresh_button.clicked.connect(self._refresh)
         self.new_button.clicked.connect(self._open_new_connection)
         self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
+        # activated only fires for a user-driven change (not a programmatic
+        # setCurrentIndex), so it's the signal that means "the user has
+        # picked a row" -- once that happens the preferred-profile
+        # auto-select in _loaded must never override it again.
+        self.profile_combo.activated.connect(self._on_profile_activated)
 
         connection_row = QHBoxLayout()
         connection_row.addWidget(self.profile_combo, 1)
@@ -313,6 +342,8 @@ class NewTransferWizard(QDialog):
         self.status_label.setText(
             "" if profiles else "No connections yet — create one below."
         )
+        if not self._preferred_applied and self._preferred_profile:
+            self.set_profile_by_name(self._preferred_profile)
 
     def _failed(self, message: str) -> None:
         self.status_label.setText(message)
@@ -331,6 +362,9 @@ class NewTransferWizard(QDialog):
             self.state.profile_name = None
             self.profile_id = None
         self._preview_timer.start()
+
+    def _on_profile_activated(self, _index: int) -> None:
+        self._preferred_applied = True
 
     def set_profile_by_name(self, name: str) -> bool:
         for index, profile in enumerate(self._profiles):
@@ -510,6 +544,7 @@ class NewTransferWizard(QDialog):
     def _submit_done(self, outcome: dict) -> None:
         if outcome["ok"]:
             self.set_status("")
+            remember_connection(self.state.profile_name)
             self.jobSubmitted.emit(outcome["result"]["job_id"])
             super().accept()
             return

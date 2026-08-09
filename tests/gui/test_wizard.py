@@ -124,3 +124,45 @@ def test_reject_stops_pending_preview_timer(wizard, tmp_path):
     assert wizard._preview_timer.isActive()
     wizard.reject()
     assert not wizard._preview_timer.isActive()
+
+
+class FakeMultiProfileClient(FakeWizardClient):
+    """Same idiom as FakeWizardClient, but seeded with two connections so
+    preferred-profile selection has something to pick between."""
+
+    def list_profiles(self):
+        return [
+            {"id": 1, "name": "lab", "bucket": "b", "default_prefix": "d",
+             "auth_type": "service_account_key", "validated_at": None},
+            {"id": 2, "name": "gate-oauth", "bucket": "b2", "default_prefix": "d2",
+             "auth_type": "oauth", "validated_at": None},
+        ]
+
+
+@pytest.fixture
+def make_wizard(qtbot):
+    """Build a NewTransferWizard over FakeMultiProfileClient, forwarding
+    constructor kwargs (e.g. preferred_profile) straight through."""
+    def _make(**kwargs):
+        client = FakeMultiProfileClient()
+        w = NewTransferWizard(client, **kwargs)
+        qtbot.addWidget(w)
+        return w
+    return _make
+
+
+def test_preferred_profile_selected_on_load(qtbot, make_wizard):
+    wizard = make_wizard(preferred_profile="gate-oauth")   # fixture seeds profiles incl. gate-oauth
+    qtbot.waitUntil(lambda: wizard.profile_combo.count() > 0)
+    assert wizard.state.profile_name == "gate-oauth"
+
+
+def test_remember_connection_roundtrip(tmp_path, monkeypatch):
+    from PySide6.QtCore import QSettings
+    from mml_cloud_courier.gui import wizard as wizard_module
+    monkeypatch.setattr(
+        wizard_module, "_qsettings",
+        lambda: QSettings(str(tmp_path / "t.ini"), QSettings.Format.IniFormat))
+    assert wizard_module.last_connection_name() is None
+    wizard_module.remember_connection("NOAA-CCEP")
+    assert wizard_module.last_connection_name() == "NOAA-CCEP"

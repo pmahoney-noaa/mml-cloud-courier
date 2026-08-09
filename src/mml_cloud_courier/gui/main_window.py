@@ -120,6 +120,7 @@ class MainWindow(QMainWindow):
         # _update_action_states (called from _build_toolbar) reads
         # _no_connections, so it must exist before _build_toolbar() runs.
         self._no_connections = False
+        self.setAcceptDrops(True)
         self.banner = QWidget()
         self.banner.setObjectName("serviceBanner")
         banner_layout = QHBoxLayout(self.banner)
@@ -359,6 +360,30 @@ class MainWindow(QMainWindow):
             return
         super().closeEvent(event)
 
+    # -- drop-a-folder-to-start-a-transfer -----------------------------
+
+    def dragEnterEvent(self, event) -> None:
+        # A drop must never open a dead-end wizard: mirrors the same gate
+        # that dims the New transfer button.
+        if not self._service_up or self._no_connections:
+            event.ignore()
+            return
+        urls = event.mimeData().urls()
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            event.ignore()
+            return
+        if not Path(urls[0].toLocalFile()).is_dir():
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        # toLocalFile() yields "/"-separated paths even on Windows; round
+        # -trip through Path so prefill_source lands in native form, same
+        # as anything typed into the source field by hand.
+        path = str(Path(event.mimeData().urls()[0].toLocalFile()))
+        self._open_new_transfer(prefill_source=path)
+
     # -- test/UI hooks ------------------------------------------------
 
     def rail_job_ids(self) -> list[int]:
@@ -450,8 +475,10 @@ class MainWindow(QMainWindow):
 
     # -- toolbar actions --------------------------------------------------
 
-    def _open_new_transfer(self) -> None:
+    def _open_new_transfer(self, *, prefill_source: str | None = None) -> None:
         wizard = NewTransferWizard(self.client, self)
+        if prefill_source:
+            wizard.set_source(prefill_source)
         wizard.jobSubmitted.connect(self._on_job_submitted)
         wizard.show()
 

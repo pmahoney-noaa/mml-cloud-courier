@@ -130,3 +130,18 @@ def test_rail_shows_stalled_override_when_down(qapp):
     assert running_group.child(0).data(SECOND_LINE_ROLE) == "Stalled — service stopped"
     sync_rail(model, jobs, service_up=True)
     assert model.item(1).child(0).data(SECOND_LINE_ROLE) != "Stalled — service stopped"
+
+
+@pytest.mark.gui
+def test_drop_event_opens_prefilled_wizard(window, tmp_path, monkeypatch):
+    opened = {}
+    monkeypatch.setattr(window, "_open_new_transfer",
+                        lambda prefill_source=None: opened.setdefault("src", prefill_source))
+    from PySide6.QtCore import QMimeData, QUrl
+    from PySide6.QtGui import QDropEvent
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(tmp_path))])
+    event = type("E", (), {"mimeData": lambda self=None: mime,
+                           "acceptProposedAction": lambda self=None: None})()
+    window.dropEvent(event)
+    assert opened["src"] == str(tmp_path)
