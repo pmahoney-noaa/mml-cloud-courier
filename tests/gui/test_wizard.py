@@ -4,7 +4,8 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
 from mml_cloud_courier.gui.wizard import (
-    WizardState, build_submission, parse_duplicate_job_id, preview_scan,
+    NewTransferWizard, WizardState, build_submission, parse_duplicate_job_id,
+    preview_scan,
 )
 
 
@@ -58,9 +59,18 @@ class FakeWizardClient:
                 "profile_id": 1, "preflight_summary": "This credential can ..."}
 
 
-def test_wizard_walks_to_submission(qtbot, tmp_path):
-    from mml_cloud_courier.gui.wizard import NewTransferWizard
+@pytest.fixture
+def wizard(qtbot):
+    """A NewTransferWizard over a fake client seeded with one profile
+    ("lab"), with the async profile load already settled."""
+    client = FakeWizardClient()
+    w = NewTransferWizard(client)
+    qtbot.addWidget(w)
+    qtbot.waitUntil(lambda: w.profile_combo.count() == 1, timeout=5000)
+    return w
 
+
+def test_wizard_walks_to_submission(qtbot, tmp_path):
     client = FakeWizardClient()
     wizard = NewTransferWizard(client)
     qtbot.addWidget(wizard)
@@ -68,14 +78,38 @@ def test_wizard_walks_to_submission(qtbot, tmp_path):
     wizard.jobSubmitted.connect(submitted.append)
 
     wizard.set_direction("upload")
-    wizard.next()                       # -> connection page; profiles load async
     qtbot.waitUntil(lambda: wizard.profile_combo.count() == 1, timeout=5000)
-    wizard.next()                       # -> folders
     wizard.set_source(str(tmp_path))
     wizard.set_prefix("data")
-    wizard.next()                       # -> options & review
     wizard.set_job_name("myjob")
     wizard.accept_and_submit()
     qtbot.waitUntil(lambda: submitted == [7], timeout=5000)
     assert client.submissions[0]["name"] == "myjob"
     assert client.submissions[0]["profile"] == "lab"
+
+
+def test_one_screen_has_no_pages(qtbot, wizard):
+    from PySide6.QtWidgets import QWizard
+    assert not isinstance(wizard, QWizard)
+
+
+def test_validation_messages_in_order(qtbot, wizard, tmp_path):
+    wizard.profile_combo.setCurrentIndex(-1)
+    wizard.accept_and_submit()
+    assert "connection" in wizard.status_label.text()
+
+    wizard.profile_combo.setCurrentIndex(0)
+    wizard.accept_and_submit()
+    assert "folder" in wizard.status_label.text()
+
+    wizard.set_source(str(tmp_path))
+    wizard.set_job_name("")
+    wizard.accept_and_submit()
+    assert "name" in wizard.status_label.text()
+
+
+def test_set_profile_by_name(wizard):
+    assert wizard.set_profile_by_name("lab") is True
+    assert wizard.profile_combo.currentIndex() == 0
+    assert wizard.state.profile_name == "lab"
+    assert wizard.set_profile_by_name("no-such-connection") is False
