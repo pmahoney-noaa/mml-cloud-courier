@@ -50,6 +50,10 @@ def test_summary_stat_cells(qtbot):
     assert tab.stat_values["duration"].text() == "1h 30m"
     assert tab.verdict_tag.isVisibleTo(tab)
     assert tab.footer_label.isVisibleTo(tab)   # quarantined > 0
+    assert tab.footer_label.text() == (
+        "Excluded files stay recorded in the ledger. The job keeps the"
+        " Incomplete verdict until they transfer or you stop retrying them."
+    )
 
 
 def test_summary_tag_and_footer_hidden_when_clean(qtbot):
@@ -60,6 +64,50 @@ def test_summary_tag_and_footer_hidden_when_clean(qtbot):
     tab.update_job(job)
     assert not tab.verdict_tag.isVisibleTo(tab)
     assert not tab.footer_label.isVisibleTo(tab)
+
+
+def test_summary_state_rows_order_and_total_override(qtbot):
+    """state_rows_layout must contain one row per nonzero state, ordered
+    STATE_ORDER-first then unknown states appended, and each row's bar must
+    be handed the job's files_total as an explicit denominator override
+    (not the default sum-of-this-row's-single-state, which would always
+    read 100%)."""
+    tab = SummaryTab(on_open_report=lambda: None, on_resume=lambda: None)
+    qtbot.addWidget(tab)
+    job = _summary_job()
+    job["progress"]["files_total"] = 10
+    job["progress"]["state_counts"] = {"verified": 2, "failed": 1, "mystery": 1}
+    tab.update_job(job)
+
+    assert tab.state_rows_layout.count() == 3
+
+    def _row_parts(index):
+        row_widget = tab.state_rows_layout.itemAt(index).widget()
+        row_layout = row_widget.layout()
+        label = row_layout.itemAt(0).widget()
+        bar = row_layout.itemAt(1).widget()
+        count_label = row_layout.itemAt(2).widget()
+        return label, bar, count_label
+
+    # STATE_ORDER = (..."verified"..."failed"...) so verified sorts before
+    # failed; "mystery" is not in STATE_ORDER so it is appended last.
+    label0, bar0, count0 = _row_parts(0)
+    label1, bar1, count1 = _row_parts(1)
+    label2, bar2, count2 = _row_parts(2)
+    assert label0.text() == "Verified"
+    assert label1.text() == "Failed"
+    assert label2.text() == "mystery"   # unknown state: no STATE_LABELS entry, key echoed
+    assert count0.text() == "2"
+    assert count1.text() == "1"
+    assert count2.text() == "1"
+
+    # The bar's private _total is the override denominator passed by
+    # SummaryTab (`bar.set_counts({state: count}, total=files_total)`);
+    # asserted via the private attribute since _StackedStateBar exposes no
+    # public getter for it.
+    assert bar0._total == 10
+    assert bar1._total == 10
+    assert bar2._total == 10
 
 
 # -- FilesTab header / elision / columns ----------------------------------
