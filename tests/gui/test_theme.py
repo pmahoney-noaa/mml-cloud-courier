@@ -136,3 +136,16 @@ def test_qcolor_rgba_with_spaces():
     assert color.green() == 24
     assert color.blue() == 31
     assert color.alpha() == round(0.12 * 255)
+
+
+def test_no_hex_colors_outside_theme_py():
+    import pathlib, re
+    gui_dir = pathlib.Path(theme.__file__).parent
+    offenders = []
+    for path in sorted(gui_dir.glob("*.py")):
+        if path.name == "theme.py":
+            continue
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"#[0-9a-fA-F]{6}\b", line):
+                offenders.append(f"{path.name}:{line_number}")
+    assert offenders == []
