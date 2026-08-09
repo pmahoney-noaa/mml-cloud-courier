@@ -14,6 +14,7 @@ from collections.abc import Callable
 from datetime import datetime
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -21,7 +22,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QListWidget,
-    QProgressBar,
     QPushButton,
     QTableView,
     QTreeWidget,
@@ -40,6 +40,7 @@ from mml_cloud_courier.gui.format import (
     human_duration,
     human_rate,
 )
+from mml_cloud_courier.gui.progress_widgets import SegmentedBar
 
 _CATEGORY_ROLE = Qt.ItemDataRole.UserRole + 1
 _FILLED_ROLE = Qt.ItemDataRole.UserRole + 2
@@ -70,13 +71,40 @@ class ProgressTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.headline_label = QLabel("")
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
+        self.headline_name = QLabel("")
+        font = self.headline_name.font()
+        font.setPointSizeF(13.5)
+        font.setWeight(QFont.Weight(600))
+        self.headline_name.setFont(font)
+        self.headline_route = QLabel("")
+        self.headline_route.setFont(theme.mono_font(8.5))
+        self.percent_label = QLabel("")
+        self.percent_label.setFont(theme.mono_font(19.5, 600))
+        self.percent_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+
+        name_column = QVBoxLayout()
+        name_column.setSpacing(2)
+        name_column.addWidget(self.headline_name)
+        name_column.addWidget(self.headline_route)
+        headline_row = QHBoxLayout()
+        headline_row.addLayout(name_column, 1)
+        headline_row.addWidget(self.percent_label)
+
+        self.bar = SegmentedBar()
         self.counts_label = QLabel("")
         self.counts_label.setFont(theme.mono_font(9))
-        self.throughput_label = QLabel("")
-        self.throughput_label.setFont(theme.mono_font(9, 500))
+        self.rate_label = QLabel("")
+        self.rate_label.setFont(theme.mono_font(9, 500))
+        self.eta_label = QLabel("")
+        self.eta_label.setFont(theme.mono_font(9))
+        under_bar = QHBoxLayout()
+        under_bar.setSpacing(16)
+        under_bar.addWidget(self.counts_label)
+        under_bar.addStretch(1)
+        under_bar.addWidget(self.rate_label)
+        under_bar.addWidget(self.eta_label)
+
+        self.headline_label = self.headline_name   # back-compat alias; remove in Task 9
         self.inflight_list = QListWidget()
         self.inflight_list.setTextElideMode(Qt.TextElideMode.ElideLeft)
         self.inflight_list.setFont(theme.mono_font(8.5))
@@ -85,10 +113,11 @@ class ProgressTab(QWidget):
         self.events_list.setFont(theme.mono_font(8.5))
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.headline_label)
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.counts_label)
-        layout.addWidget(self.throughput_label)
+        layout.setContentsMargins(18, 18, 20, 18)
+        layout.setSpacing(15)
+        layout.addLayout(headline_row)
+        layout.addWidget(self.bar)
+        layout.addLayout(under_bar)
         layout.addWidget(QLabel("In progress:"))
         layout.addWidget(self.inflight_list, 1)
         layout.addWidget(QLabel("Events:"))
@@ -107,16 +136,28 @@ class ProgressTab(QWidget):
         self._last_bytes = None
         self._last_time = None
         self._rate = None
-        self.headline_label.setText("")
+        self.headline_name.setText("")
+        self.headline_route.setText("")
+        self.percent_label.setText("")
         self.counts_label.setText("")
-        self.throughput_label.setText("")
-        self.progress_bar.setValue(0)
+        self.rate_label.setText("")
+        self.eta_label.setText("")
+        self.bar.set_fractions(0.0, 0.0)
         self.inflight_list.clear()
         self.events_list.clear()
 
     def update_snapshot(self, snap: dict) -> None:
-        status = snap.get("status", "")
-        self.headline_label.setText(STATUS_LABELS.get(status, status))
+        name = snap.get("name")
+        if name is not None:
+            self.headline_name.setText(name)
+
+        direction = snap.get("direction")
+        source_root = snap.get("source_root")
+        dest_prefix = snap.get("dest_prefix")
+        if direction is not None and source_root is not None and dest_prefix is not None:
+            self.headline_route.setText(
+                f"{direction.title()} · {source_root} → {dest_prefix}"
+            )
 
         progress = snap.get("progress") or {}
         files_total = progress.get("files_total", 0)
@@ -130,18 +171,26 @@ class ProgressTab(QWidget):
             fraction = min(1.0, files_done / files_total)
         else:
             fraction = 0.0
-        self.progress_bar.setValue(int(fraction * 100))
+        self.percent_label.setText(f"{int(fraction * 100)}%")
 
         self.counts_label.setText(
             f"{files_done:,} of {files_total:,} files — "
             f"{human_bytes(bytes_done)} of {human_bytes(bytes_total)}"
         )
 
-        self._update_throughput(bytes_done)
-        self._update_inflight(snap.get("transferring") or [])
+        self._update_throughput(bytes_done, bytes_total)
+
+        transferring = snap.get("transferring") or []
+        inflight_fraction = (
+            sum(e.get("bytes_transferred", 0) for e in transferring) / bytes_total
+            if bytes_total else 0
+        )
+        self.bar.set_fractions(fraction, inflight_fraction)
+
+        self._update_inflight(transferring)
         self._append_events(snap.get("events") or [])
 
-    def _update_throughput(self, bytes_done: int) -> None:
+    def _update_throughput(self, bytes_done: int, bytes_total: int) -> None:
         now = time.monotonic()
         if self._last_time is not None:
             delta_t = now - self._last_time
@@ -150,9 +199,14 @@ class ProgressTab(QWidget):
                 self._rate = instant if self._rate is None else (
                     0.7 * self._rate + 0.3 * instant
                 )
-                self.throughput_label.setText(human_rate(max(self._rate, 0.0)))
+                self.rate_label.setText(human_rate(max(self._rate, 0.0)))
         self._last_bytes = bytes_done
         self._last_time = now
+
+        if self._rate and self._rate > 0 and bytes_total and bytes_done <= bytes_total:
+            self.eta_label.setText(human_duration((bytes_total - bytes_done) / self._rate))
+        else:
+            self.eta_label.setText("")
 
     def _update_inflight(self, transferring: list[dict]) -> None:
         self.inflight_list.clear()

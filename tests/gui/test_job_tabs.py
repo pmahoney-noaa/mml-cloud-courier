@@ -195,6 +195,41 @@ def test_inflight_and_events_lists_elide_left(qtbot):
     assert tab.inflight_list.textElideMode() == Qt.TextElideMode.ElideLeft
 
 
+# -- Progress headline / route / rate / ETA -------------------------------
+
+
+def test_progress_headline_and_route(qtbot):
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    tab.update_snapshot({
+        "name": "IceSeal_Survey_2026_Leg3", "status": "running",
+        "direction": "upload", "source_root": r"D:\field\leg3",
+        "dest_prefix": "scratch/leg3",
+        "progress": {"files_total": 10, "files_done": 5,
+                     "bytes_total": 1000, "bytes_done": 620},
+    })
+    assert tab.headline_name.text() == "IceSeal_Survey_2026_Leg3"
+    assert tab.headline_route.text() == r"Upload · D:\field\leg3 → scratch/leg3"
+    assert tab.percent_label.text() == "62%"
+
+
+def test_progress_eta_appears_with_rate(qtbot, monkeypatch):
+    import itertools
+    times = itertools.count(step=1.0)
+    monkeypatch.setattr("mml_cloud_courier.gui.job_tabs.time",
+                        type("T", (), {"monotonic": staticmethod(lambda: next(times))}))
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    snap = {"status": "running",
+            "progress": {"files_total": 1, "files_done": 0,
+                         "bytes_total": 1000, "bytes_done": 0}}
+    tab.update_snapshot(snap)
+    snap2 = {**snap, "progress": {**snap["progress"], "bytes_done": 100}}
+    tab.update_snapshot(snap2)           # 100 B/s instant rate
+    assert tab.rate_label.text() == "100 B/s"
+    assert tab.eta_label.text() != ""    # (1000-100)/100 = 9s remaining
+
+
 # -- _verdict_style token usage -----------------------------------------------
 
 
