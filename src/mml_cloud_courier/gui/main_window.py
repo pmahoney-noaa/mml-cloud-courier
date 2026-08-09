@@ -9,13 +9,14 @@ refreshes what it touched.
 from __future__ import annotations
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QTreeView,
@@ -41,6 +42,7 @@ from mml_cloud_courier.gui.jobs_model import (
 from mml_cloud_courier.gui.service_control import start_service_elevated
 from mml_cloud_courier.gui.session import ServiceSession, discover_session
 from mml_cloud_courier.gui.settings_dialog import SettingsDialog
+from mml_cloud_courier.gui.status_pill import StatusPill
 from mml_cloud_courier.gui.tray import TrayController
 from mml_cloud_courier.gui.wizard import NewTransferWizard
 from mml_cloud_courier.gui.workers import JobWatcher, JobsPoller, call_async
@@ -184,42 +186,54 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Main")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
 
-        self.new_transfer_action = QAction("New Transfer", self)
-        self.new_transfer_action.triggered.connect(self._open_new_transfer)
-        toolbar.addAction(self.new_transfer_action)
+        self.new_transfer_button = QPushButton("New transfer")
+        self.new_transfer_button.setObjectName("primaryButton")
+        self.new_transfer_button.clicked.connect(self._open_new_transfer)
+        toolbar.addWidget(self.new_transfer_button)
 
-        toolbar.addSeparator()
+        well = QWidget()
+        well.setObjectName("segmentWell")
+        well_layout = QHBoxLayout(well)
+        well_layout.setContentsMargins(2, 2, 2, 2)
+        well_layout.setSpacing(0)
+        self.pause_button = QPushButton("Pause")
+        self.resume_button = QPushButton("Resume")
+        self.cancel_button = QPushButton("Cancel")
+        for button, slot in ((self.pause_button, self._on_pause),
+                             (self.resume_button, self._on_resume),
+                             (self.cancel_button, self._on_cancel)):
+            button.setObjectName("segmentButton")
+            button.clicked.connect(slot)
+            well_layout.addWidget(button)
+        toolbar.addWidget(well)
 
-        self.pause_action = QAction("Pause", self)
-        self.pause_action.triggered.connect(self._on_pause)
-        toolbar.addAction(self.pause_action)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
 
-        self.resume_action = QAction("Resume", self)
-        self.resume_action.triggered.connect(self._on_resume)
-        toolbar.addAction(self.resume_action)
+        self.pill = StatusPill()
+        toolbar.addWidget(self.pill)
 
-        self.cancel_action = QAction("Cancel", self)
-        self.cancel_action.triggered.connect(self._on_cancel)
-        toolbar.addAction(self.cancel_action)
+        for text, slot in (("Connections", self._open_connections),
+                           ("Settings", self._open_settings)):
+            button = QPushButton(text)
+            button.setObjectName("textButton")
+            button.clicked.connect(slot)
+            toolbar.addWidget(button)
 
-        toolbar.addSeparator()
-
-        connections_action = QAction("Connections…", self)
-        connections_action.triggered.connect(self._open_connections)
-        toolbar.addAction(connections_action)
-
-        settings_action = QAction("Settings…", self)
-        settings_action.triggered.connect(self._open_settings)
-        toolbar.addAction(settings_action)
-
+        self._service_up = True
         self._update_action_states()
 
     def _update_action_states(self) -> None:
         status = self._selected_status
-        self.pause_action.setEnabled(status in _PAUSABLE)
-        self.resume_action.setEnabled(status in _RESUMABLE)
-        self.cancel_action.setEnabled(status in _CANCELLABLE)
+        up = self._service_up
+        self.new_transfer_button.setEnabled(up)
+        self.pause_button.setEnabled(up and status in _PAUSABLE)
+        self.resume_button.setEnabled(up and status in _RESUMABLE)
+        self.cancel_button.setEnabled(up and status in _CANCELLABLE)
 
     # -- rail: selection, sync, reselect -----------------------------
 
