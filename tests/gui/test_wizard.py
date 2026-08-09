@@ -71,6 +71,8 @@ def wizard(qtbot):
 
 
 def test_wizard_walks_to_submission(qtbot, tmp_path):
+    from mml_cloud_courier.gui import wizard as wizard_module
+
     client = FakeWizardClient()
     wizard = NewTransferWizard(client)
     qtbot.addWidget(wizard)
@@ -82,10 +84,42 @@ def test_wizard_walks_to_submission(qtbot, tmp_path):
     wizard.set_source(str(tmp_path))
     wizard.set_prefix("data")
     wizard.set_job_name("myjob")
+    assert wizard_module.last_connection_name() is None
     wizard.accept_and_submit()
     qtbot.waitUntil(lambda: submitted == [7], timeout=5000)
     assert client.submissions[0]["name"] == "myjob"
     assert client.submissions[0]["profile"] == "lab"
+    # remember_connection runs in _submit_done's ok-path, before accept():
+    # a successful submit is what earns the last-used-connection slot.
+    assert wizard_module.last_connection_name() == "lab"
+
+
+class FakeConflictClient(FakeWizardClient):
+    """submit_job always 409s with a detail that does NOT match the
+    "job N (" duplicate pattern, so _submit_done's resume-prompt branch
+    (parse_duplicate_job_id -> QMessageBox.question) never fires and the
+    test never has to contend with a real modal dialog."""
+
+    def submit_job(self, payload):
+        from mml_cloud_courier.cli.service_client import ServiceError
+        raise ServiceError(409, "conflicts with another connection's prefix")
+
+
+def test_failed_submit_does_not_remember_connection(qtbot, tmp_path):
+    from mml_cloud_courier.gui import wizard as wizard_module
+
+    client = FakeConflictClient()
+    wizard = NewTransferWizard(client)
+    qtbot.addWidget(wizard)
+    qtbot.waitUntil(lambda: wizard.profile_combo.count() == 1, timeout=5000)
+    wizard.set_source(str(tmp_path))
+    wizard.set_job_name("myjob")
+    wizard.accept_and_submit()
+    qtbot.waitUntil(
+        lambda: wizard.status_label.text() == "conflicts with another connection's prefix",
+        timeout=5000,
+    )
+    assert wizard_module.last_connection_name() is None
 
 
 def test_one_screen_has_no_pages(qtbot, wizard):

@@ -145,3 +145,64 @@ def test_drop_event_opens_prefilled_wizard(window, tmp_path, monkeypatch):
                            "acceptProposedAction": lambda self=None: None})()
     window.dropEvent(event)
     assert opened["src"] == str(tmp_path)
+
+
+class _DragStub:
+    """Duck-typed QDragEnterEvent: dragEnterEvent only ever calls
+    mimeData(), acceptProposedAction(), or ignore() on it, so a real
+    QDragEnterEvent (whose constructor wants a QPoint/actions/buttons/
+    modifiers quadruplet nobody here cares about) buys nothing over a
+    stub that records which of accept/ignore actually fired."""
+
+    def __init__(self, mime):
+        self._mime = mime
+        self.accepted = False
+        self.ignored = False
+
+    def mimeData(self):
+        return self._mime
+
+    def acceptProposedAction(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.ignored = True
+
+
+def _single_dir_mime(tmp_path):
+    from PySide6.QtCore import QMimeData, QUrl
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(tmp_path))])
+    return mime
+
+
+@pytest.mark.gui
+def test_drag_enter_ignored_when_service_down(window, tmp_path):
+    window._service_up = False
+    window._no_connections = False
+    event = _DragStub(_single_dir_mime(tmp_path))
+    window.dragEnterEvent(event)
+    assert event.ignored
+    assert not event.accepted
+
+
+@pytest.mark.gui
+def test_drag_enter_ignored_when_no_connections(window, tmp_path):
+    # A drop must never open a dead-end wizard -- mirrors the dimmed
+    # New transfer button's own gate.
+    window._service_up = True
+    window._no_connections = True
+    event = _DragStub(_single_dir_mime(tmp_path))
+    window.dragEnterEvent(event)
+    assert event.ignored
+    assert not event.accepted
+
+
+@pytest.mark.gui
+def test_drag_enter_accepted_when_up_with_connections(window, tmp_path):
+    window._service_up = True
+    window._no_connections = False
+    event = _DragStub(_single_dir_mime(tmp_path))
+    window.dragEnterEvent(event)
+    assert event.accepted
+    assert not event.ignored
