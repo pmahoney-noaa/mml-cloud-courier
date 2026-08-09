@@ -5,8 +5,13 @@ pytest.importorskip("pytestqt")
 
 from datetime import datetime, timedelta, timezone
 
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QVBoxLayout, QWidget
+
 from mml_cloud_courier.gui.connection_widgets import (
-    ADC_NOTE, AUTH_PRESENTATION, Pill, ProbeList, StepRail, last_check_line,
+    ADC_NOTE, AUTH_PRESENTATION, Dot, Pill, ProbeList, RingSpinner,
+    SectionLabel, StepRail, last_check_line, pill_font, repolish,
+    section_font,
 )
 
 
@@ -73,3 +78,46 @@ def test_qss_contains_connection_vocabulary():
     for selector in ("connCard", "connPill", "helperText", "connNotice",
                      "dangerButton", "connFilterBar"):
         assert selector in sheet
+
+
+def test_paint_backed_primitives_render_without_error(qtbot):
+    # Dot, RingSpinner, and SectionLabel are otherwise never constructed or
+    # painted by these tests; force their paintEvent paths to run via
+    # grab() so a bad theme-attribute lookup or invalid QFont weight would
+    # surface here instead of silently in a later task.
+    for tone in ("accent", "warn", "danger"):
+        dot = Dot(tone=tone, diameter=7)
+        qtbot.addWidget(dot)
+        pixmap = dot.grab()
+        assert not pixmap.isNull()
+        assert pixmap.size() == dot.size() * dot.devicePixelRatioF()
+
+    spinner = RingSpinner()
+    qtbot.addWidget(spinner)
+    spinner.start()
+    pixmap = spinner.grab()
+    assert not pixmap.isNull()
+    assert pixmap.size() == spinner.size() * spinner.devicePixelRatioF()
+    spinner.stop()
+
+    label = SectionLabel("Filters")
+    qtbot.addWidget(label)
+    pixmap = label.grab()
+    assert not pixmap.isNull()
+
+
+def test_fonts_and_repolish_are_well_formed(qtbot):
+    pf = pill_font()
+    sf = section_font()
+    assert isinstance(pf, QFont) and isinstance(sf, QFont)
+    assert pf.families()[0] == "Cascadia Mono"
+    assert sf.families()[0] == "Cascadia Mono"
+    assert pf.weight() == QFont.Weight.Medium
+    assert sf.weight() == QFont.Weight.Normal
+
+    host = QWidget()
+    qtbot.addWidget(host)
+    layout = QVBoxLayout(host)
+    pill = Pill("ok", tone="accent")
+    layout.addWidget(pill)
+    repolish(host)  # must not raise across the widget + descendant tree
