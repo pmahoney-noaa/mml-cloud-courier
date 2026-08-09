@@ -171,6 +171,8 @@ QWidget#serviceBanner QLabel {{ background: transparent; color: {t.danger_text};
 QWidget#serviceBanner QPushButton {{ background: {t.danger}; color: #ffffff; border: none;
                                      padding: 7px 14px; border-radius: 6px; }}
 QLabel#filesHeader {{ color: {t.faint}; background: transparent; }}
+QWidget#surfaceCard {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
+QLabel#sectionLabel {{ color: {t.faint}; background: transparent; letter-spacing: 1px; }}
 QTabWidget::pane {{ border: none; }}
 QTabBar {{ background: {t.chrome}; }}
 QTabBar::tab {{ background: transparent; color: {t.faint}; padding: 13px 15px 11px;

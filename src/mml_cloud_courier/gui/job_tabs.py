@@ -40,7 +40,7 @@ from mml_cloud_courier.gui.format import (
     human_duration,
     human_rate,
 )
-from mml_cloud_courier.gui.progress_widgets import SegmentedBar
+from mml_cloud_courier.gui.progress_widgets import SegmentedBar, StateBarCard
 
 _CATEGORY_ROLE = Qt.ItemDataRole.UserRole + 1
 _FILLED_ROLE = Qt.ItemDataRole.UserRole + 2
@@ -104,6 +104,8 @@ class ProgressTab(QWidget):
         under_bar.addWidget(self.rate_label)
         under_bar.addWidget(self.eta_label)
 
+        self.state_card = StateBarCard()
+
         self.headline_label = self.headline_name   # back-compat alias; remove in Task 9
         self.inflight_list = QListWidget()
         self.inflight_list.setTextElideMode(Qt.TextElideMode.ElideLeft)
@@ -118,6 +120,7 @@ class ProgressTab(QWidget):
         layout.addLayout(headline_row)
         layout.addWidget(self.bar)
         layout.addLayout(under_bar)
+        layout.addWidget(self.state_card)
         layout.addWidget(QLabel("In progress:"))
         layout.addWidget(self.inflight_list, 1)
         layout.addWidget(QLabel("Events:"))
@@ -143,6 +146,7 @@ class ProgressTab(QWidget):
         self.rate_label.setText("")
         self.eta_label.setText("")
         self.bar.set_fractions(0.0, 0.0)
+        self.state_card.set_counts({})
         self.inflight_list.clear()
         self.events_list.clear()
 
@@ -186,6 +190,8 @@ class ProgressTab(QWidget):
             if bytes_total else 0
         )
         self.bar.set_fractions(fraction, inflight_fraction)
+
+        self.state_card.set_counts(progress.get("state_counts") or {})
 
         self._update_inflight(transferring)
         self._append_events(snap.get("events") or [])
