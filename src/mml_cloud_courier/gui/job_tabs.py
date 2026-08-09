@@ -17,7 +17,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
-    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -41,10 +40,12 @@ from mml_cloud_courier.gui.format import (
 from mml_cloud_courier.gui.progress_widgets import (
     EVENT_ROLE,
     INFLIGHT_ROLE,
+    STATE_ORDER,
     EventsDelegate,
     InflightDelegate,
     SegmentedBar,
     StateBarCard,
+    _StackedStateBar,
     inflight_detail_text,
 )
 
@@ -366,14 +367,48 @@ class SummaryTab(QWidget):
         self._last_job: dict | None = None
 
         self.verdict_label = QLabel("")
-        self.verdict_label.setWordWrap(True)
+        verdict_font = self.verdict_label.font()
+        verdict_font.setPointSizeF(16.5)
+        verdict_font.setWeight(QFont.Weight(600))
+        self.verdict_label.setFont(verdict_font)
+        self.verdict_tag = QLabel("Needs attention")
+        self.verdict_tag.setObjectName("tag")
+        self.verdict_tag.setProperty("tone", "danger")
+        self.verdict_tag.hide()
+        verdict_row = QHBoxLayout()
+        verdict_row.addWidget(self.verdict_label)
+        verdict_row.addWidget(self.verdict_tag)
+        verdict_row.addStretch(1)
 
-        self._counts_form = QFormLayout()
-        counts_widget = QWidget()
-        counts_widget.setLayout(self._counts_form)
+        self.stat_values: dict[str, QLabel] = {}
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(1)
+        for key, label_text in (("files", "FILES"), ("transferred", "TRANSFERRED"),
+                                ("duration", "DURATION"),
+                                ("did_not_transfer", "DID NOT TRANSFER")):
+            cell = QWidget()
+            cell.setObjectName("statCell")
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(13, 10, 13, 10)
+            title = QLabel(label_text)
+            title.setObjectName("sectionLabel")
+            title.setFont(theme.mono_font(8.0))
+            value = QLabel("")
+            value.setFont(theme.mono_font(14, 600))
+            self.stat_values[key] = value
+            cell_layout.addWidget(title)
+            cell_layout.addWidget(value)
+            stats_row.addWidget(cell, 1)
 
-        self.totals_label = QLabel("")
-        self.duration_label = QLabel("")
+        self.state_rows_layout = QVBoxLayout()
+        self.state_rows_layout.setSpacing(6)
+
+        self.footer_label = QLabel(
+            "Excluded files stay recorded in the ledger. The job keeps the"
+            " Incomplete verdict until they transfer or you stop retrying them."
+        )
+        self.footer_label.setWordWrap(True)
+        self.footer_label.hide()
 
         self.report_button = QPushButton("Open report")
         self.resume_button = QPushButton("Resume remaining")
@@ -382,18 +417,17 @@ class SummaryTab(QWidget):
         self.report_button.hide()
         self.resume_button.hide()
 
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.report_button)
-        buttons.addWidget(self.resume_button)
-        buttons.addStretch(1)
+        footer_row = QHBoxLayout()
+        footer_row.addWidget(self.footer_label, 1)
+        footer_row.addWidget(self.report_button)
+        footer_row.addWidget(self.resume_button)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.verdict_label)
-        layout.addWidget(counts_widget)
-        layout.addWidget(self.totals_label)
-        layout.addWidget(self.duration_label)
-        layout.addLayout(buttons)
+        layout.addLayout(verdict_row)
+        layout.addLayout(stats_row)
+        layout.addLayout(self.state_rows_layout)
         layout.addStretch(1)
+        layout.addLayout(footer_row)
 
         theme.notifier.changed.connect(self._on_theme_changed)
 
@@ -402,17 +436,52 @@ class SummaryTab(QWidget):
         status = job.get("status", "")
         self.verdict_label.setText(STATUS_LABELS.get(status, status))
         self.verdict_label.setStyleSheet(_verdict_style(status))
+        self.verdict_tag.setVisible(status == "incomplete")
 
-        while self._counts_form.rowCount():
-            self._counts_form.removeRow(0)
         progress = job.get("progress") or {}
-        for state, count in (progress.get("state_counts") or {}).items():
-            self._counts_form.addRow(STATE_LABELS.get(state, state), QLabel(f"{count:,}"))
-
         files_total = progress.get("files_total", 0)
-        bytes_total = progress.get("bytes_total", 0)
-        self.totals_label.setText(f"{files_total:,} files, {human_bytes(bytes_total)} total")
-        self.duration_label.setText(_duration_text(job.get("started_at"), job.get("finished_at")))
+        bytes_done = progress.get("bytes_done", 0)
+        state_counts = progress.get("state_counts") or {}
+        did_not_transfer = state_counts.get("failed", 0) + state_counts.get("quarantined", 0)
+
+        self.stat_values["files"].setText(f"{files_total:,}")
+        self.stat_values["transferred"].setText(human_bytes(bytes_done))
+        self.stat_values["duration"].setText(
+            _duration_value(job.get("started_at"), job.get("finished_at"))
+        )
+        self.stat_values["did_not_transfer"].setText(f"{did_not_transfer:,}")
+        self.stat_values["did_not_transfer"].setStyleSheet(
+            f"color: {theme.current().danger};"
+        )
+
+        while self.state_rows_layout.count():
+            item = self.state_rows_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        states = list(STATE_ORDER) + [s for s in state_counts if s not in STATE_ORDER]
+        for state in states:
+            count = state_counts.get(state, 0)
+            if count <= 0:
+                continue
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(10)
+            label = QLabel(STATE_LABELS.get(state, state))
+            label.setMinimumWidth(200)
+            bar = _StackedStateBar()
+            bar.setFixedHeight(7)
+            bar.set_counts({state: count}, total=files_total)
+            count_label = QLabel(f"{count:,}")
+            count_label.setFont(theme.mono_font(9, 500))
+            count_label.setMinimumWidth(64)
+            count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row_layout.addWidget(label)
+            row_layout.addWidget(bar, 1)
+            row_layout.addWidget(count_label)
+            self.state_rows_layout.addWidget(row_widget)
+
+        self.footer_label.setVisible(state_counts.get("quarantined", 0) > 0)
 
         self.report_button.setVisible(status in _REPORT_VISIBLE)
         self.resume_button.setVisible(status in _RESUME_VISIBLE)
@@ -433,10 +502,8 @@ def _verdict_style(status: str) -> str:
     return f"padding: 6px; color: {t.muted};"
 
 
-def _duration_text(started: str | None, finished: str | None) -> str:
+def _duration_value(started: str | None, finished: str | None) -> str:
     if started and finished:
         delta = (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds()
-        return f"Started {started} — duration {human_duration(delta)}"
-    if started:
-        return f"Started {started}"
+        return human_duration(delta)
     return ""

@@ -172,6 +172,7 @@ QWidget#serviceBanner QPushButton {{ background: {t.danger}; color: #ffffff; bor
                                      padding: 7px 14px; border-radius: 6px; }}
 QLabel#filesHeader {{ color: {t.faint}; background: transparent; }}
 QWidget#surfaceCard {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
+QWidget#statCell {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
 QWidget#surfaceCard[tone="danger"] {{ border-left: 3px solid {t.danger}; }}
 QWidget#surfaceCard[tone="warn"] {{ border-left: 3px solid {t.warn}; }}
 QWidget#surfaceCard[tone="accent"] {{ border-left: 3px solid {t.accent_2}; }}

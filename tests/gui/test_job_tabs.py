@@ -31,6 +31,37 @@ def test_summary_tab_report_button_shows_for_a_complete_job(qtbot):
     assert tab.resume_button.isHidden()
 
 
+def _summary_job(status="incomplete"):
+    return {"status": status, "started_at": "2026-08-08T10:00:00+00:00",
+            "finished_at": "2026-08-08T11:30:00+00:00",
+            "progress": {"files_total": 61022, "bytes_total": 900_000,
+                         "bytes_done": 850_000,
+                         "state_counts": {"verified": 60599, "failed": 3,
+                                          "quarantined": 420}}}
+
+
+def test_summary_stat_cells(qtbot):
+    tab = SummaryTab(on_open_report=lambda: None, on_resume=lambda: None)
+    qtbot.addWidget(tab)
+    tab.update_job(_summary_job())
+    assert tab.stat_values["files"].text() == "61,022"
+    assert tab.stat_values["transferred"].text() == "850 KB"
+    assert tab.stat_values["did_not_transfer"].text() == "423"
+    assert tab.stat_values["duration"].text() == "1h 30m"
+    assert tab.verdict_tag.isVisibleTo(tab)
+    assert tab.footer_label.isVisibleTo(tab)   # quarantined > 0
+
+
+def test_summary_tag_and_footer_hidden_when_clean(qtbot):
+    tab = SummaryTab(on_open_report=lambda: None, on_resume=lambda: None)
+    qtbot.addWidget(tab)
+    job = _summary_job(status="complete")
+    job["progress"]["state_counts"] = {"verified": 61022}
+    tab.update_job(job)
+    assert not tab.verdict_tag.isVisibleTo(tab)
+    assert not tab.footer_label.isVisibleTo(tab)
+
+
 # -- FilesTab header / elision / columns ----------------------------------
 
 

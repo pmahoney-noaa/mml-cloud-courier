@@ -74,6 +74,7 @@ class _StackedStateBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._counts: dict[str, int] = {}
+        self._total: int | None = None
         self.setMinimumHeight(9)
         self.setMaximumHeight(9)
         theme.notifier.changed.connect(self._on_theme)
@@ -81,8 +82,9 @@ class _StackedStateBar(QWidget):
     def _on_theme(self, _t) -> None:
         self.update()
 
-    def set_counts(self, counts: dict[str, int]) -> None:
+    def set_counts(self, counts: dict[str, int], total: int | None = None) -> None:
         self._counts = dict(counts)
+        self._total = total
         self.update()
 
     def paintEvent(self, _event) -> None:
@@ -93,7 +95,9 @@ class _StackedStateBar(QWidget):
         path.addRoundedRect(rect, 3, 3)
         painter.setClipPath(path)
         painter.fillRect(rect, token_color("track"))
-        total = sum(v for v in self._counts.values() if v > 0)
+        total = self._total if self._total is not None else sum(
+            v for v in self._counts.values() if v > 0
+        )
         if total:
             x = 0
             for state in STATE_ORDER:
