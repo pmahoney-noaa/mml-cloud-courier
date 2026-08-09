@@ -223,15 +223,22 @@ No other transfer-flow changes.
 
 ## 10. Testing
 
-- The six existing tests in `tests/gui/test_connection_dialogs.py` stay green
-  **unmodified** — constants verbatim, payload builders unchanged, `load_key_file`
-  unchanged, `primaryButton` object names preserved on the manager's `New connection`
-  button and the stepper's key button, health gating still blocks both credential paths.
+- Five of the six existing tests in `tests/gui/test_connection_dialogs.py` stay green
+  **unmodified** — constants verbatim (the contractual-copy test is untouchable),
+  payload builders unchanged, `load_key_file` unchanged, `primaryButton` preserved on
+  the stepper's key button, health gating still blocks both credential paths.
   Attribute contract this imposes on the rebuilt dialogs: `ConnectionsDialog.new_button`;
   `NewConnectionDialog.key_button` (objectName `primaryButton`), `.signin_button`, and
   `.status_label` — the gate banner's message label keeps the name `status_label` and
   carries `COPY_SERVICE_FIRST` (the existing test waits for "not reachable" in
   `status_label.text()` with both credential buttons disabled).
+- **One structural test is explicitly rewritten**:
+  `test_connections_dialog_new_button_is_primary` asserts dialog-level `check_button`
+  and `remove_button` attributes, which the approved per-card design removes
+  (RECOMMENDATIONS item 12: per-card actions, not a selection-driven button bar). It is
+  not one of the contractual-copy tests. It is rewritten to assert the new structure:
+  `new_button` is `primaryButton`, `close_button` is not, and per-card Check/Remove
+  buttons are not (asserted in the new manager tests).
 - New tests (GUI, offscreen, QSettings isolated by the existing autouse fixtures in
   `tests/gui/conftest.py`; never the live service):
   - Manager: card rendering per auth type (pills, adc note, amber stale-oauth line,
