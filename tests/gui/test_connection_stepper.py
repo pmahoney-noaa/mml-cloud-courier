@@ -233,3 +233,27 @@ def test_escape_during_signin_discards_the_result(qtbot, tmp_path, monkeypatch):
     release.set()
     qtbot.wait(100)                       # late result must be discarded
     assert dialog._phase != "validating"
+
+
+def test_signin_failure_returns_to_step2_with_message(qtbot, tmp_path, monkeypatch):
+    import json
+    from mml_cloud_courier.gui import connection_dialogs as mod
+    config = tmp_path / "client.json"
+    config.write_text(json.dumps({"installed": {"client_id": "x"}}))
+    monkeypatch.setenv("MMLCC_OAUTH_CLIENT", str(config))
+    monkeypatch.setattr(mod, "load_client_config", lambda source: {"ok": True})
+
+    def failing_login(config, timeout_seconds=300):
+        raise ValueError("Google did not return a refresh token; remove this app's access")
+
+    monkeypatch.setattr(mod, "run_login", failing_login)
+    dialog = NewConnectionDialog(HealthyClient())
+    qtbot.addWidget(dialog)
+    _to_step2(qtbot, dialog)
+    dialog.signin_button.click()
+    assert dialog._phase == "signing-in"
+    qtbot.waitUntil(lambda: dialog._step == 2 and
+                    dialog.signin_error_label.isVisibleTo(dialog), timeout=5000)
+    assert "refresh token" in dialog.signin_error_label.text()
+    assert dialog._phase == "idle"
+    assert dialog._stack.currentWidget() is dialog.page_credential
