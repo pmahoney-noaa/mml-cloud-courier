@@ -73,3 +73,40 @@ def test_setting_roundtrip_and_default(tmp_path, monkeypatch):
     assert theme.theme_setting() == "dark"
     theme.set_theme_setting("nonsense")     # invalid writes are ignored
     assert theme.theme_setting() == "dark"
+
+
+def test_apply_theme_swaps_stylesheet_and_palette(qapp):
+    theme.apply_theme(qapp, theme.DARK)
+    assert theme.current() is theme.DARK
+    assert theme.DARK.surface in qapp.styleSheet()
+    assert qapp.palette().color(qapp.palette().ColorRole.Window).name() == theme.DARK.bg
+    theme.apply_theme(qapp, theme.LIGHT)
+    assert theme.current() is theme.LIGHT
+    assert qapp.palette().color(qapp.palette().ColorRole.Window).name() == theme.LIGHT.bg
+
+
+def test_apply_theme_emits_notifier(qapp, qtbot):
+    with qtbot.waitSignal(theme.notifier.changed, timeout=1000) as blocker:
+        theme.apply_theme(qapp, theme.DARK)
+    assert blocker.args[0] is theme.DARK
+
+
+def test_disabled_group_uses_disabled_token(qapp):
+    from PySide6.QtGui import QPalette
+    theme.apply_theme(qapp, theme.DARK)
+    got = qapp.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+    assert got.name() == theme.DARK.disabled
+
+
+def test_mono_font_prefers_cascadia():
+    font = theme.mono_font(11.5, 600)
+    assert font.families()[0] == "Cascadia Mono"
+    assert "Consolas" in font.families()
+    assert font.weight() == 600
+
+
+def test_qss_mentions_every_bound_object_name():
+    text = theme.qss(theme.LIGHT)
+    for name in ("primaryButton", "segmentWell", "textButton",
+                 "statusPill", "pillDot", "serviceBanner", "filesHeader"):
+        assert name in text

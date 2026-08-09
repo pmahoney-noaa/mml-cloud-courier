@@ -6,10 +6,11 @@ docs/design/cloud-courier-theming/DESIGN_TOKENS.md.
 """
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 
-from PySide6.QtCore import QSettings
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtCore import QObject, QSettings, Signal
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QPalette
 
 
 @dataclass(frozen=True)
@@ -81,3 +82,134 @@ def resolve(setting: str) -> Theme:
         return DARK
     from PySide6.QtCore import Qt
     return DARK if _style_hints().colorScheme() == Qt.ColorScheme.Dark else LIGHT
+
+
+class ThemeNotifier(QObject):
+    changed = Signal(object)      # Theme
+
+
+notifier = ThemeNotifier()
+_current: Theme = LIGHT
+
+
+def current() -> Theme:
+    return _current
+
+
+def mono_font(size_pt: float, weight: int = 400) -> QFont:
+    font = QFont()
+    font.setFamilies(["Cascadia Mono", "Consolas", "monospace"])
+    font.setPointSizeF(size_pt)
+    font.setWeight(QFont.Weight(weight))
+    return font
+
+
+def _qcolor(value: str) -> QColor:
+    if value.startswith("rgba("):
+        parts = value[5:-1].split(",")
+        r, g, b = (int(p) for p in parts[:3])
+        alpha = float(parts[3])
+        return QColor(r, g, b, round(alpha * 255))
+    return QColor(value)
+
+
+def palette(t: Theme) -> QPalette:
+    p = QPalette()
+    roles = {
+        QPalette.ColorRole.Window: t.bg,
+        QPalette.ColorRole.WindowText: t.ink,
+        QPalette.ColorRole.Base: t.surface,
+        QPalette.ColorRole.AlternateBase: t.bg,
+        QPalette.ColorRole.Text: t.ink,
+        QPalette.ColorRole.Button: t.surface,
+        QPalette.ColorRole.ButtonText: t.ink,
+        QPalette.ColorRole.Highlight: t.accent,
+        QPalette.ColorRole.HighlightedText: t.accent_ink,
+        QPalette.ColorRole.ToolTipBase: t.surface,
+        QPalette.ColorRole.ToolTipText: t.ink,
+        QPalette.ColorRole.PlaceholderText: t.faint,
+        QPalette.ColorRole.Link: t.accent_text,
+    }
+    for role, value in roles.items():
+        p.setColor(role, _qcolor(value))
+    for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text,
+                 QPalette.ColorRole.ButtonText):
+        p.setColor(QPalette.ColorGroup.Disabled, role, _qcolor(t.disabled))
+    return p
+
+
+def qss(t: Theme) -> str:
+    return f"""
+QWidget {{ background: {t.bg}; color: {t.ink}; font-size: 13px; }}
+QToolBar {{ background: {t.chrome}; border: none; border-bottom: 1px solid {t.line};
+            padding: 0 14px; spacing: 10px; }}
+QPushButton {{ background: {t.surface}; color: {t.ink}; border: 1px solid {t.line};
+               border-radius: 6px; padding: 6px 11px; font-size: 12.5px; font-weight: 500; }}
+QPushButton:hover {{ border-color: {t.accent_edge}; }}
+QPushButton:focus {{ outline: none; border: 2px solid {t.accent}; }}
+QPushButton:disabled {{ color: {t.disabled}; background: {t.track}; border-color: transparent; }}
+QPushButton#primaryButton {{ background: {t.accent}; color: {t.accent_ink};
+                             border: none; padding: 7px 13px; font-weight: 600; }}
+QPushButton#primaryButton:disabled {{ background: {t.track}; color: {t.disabled}; }}
+QWidget#segmentWell {{ background: {t.track}; border-radius: 6px; }}
+QPushButton#segmentButton {{ background: transparent; border: none; border-radius: 4px;
+                             padding: 6px 12px; }}
+QPushButton#segmentButton:enabled {{ background: {t.surface}; color: {t.ink}; }}
+QPushButton#segmentButton:disabled {{ background: transparent; color: {t.disabled}; }}
+QPushButton#textButton {{ background: transparent; border: none; color: {t.muted}; }}
+QPushButton#textButton:hover {{ color: {t.ink}; }}
+QWidget#statusPill {{ border-radius: 12px; padding: 0px; background: {t.accent_soft};
+                      border: 1px solid {t.accent_edge}; }}
+QWidget#statusPill[pillState="down"] {{ background: {t.danger_soft}; border-color: {t.danger_edge}; }}
+QLabel#pillLabel {{ background: transparent; border: none; color: {t.accent_text};
+                    font-size: 11.5px; font-weight: 500; }}
+QWidget#statusPill[pillState="down"] QLabel#pillLabel {{ color: {t.danger_text}; }}
+QFrame#pillDot {{ background: {t.accent}; border-radius: 3px; border: none; }}
+QWidget#statusPill[pillState="down"] QFrame#pillDot {{ background: {t.danger}; }}
+QWidget#serviceBanner {{ background: {t.danger_soft}; border-bottom: 1px solid {t.danger_edge}; }}
+QWidget#serviceBanner QLabel {{ background: transparent; color: {t.danger_text}; font-size: 12.5px; }}
+QWidget#serviceBanner QPushButton {{ background: {t.danger}; color: #ffffff; border: none;
+                                     padding: 7px 14px; border-radius: 6px; }}
+QLabel#filesHeader {{ color: {t.faint}; background: transparent; }}
+QTabWidget::pane {{ border: none; }}
+QTabBar {{ background: {t.chrome}; }}
+QTabBar::tab {{ background: transparent; color: {t.faint}; padding: 13px 15px 11px;
+                font-size: 13px; border-bottom: 2px solid transparent; }}
+QTabBar::tab:selected {{ color: {t.ink}; font-weight: 600; border-bottom: 2px solid {t.accent}; }}
+QTreeView, QListWidget, QTableView, QTreeWidget {{ background: {t.surface};
+    alternate-background-color: {t.bg}; border: 1px solid {t.line}; border-radius: 6px; }}
+QTreeView#railView {{ background: {t.rail}; border: none; border-right: 1px solid {t.line};
+                      border-radius: 0; }}
+QHeaderView::section {{ background: {t.surface}; color: {t.faint}; border: none;
+                        border-bottom: 1px solid {t.line}; padding: 9px 8px;
+                        font-size: 10.5px; }}
+QProgressBar {{ background: {t.track}; border: none; border-radius: 4px; max-height: 8px;
+                text-align: center; }}
+QProgressBar::chunk {{ background: {t.accent}; border-radius: 4px; }}
+QLineEdit, QComboBox, QSpinBox {{ background: {t.surface}; color: {t.ink};
+    border: 1px solid {t.line}; border-radius: 6px; padding: 5px 8px; }}
+QStatusBar {{ background: {t.chrome}; color: {t.muted}; }}
+QToolTip {{ background: {t.surface}; color: {t.ink}; border: 1px solid {t.line}; }}
+"""
+
+
+def apply_dark_titlebar(window, dark: bool) -> None:
+    """DWMWA_USE_IMMERSIVE_DARK_MODE(20). Cosmetic; failures are swallowed."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        value = ctypes.c_int(1 if dark else 0)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            int(window.winId()), 20, ctypes.byref(value), ctypes.sizeof(value)
+        )
+    except Exception:
+        pass
+
+
+def apply_theme(app, t: Theme) -> None:
+    global _current
+    _current = t
+    app.setStyleSheet(qss(t))
+    app.setPalette(palette(t))
+    notifier.changed.emit(t)
