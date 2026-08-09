@@ -327,13 +327,22 @@ class MainWindow(QMainWindow):
         very next poll tick, even though nothing about the jobs changed.
         sync_rail returning False (no-op: same signature as last time)
         is what lets a real collapse stick; when it DOES rebuild, the
-        expand states captured before the rebuild are reapplied after,
-        and the remembered selection is only re-shown (setCurrentIndex)
-        if its own group is still expanded once that's done -- honoring
-        a deliberate collapse of the group holding the selection.
-        _selected_job_id keeps tracking the job either way; only the rail's
-        visual selection is skipped, not the tabs, which stay driven by
-        _selected_job_id independently of rail_view's current index.
+        expand states captured before the rebuild are reapplied after.
+
+        Two different intents then compete for the same reselect, and
+        they must NOT be treated the same:
+        - `_selected_job_id` (passive): a poll tick just re-affirming the
+          job the user already has open. Re-shown only if its group is
+          still expanded once expansion is restored -- honoring a
+          deliberate collapse of the group holding the selection.
+          `_selected_job_id` keeps tracking the job either way; only the
+          rail's visual current-row is skipped, not the tabs, which stay
+          driven by `_selected_job_id` independently of rail_view's
+          current index.
+        - `_pending_select` (active): the job the user just explicitly
+          submitted via the wizard. That must win over a collapsed group
+          rather than silently vanish -- the group is force-expanded and
+          the job force-selected, same as if the user had clicked it.
         """
         expanded_before = {
             group: self.rail_view.isExpanded(self.rail_model.index(i, 0))
@@ -345,16 +354,19 @@ class MainWindow(QMainWindow):
         for i, group in enumerate(RAIL_GROUPS):
             self.rail_view.setExpanded(self.rail_model.index(i, 0), expanded_before[group])
 
-        target = self._pending_select or self._selected_job_id
+        pending = self._pending_select
+        target = pending if pending is not None else self._selected_job_id
         if target is None:
             return
         index = self._find_rail_index(target)
         if index is None:
             return
-        if self.rail_view.isExpanded(index.parent()):
+        if pending is not None:
+            self.rail_view.expand(index.parent())
             self.rail_view.setCurrentIndex(index)
-        if self._pending_select is not None:
             self._pending_select = None
+        elif self.rail_view.isExpanded(index.parent()):
+            self.rail_view.setCurrentIndex(index)
 
     def _on_jobs(self, jobs: list[dict]) -> None:
         self._last_jobs = jobs

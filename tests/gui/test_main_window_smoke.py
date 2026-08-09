@@ -208,6 +208,31 @@ def test_collapsed_completed_group_stays_collapsed_across_identical_polls(window
 
 
 @pytest.mark.gui
+def test_pending_select_forces_open_a_collapsed_group(window):
+    # _pending_select (a just-submitted job -- an explicit user action)
+    # must win over a passively collapsed group, unlike the passive
+    # _selected_job_id re-affirm path above, which honors the collapse:
+    # "show me what I just explicitly created" beats "don't fight a
+    # passive collapse during polling."
+    from mml_cloud_courier.gui.jobs_model import RAIL_GROUPS
+
+    jobs = [{"id": 1, "name": "j", "status": "complete"}]
+    window._on_jobs(jobs)
+    completed_index = window.rail_model.index(RAIL_GROUPS.index("completed"), 0)
+    window.rail_view.collapse(completed_index)
+    assert not window.rail_view.isExpanded(completed_index)
+
+    window._pending_select = 2
+    new_jobs = [{"id": 1, "name": "j", "status": "complete"},
+               {"id": 2, "name": "new", "status": "complete"}]   # lands in Completed too
+    window._on_jobs(new_jobs)   # signature changed (new job) -> a rebuild happens
+
+    assert window.rail_view.isExpanded(completed_index)   # forced open
+    assert window.selected_job_id == 2
+    assert window._pending_select is None
+
+
+@pytest.mark.gui
 def test_drop_event_opens_prefilled_wizard(window, tmp_path, monkeypatch):
     opened = {}
     accepted = {"called": False}
