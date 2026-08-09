@@ -61,6 +61,23 @@ def test_filtered_out_selection_clears(qtbot, window):
 
 
 @pytest.mark.gui
+def test_filtered_out_selection_stops_watcher_and_resets_progress_tab(
+        qtbot, window, monkeypatch):
+    window._on_jobs(JOBS)
+    window.select_job(3)
+    qtbot.waitUntil(lambda: window.selected_job_id == 3, timeout=5000)
+    # Sentinel: only progress_tab.reset() clears this back to "".
+    window.progress_tab.headline_name.setText("job-3")
+    stop_calls = []
+    monkeypatch.setattr(window.watcher, "stop", lambda: stop_calls.append(True))
+
+    window.show_jobs_for_profile(10, "MML imagery")
+
+    assert stop_calls                                     # watcher told to stop
+    assert window.progress_tab.headline_name.text() == ""  # tab reset
+
+
+@pytest.mark.gui
 def test_first_run_gate_uses_unfiltered_jobs(qtbot, window):
     window._no_connections = True
     window._on_jobs(JOBS)

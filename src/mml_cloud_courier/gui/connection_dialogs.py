@@ -21,7 +21,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -322,7 +321,8 @@ class NewConnectionDialog(QDialog):
         key_heading = QLabel("Service account key")
         key_heading.setObjectName("connCardHeading")
         key_head.addWidget(key_heading)
-        key_head.addWidget(Pill("Recommended", tone="accent"))
+        self.key_pill = Pill("Recommended", tone="accent")
+        key_head.addWidget(self.key_pill)
         key_head.addStretch(1)
         key_layout.addLayout(key_head)
         key_body = QLabel(COPY_CHOOSE_KEY)
@@ -377,7 +377,8 @@ class NewConnectionDialog(QDialog):
         signin_heading = QLabel("Google sign-in")
         signin_heading.setObjectName("connCardHeading")
         signin_head.addWidget(signin_heading)
-        signin_head.addWidget(Pill("Can expire in ~7 days", tone="warn"))
+        self.signin_pill = Pill("Can expire in ~7 days", tone="warn")
+        signin_head.addWidget(self.signin_pill)
         signin_head.addStretch(1)
         signin_layout.addLayout(signin_head)
         signin_body = QLabel(COPY_CHOOSE_SIGNIN)
@@ -670,6 +671,8 @@ class NewConnectionDialog(QDialog):
         for card in (self.card_key, self.card_signin):
             card.setProperty("state", "disabled" if gated else "")
             repolish(card)
+        self.key_pill.set_tone("disabled" if gated else "accent")
+        self.signin_pill.set_tone("disabled" if gated else "warn")
         self._set_paths_enabled(not gated)
 
     def _service_ok(self, _result) -> None:
@@ -836,6 +839,7 @@ class NewConnectionDialog(QDialog):
             edit.clear()
         self.key_button.setText("Choose a key file…")
         self.key_error_block.hide()
+        self.signin_error_label.hide()
         self.done_button.hide()
         self._go_to_step(1)
 
@@ -998,10 +1002,19 @@ class ConnectionsDialog(QDialog):
         card.set_checking()
         call_async(lambda: self.client.check_profile(card.profile["id"]),
                    parent=self,
-                   on_done=lambda result, c=card: c.show_check_summary(
-                       result["summary"]),
-                   on_failed=lambda message, c=card: c.show_error_line(
-                       split_service_error(message)[1]))
+                   on_done=lambda result, c=card: self._card_check_done(c, result),
+                   on_failed=lambda message, c=card: self._card_check_failed(c, message))
+
+    def _card_check_done(self, card, result) -> None:
+        # refresh() deleteLater()s every card and rebuilds self.cards; a
+        # check that was in flight during that refresh must not touch the
+        # now-dead card its callback still closes over.
+        if card in self.cards:
+            card.show_check_summary(result["summary"])
+
+    def _card_check_failed(self, card, message) -> None:
+        if card in self.cards:
+            card.show_error_line(split_service_error(message)[1])
 
     def _delete_card(self, card) -> None:
         call_async(lambda: self.client.delete_profile(card.profile["id"]),

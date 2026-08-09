@@ -436,6 +436,10 @@ class MainWindow(QMainWindow):
             self._selected_job_id = None
             self._selected_status = None
             self._update_action_states()
+            self.watcher.stop()
+            self.progress_tab.reset()
+            self.errors_tab.load_groups([])
+            self.summary_tab.set_causes(None, None)
         self._sync_rail_preserving_expansion(
             self._filtered_jobs(self._last_jobs), service_up=self._service_up)
 

@@ -87,6 +87,7 @@ def test_dead_service_shows_gate_and_disabled_cards(qtbot):
     assert not dialog.key_button.isEnabled()
     assert not dialog.signin_button.isEnabled()
     assert dialog.card_key.property("state") == "disabled"
+    assert dialog.key_pill.property("tone") == "disabled"
     assert dialog.check_again_button.objectName() == "dangerButton"
     assert dialog.open_main_button.objectName() == "dangerOutline"
 
@@ -111,6 +112,7 @@ def test_check_again_recovers_when_service_comes_up(qtbot):
     wait_health(qtbot, dialog)
     assert dialog.key_button.isEnabled()
     assert dialog.card_key.property("state") != "disabled"
+    assert dialog.key_pill.property("tone") == "accent"
 
 
 def test_open_main_window_closes_the_stepper(qtbot):

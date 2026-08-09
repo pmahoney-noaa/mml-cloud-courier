@@ -138,6 +138,23 @@ def test_delete_refusal_renders_inline_with_count_and_route(qtbot):
     assert dialog.result() == 1     # accepted/closed so the rail is visible
 
 
+def test_delete_refusal_uses_singular_grammar_for_one_job(qtbot):
+    client = FakeClient([profile(4, "Leg 2 imagery (2025)")])
+    client.delete_error = ServiceError(
+        409, "profile 4 is used by 1 job(s) and cannot be deleted while they exist")
+    dialog = ConnectionsDialog(client)
+    qtbot.addWidget(dialog)
+    wait_cards(qtbot, dialog, 1)
+    card = dialog.cards[0]
+    card.remove_button.click()
+    card.confirm_button.click()
+    qtbot.waitUntil(lambda: "used by 1 job" in card.region_text.text(), timeout=5000)
+    assert "used by 1 jobs" not in card.region_text.text()
+    assert card.region_text.text() == (
+        "This connection is used by 1 job and cannot be deleted while it exists.")
+    assert card.show_jobs_button.text() == "Show that job"
+
+
 def test_empty_state_and_new_button(qtbot):
     client = FakeClient([])
     dialog = ConnectionsDialog(client)

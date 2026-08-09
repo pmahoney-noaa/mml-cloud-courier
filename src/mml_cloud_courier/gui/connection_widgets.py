@@ -508,16 +508,22 @@ class ConnectionCard(QWidget):
         self.region.show()
 
     def show_refusal(self, n: int) -> None:
-        self.region_text.setText(
-            f"This connection is used by {n} jobs and cannot be deleted while"
-            " they exist.")
+        if n == 1:
+            self.region_text.setText(
+                "This connection is used by 1 job and cannot be deleted while"
+                " it exists.")
+        else:
+            self.region_text.setText(
+                f"This connection is used by {n} jobs and cannot be deleted while"
+                " they exist.")
         self.region_body.setText(
             "Their reports and bucket paths are read back through it. Delete or"
             " archive those jobs first, or leave this connection in place and"
             " stop using it for new transfers.")
         self.region_body.show()
         self.confirm_button.hide()
-        self.show_jobs_button.setText(f"Show those {n} jobs")
+        self.show_jobs_button.setText(
+            "Show that job" if n == 1 else f"Show those {n} jobs")
         self.show_jobs_button.show()
         self.region.show()
 
