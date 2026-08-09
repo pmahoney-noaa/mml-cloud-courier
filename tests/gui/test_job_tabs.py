@@ -4,7 +4,13 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
 from mml_cloud_courier.gui.errors_model import ErrorGroup
-from mml_cloud_courier.gui.job_tabs import ErrorsTab, SummaryTab, group_fill_rows
+from mml_cloud_courier.gui.job_tabs import (
+    ErrorsTab,
+    FilesTab,
+    ProgressTab,
+    SummaryTab,
+    group_fill_rows,
+)
 
 
 def _summary_tab(qtbot) -> SummaryTab:
@@ -139,3 +145,105 @@ def test_summary_tab_report_button_shows_for_a_complete_job(qtbot):
     tab.update_job({"status": "running"})
     assert tab.report_button.isHidden()
     assert tab.resume_button.isHidden()
+
+
+# -- FilesTab header / elision / columns ----------------------------------
+
+
+def test_files_header_counts(qtbot):
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    tab.attach(lambda **kw: [
+        {"relative_path": f"f{i}", "size_bytes": 1, "state": "verified"}
+        for i in range(3)
+    ] if kw.get("offset", 0) == 0 else [])
+    tab.set_total(14208)
+    assert tab.header_label.text() == "14,208 files · showing 1–3"
+    tab.state_combo.setCurrentIndex(1)          # any state filter
+    assert tab.header_label.text() == "showing 1–3"
+    assert tab.table.horizontalHeader().sectionSize(2) == 204
+
+
+def test_files_header_total_resets_on_attach(qtbot):
+    """attach() (a job switch) must not carry the previous job's total into
+    the header before the new job's set_total() round trip arrives — the
+    same stale-state failure class ProgressTab.reset() already guards
+    against for throughput/events."""
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    fetcher = lambda **kw: ([{"relative_path": "a", "size_bytes": 1, "state": "verified"}]
+                            if kw.get("offset", 0) == 0 else [])
+    tab.attach(fetcher)
+    tab.set_total(14208)
+    assert "14,208" in tab.header_label.text()
+    tab.attach(fetcher)          # job switch, new total not yet arrived
+    assert "14,208" not in tab.header_label.text()
+    assert tab.header_label.text() == "showing 1–1"
+
+
+def test_files_table_elides_left(qtbot):
+    from PySide6.QtCore import Qt
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    assert tab.table.textElideMode() == Qt.TextElideMode.ElideLeft
+
+
+def test_inflight_and_events_lists_elide_left(qtbot):
+    from PySide6.QtCore import Qt
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    assert tab.inflight_list.textElideMode() == Qt.TextElideMode.ElideLeft
+
+
+# -- _verdict_style token usage -----------------------------------------------
+
+
+def test_verdict_style_cancelled_uses_muted_not_danger(qapp):
+    from mml_cloud_courier.gui.job_tabs import _verdict_style
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    style = _verdict_style("cancelled")
+    assert theme.LIGHT.muted in style
+    assert theme.LIGHT.danger_text not in style
+
+
+def test_verdict_style_incomplete_uses_danger(qapp):
+    from mml_cloud_courier.gui.job_tabs import _verdict_style
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    style = _verdict_style("incomplete")
+    assert theme.LIGHT.danger_text in style
+
+
+def test_verdict_style_running_uses_muted(qapp):
+    from mml_cloud_courier.gui.job_tabs import _verdict_style
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    style = _verdict_style("running")
+    assert theme.LIGHT.muted in style
+
+
+def test_summary_tab_refreshes_verdict_on_theme_change(qapp, qtbot):
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    tab = _summary_tab(qtbot)
+    job = {"status": "complete", "progress": {}, "started_at": None, "finished_at": None}
+    tab.update_job(job)
+
+    # Capture initial stylesheet
+    initial_style = tab.verdict_label.styleSheet()
+    assert theme.LIGHT.accent_soft in initial_style
+
+    # Switch to dark theme
+    theme.apply_theme(qapp, theme.DARK)
+
+    # Verdict label should be re-rendered with dark theme tokens
+    new_style = tab.verdict_label.styleSheet()
+    assert theme.DARK.accent_soft in new_style
+
+    # Clean up: restore LIGHT theme
+    theme.apply_theme(qapp, theme.LIGHT)

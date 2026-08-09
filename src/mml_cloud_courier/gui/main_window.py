@@ -9,13 +9,14 @@ refreshes what it touched.
 from __future__ import annotations
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
+from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QTabWidget,
     QTreeView,
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.connection_dialogs import ConnectionsDialog
 from mml_cloud_courier.gui.errors_model import (
     build_error_groups,
@@ -38,9 +40,11 @@ from mml_cloud_courier.gui.jobs_model import (
     rail_job_ids as _rail_job_ids,
     sync_rail,
 )
+from mml_cloud_courier.gui.rail_delegate import RailDelegate
 from mml_cloud_courier.gui.service_control import start_service_elevated
 from mml_cloud_courier.gui.session import ServiceSession, discover_session
 from mml_cloud_courier.gui.settings_dialog import SettingsDialog
+from mml_cloud_courier.gui.status_pill import StatusPill
 from mml_cloud_courier.gui.tray import TrayController
 from mml_cloud_courier.gui.wizard import NewTransferWizard
 from mml_cloud_courier.gui.workers import JobWatcher, JobsPoller, call_async
@@ -68,11 +72,13 @@ class MainWindow(QMainWindow):
         self._selected_status: str | None = None
         self._pending_select: int | None = None
         self._last_statuses: dict[int, str] = {}
+        self._last_jobs: list[dict] = []
         self.poller: JobsPoller | None = None
         self.watcher: JobWatcher | None = None
         self.rail_model = None
         self.rail_view: QTreeView | None = None
         self._tray: TrayController | None = None
+        self._theme_changed_slot = None
 
         if self.client is None:
             self._build_error_ui(session)
@@ -105,15 +111,9 @@ class MainWindow(QMainWindow):
     # -- normal UI --------------------------------------------------------
 
     def _build_full_ui(self) -> None:
+        self._no_connections = False
         self.banner = QWidget()
-        # Pin BOTH colors: a background alone inherits the palette's text
-        # color, which is white under Windows dark mode — white on pink.
-        # Scoped so the Start button keeps its native theme colors.
         self.banner.setObjectName("serviceBanner")
-        self.banner.setStyleSheet(
-            "#serviceBanner { background-color: #f2dede; }"
-            " #serviceBanner QLabel { color: #a94442; }"
-        )
         banner_layout = QHBoxLayout(self.banner)
         banner_layout.setContentsMargins(6, 6, 6, 6)
         self.banner_label = QLabel(BANNER_TEXT)
@@ -126,14 +126,24 @@ class MainWindow(QMainWindow):
 
         self.rail_model = build_rail_model()
         self.rail_view = QTreeView()
+        self.rail_view.setObjectName("railView")
         self.rail_view.setModel(self.rail_model)
         self.rail_view.setHeaderHidden(True)
+        self.rail_view.setItemDelegate(RailDelegate(self.rail_view))
+        self.rail_view.setFixedWidth(262)
         self.rail_view.expandAll()
         completed_index = self.rail_model.index(RAIL_GROUPS.index("completed"), 0)
         self.rail_view.collapse(completed_index)   # once, at startup only
         self.rail_view.selectionModel().currentChanged.connect(
             self._on_rail_current_changed
         )
+        # theme.notifier is a module-level singleton that outlives this window,
+        # so a bound-and-tracked slot (disconnected in shutdown()) is used
+        # instead of an anonymous lambda -- Qt won't auto-drop the connection
+        # when rail_view's C++ object is deleted, and a live test suite creates
+        # and destroys many MainWindows against the same notifier.
+        self._theme_changed_slot = lambda _t: self.rail_view.viewport().update()
+        theme.notifier.changed.connect(self._theme_changed_slot)
 
         self.progress_tab = ProgressTab()
         self.files_tab = FilesTab()
@@ -182,44 +192,58 @@ class MainWindow(QMainWindow):
         self.poller.down.connect(self._on_down)
         self.poller.start(self.client, interval=self._poll_interval)
 
+        call_async(self.client.list_profiles, parent=self, on_done=self._on_profiles)
+
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Main")
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
 
-        self.new_transfer_action = QAction("New Transfer", self)
-        self.new_transfer_action.triggered.connect(self._open_new_transfer)
-        toolbar.addAction(self.new_transfer_action)
+        self.new_transfer_button = QPushButton("New transfer")
+        self.new_transfer_button.setObjectName("primaryButton")
+        self.new_transfer_button.clicked.connect(self._open_new_transfer)
+        toolbar.addWidget(self.new_transfer_button)
 
-        toolbar.addSeparator()
+        well = QWidget()
+        well.setObjectName("segmentWell")
+        well_layout = QHBoxLayout(well)
+        well_layout.setContentsMargins(2, 2, 2, 2)
+        well_layout.setSpacing(0)
+        self.pause_button = QPushButton("Pause")
+        self.resume_button = QPushButton("Resume")
+        self.cancel_button = QPushButton("Cancel")
+        for button, slot in ((self.pause_button, self._on_pause),
+                             (self.resume_button, self._on_resume),
+                             (self.cancel_button, self._on_cancel)):
+            button.setObjectName("segmentButton")
+            button.clicked.connect(slot)
+            well_layout.addWidget(button)
+        toolbar.addWidget(well)
 
-        self.pause_action = QAction("Pause", self)
-        self.pause_action.triggered.connect(self._on_pause)
-        toolbar.addAction(self.pause_action)
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
 
-        self.resume_action = QAction("Resume", self)
-        self.resume_action.triggered.connect(self._on_resume)
-        toolbar.addAction(self.resume_action)
+        self.pill = StatusPill()
+        toolbar.addWidget(self.pill)
 
-        self.cancel_action = QAction("Cancel", self)
-        self.cancel_action.triggered.connect(self._on_cancel)
-        toolbar.addAction(self.cancel_action)
+        for text, slot in (("Connections", self._open_connections),
+                           ("Settings", self._open_settings)):
+            button = QPushButton(text)
+            button.setObjectName("textButton")
+            button.clicked.connect(slot)
+            toolbar.addWidget(button)
 
-        toolbar.addSeparator()
-
-        connections_action = QAction("Connections…", self)
-        connections_action.triggered.connect(self._open_connections)
-        toolbar.addAction(connections_action)
-
-        settings_action = QAction("Settings…", self)
-        settings_action.triggered.connect(self._open_settings)
-        toolbar.addAction(settings_action)
-
+        self._service_up = True
         self._update_action_states()
 
     def _update_action_states(self) -> None:
         status = self._selected_status
-        self.pause_action.setEnabled(status in _PAUSABLE)
-        self.resume_action.setEnabled(status in _RESUMABLE)
-        self.cancel_action.setEnabled(status in _CANCELLABLE)
+        up = self._service_up
+        self.new_transfer_button.setEnabled(up)
+        self.pause_button.setEnabled(up and status in _PAUSABLE)
+        self.resume_button.setEnabled(up and status in _RESUMABLE)
+        self.cancel_button.setEnabled(up and status in _CANCELLABLE)
 
     # -- rail: selection, sync, reselect -----------------------------
 
@@ -253,11 +277,15 @@ class MainWindow(QMainWindow):
         return None
 
     def _on_jobs(self, jobs: list[dict]) -> None:
+        self._last_jobs = jobs
+        self._service_up = True
         self.banner.hide()
+        self.pill.set_state("noconn" if self._no_connections else "ok")
+        self._update_action_states()
         if self._tray is not None:
             self._tray.notify_transitions(self._last_statuses, jobs)
         self._last_statuses = {job["id"]: job["status"] for job in jobs}
-        sync_rail(self.rail_model, jobs)
+        sync_rail(self.rail_model, jobs, service_up=self._service_up)
         target = self._pending_select or self._selected_job_id
         if target is None:
             return
@@ -269,7 +297,27 @@ class MainWindow(QMainWindow):
             self._pending_select = None
 
     def _on_down(self, _message: str) -> None:
+        was_up = self._service_up
+        self._service_up = False
+        self.pill.set_state("down")
+        self._update_action_states()
         self.banner.show()
+        # The poller calls this on every failed tick, not just the up->down
+        # transition. sync_rail destroys and recreates rows, which wipes the
+        # rail's selection -- so only re-sync (and reselect) on the actual
+        # transition; a repeat failed tick would otherwise clear the user's
+        # selection on every miss.
+        if was_up:
+            sync_rail(self.rail_model, self._last_jobs, service_up=False)
+            if self._selected_job_id is not None:
+                index = self._find_rail_index(self._selected_job_id)
+                if index is not None:
+                    self.rail_view.setCurrentIndex(index)
+
+    def _on_profiles(self, profiles: list) -> None:
+        self._no_connections = not profiles
+        if self._service_up:
+            self.pill.set_state("noconn" if self._no_connections else "ok")
 
     def _on_start_service(self) -> None:
         if start_service_elevated():
@@ -307,6 +355,11 @@ class MainWindow(QMainWindow):
             self.poller.stop()
         if self.watcher is not None:
             self.watcher.stop()
+        if self._theme_changed_slot is not None:
+            theme.notifier.changed.disconnect(self._theme_changed_slot)
+            self._theme_changed_slot = None
+        if self._tray is not None:
+            self._tray.shutdown()
 
     # -- job rendering --------------------------------------------------
 
@@ -316,6 +369,7 @@ class MainWindow(QMainWindow):
         snap = {**job, "transferring": job.get("transferring", [])}
         self.progress_tab.update_snapshot(snap)
         self.summary_tab.update_job(job)
+        self.files_tab.set_total(job.get("planned_files"))
 
     def _render_summary_only(self, job: dict) -> None:
         self._selected_status = job.get("status", self._selected_status)
@@ -381,6 +435,7 @@ class MainWindow(QMainWindow):
 
     def _open_connections(self) -> None:
         ConnectionsDialog(self.client, self).exec()
+        call_async(self.client.list_profiles, parent=self, on_done=self._on_profiles)
 
     def _open_settings(self) -> None:
         SettingsDialog(self.client, self).exec()

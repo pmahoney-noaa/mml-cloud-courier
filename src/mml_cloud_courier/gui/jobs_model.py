@@ -12,7 +12,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from mml_cloud_courier.gui.format import STATUS_LABELS, human_schedule
-from mml_cloud_courier.gui.icons import group_icon
 
 RAIL_GROUPS = ("needs_attention", "running", "queued", "completed")
 GROUP_LABELS = {
@@ -33,6 +32,11 @@ _GROUP_FOR_STATUS = {
 }
 JOB_ID_ROLE = Qt.ItemDataRole.UserRole + 1
 STATUS_ROLE = Qt.ItemDataRole.UserRole + 2
+SECOND_LINE_ROLE = Qt.ItemDataRole.UserRole + 3
+
+# The second-line text substituted when a job looks active but the service
+# is down -- lives here (not in the delegate) so the literal exists once.
+STALLED_OVERRIDE = "Stalled — service stopped"
 
 
 def group_for_status(status: str) -> str:
@@ -44,25 +48,32 @@ def build_rail_model() -> QStandardItemModel:
     model = QStandardItemModel()
     for group in RAIL_GROUPS:
         item = QStandardItem(GROUP_LABELS[group])
-        item.setIcon(group_icon(group))
         item.setFlags(Qt.ItemFlag.ItemIsEnabled)   # a header, not a choice
         model.appendRow(item)
     return model
 
 
-def _job_item(job: dict) -> QStandardItem:
-    label = STATUS_LABELS.get(job["status"], job["status"])
-    text = f"#{job['id']} {job['name']} — {label}"
+def rail_row_lines(job: dict, service_up: bool = True) -> tuple[str, str]:
+    if not service_up and job["status"] in ("running", "scanning"):
+        status = STALLED_OVERRIDE
+    else:
+        status = STATUS_LABELS.get(job["status"], job["status"])
     if job["status"] == "pending" and job.get("scheduled_start_at"):
-        text += f" — starts {human_schedule(job['scheduled_start_at'])}"
-    item = QStandardItem(text)
+        status += f" — starts {human_schedule(job['scheduled_start_at'])}"
+    return f"#{job['id']} {job['name']}", status
+
+
+def _job_item(job: dict, service_up: bool = True) -> QStandardItem:
+    line1, line2 = rail_row_lines(job, service_up)
+    item = QStandardItem(line1)
     item.setData(job["id"], JOB_ID_ROLE)
     item.setData(job["status"], STATUS_ROLE)
+    item.setData(line2, SECOND_LINE_ROLE)
     item.setEditable(False)
     return item
 
 
-def sync_rail(model: QStandardItemModel, jobs: list[dict]) -> None:
+def sync_rail(model: QStandardItemModel, jobs: list[dict], service_up: bool = True) -> None:
     buckets: dict[str, list[dict]] = {group: [] for group in RAIL_GROUPS}
     for job in jobs:
         buckets[group_for_status(job["status"])].append(job)
@@ -70,7 +81,7 @@ def sync_rail(model: QStandardItemModel, jobs: list[dict]) -> None:
         parent = model.item(index)
         parent.removeRows(0, parent.rowCount())
         for job in sorted(buckets[group], key=lambda j: j["id"], reverse=True):
-            parent.appendRow(_job_item(job))
+            parent.appendRow(_job_item(job, service_up))
 
 
 def rail_job_ids(model: QStandardItemModel) -> list[int]:

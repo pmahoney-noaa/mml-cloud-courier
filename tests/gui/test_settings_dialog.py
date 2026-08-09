@@ -143,3 +143,63 @@ def test_dialog_two_save_sequence_refreshes_had_stored_policy(qtbot):
     payload2 = dialog.build_payload()
     # Now payload should have size_policy: "" to clear it
     assert payload2.get("size_policy") == ""
+
+
+@pytest.fixture
+def dialog(qtbot):
+    """A loaded SettingsDialog over a fresh FakeSettingsClient, matching this
+    file's existing construction pattern (client -> dialog -> qtbot.addWidget
+    -> wait for the async load to land)."""
+    client = FakeSettingsClient()
+    d = SettingsDialog(client)
+    qtbot.addWidget(d)
+    qtbot.waitUntil(lambda: d.workers_spin.value() == 4, timeout=5000)
+    return d
+
+
+@pytest.fixture
+def isolated_theme_settings(tmp_path, monkeypatch):
+    """Isolate QSettings to a temp ini so theme tests never touch the real
+    registry — same idiom as tests/gui/test_theme.py's
+    test_setting_roundtrip_and_default."""
+    from PySide6.QtCore import QSettings
+    from mml_cloud_courier.gui import theme
+    monkeypatch.setattr(
+        theme, "_qsettings",
+        lambda: QSettings(str(tmp_path / "t.ini"), QSettings.Format.IniFormat),
+    )
+
+
+def test_theme_combo_lists_three_options_and_defaults_to_setting(isolated_theme_settings, qtbot):
+    from mml_cloud_courier.gui import theme
+    theme.set_theme_setting("light")   # seed the isolated store BEFORE constructing the dialog
+    client = FakeSettingsClient()
+    d = SettingsDialog(client)
+    qtbot.addWidget(d)
+    qtbot.waitUntil(lambda: d.workers_spin.value() == 4, timeout=5000)
+
+    datas = [d.theme_combo.itemData(i) for i in range(d.theme_combo.count())]
+    assert datas == ["system", "light", "dark"]
+    assert d.theme_combo.currentIndex() == 1
+
+
+def test_theme_change_persists_and_applies(isolated_theme_settings, qtbot, monkeypatch):
+    from mml_cloud_courier.gui import theme
+    theme.set_theme_setting("light")   # known starting point: index 1, so ->2 is a real transition
+    client = FakeSettingsClient()
+    d = SettingsDialog(client)
+    qtbot.addWidget(d)
+    qtbot.waitUntil(lambda: d.workers_spin.value() == 4, timeout=5000)
+
+    applied = []
+    monkeypatch.setattr(theme, "set_theme_setting", lambda v: applied.append(("set", v)))
+    monkeypatch.setattr(
+        "mml_cloud_courier.gui.settings_dialog.apply_theme_for_setting",
+        lambda v: applied.append(("apply", v)),
+    )
+    d.theme_combo.setCurrentIndex(2)   # dark
+    assert ("set", "dark") in applied and ("apply", "dark") in applied
+
+
+def test_build_payload_never_contains_theme(dialog):
+    assert "theme" not in dialog.build_payload()

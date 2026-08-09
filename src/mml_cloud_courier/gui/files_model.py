@@ -17,7 +17,7 @@ PAGE = 500
 
 
 class FileTableModel(QAbstractTableModel):
-    HEADERS = ("File", "Size", "Status", "Problem")
+    HEADERS = ("PATH", "SIZE", "STATE", "DETAIL")
 
     def __init__(self, fetcher: Callable[..., list[dict]], parent=None):
         super().__init__(parent)
@@ -77,7 +77,13 @@ class FileTableModel(QAbstractTableModel):
         self.endInsertRows()
 
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
+        if not index.isValid():
+            return None
+        if role == Qt.ItemDataRole.ToolTipRole and index.column() == 0:
+            return self._rows[index.row()]["relative_path"]
+        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() == 1:
+            return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if role != Qt.ItemDataRole.DisplayRole:
             return None
         row = self._rows[index.row()]
         column = index.column()

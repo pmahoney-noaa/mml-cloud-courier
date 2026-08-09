@@ -6,24 +6,13 @@ from __future__ import annotations
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 
-GROUP_COLORS = {
-    "needs_attention": "#c9302c",
-    "running": "#286090",
-    "queued": "#777777",
-    "completed": "#449d44",
-}
+from mml_cloud_courier.gui import theme
 
 
-def _circle(color: str, size: int = 16) -> QIcon:
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(color))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(2, 2, size - 4, size - 4)
-    painter.end()
-    return QIcon(pixmap)
+# Every token used in this module (accent) is a plain hex string in BOTH
+# Theme constants, so no rgba parsing is needed here.
+def _token_color(token: str) -> str:
+    return getattr(theme.current(), token)
 
 
 def app_icon() -> QIcon:
@@ -31,7 +20,7 @@ def app_icon() -> QIcon:
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor("#286090"))
+    painter.setBrush(QColor(_token_color("accent")))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawRoundedRect(2, 2, 28, 28, 6, 6)
     painter.setBrush(QColor("white"))
@@ -40,7 +29,3 @@ def app_icon() -> QIcon:
     painter.drawRect(13, 17, 6, 8)
     painter.end()
     return QIcon(pixmap)
-
-
-def group_icon(group: str) -> QIcon:
-    return _circle(GROUP_COLORS.get(group, "#777777"))
