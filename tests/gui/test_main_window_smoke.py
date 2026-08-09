@@ -107,6 +107,19 @@ def test_on_down_preserves_selection_across_repeated_ticks(qtbot, gui_host):
 
 
 @pytest.mark.gui
+def test_first_run_swap_and_new_transfer_dimming(window):
+    window._no_connections = True
+    window._on_jobs([])                       # no jobs + no connections
+    assert window._content_stack.currentWidget() is window._first_run
+    assert not window.new_transfer_button.isEnabled()
+    assert window.pill.state == "noconn"
+    window._no_connections = False
+    window._on_jobs([{"id": 1, "name": "j", "status": "complete"}])
+    assert window._content_stack.currentWidget() is not window._first_run
+    assert window.new_transfer_button.isEnabled()
+
+
+@pytest.mark.gui
 def test_rail_shows_stalled_override_when_down(qapp):
     # unused; build_rail_model draws QPixmap icons and needs a live QApplication
     from mml_cloud_courier.gui.jobs_model import SECOND_LINE_ROLE, build_rail_model, sync_rail

@@ -200,6 +200,8 @@ QLineEdit, QComboBox, QSpinBox {{ background: {t.surface}; color: {t.ink};
     border: 1px solid {t.line}; border-radius: 6px; padding: 5px 8px; }}
 QStatusBar {{ background: {t.chrome}; color: {t.muted}; }}
 QToolTip {{ background: {t.surface}; color: {t.ink}; border: 1px solid {t.line}; }}
+QWidget#firstRunStep {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
+QLabel#stepBadge {{ background: {t.accent_soft}; color: {t.accent_text}; border-radius: 10px; }}
 """
 
 

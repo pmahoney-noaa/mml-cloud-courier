@@ -8,6 +8,8 @@ refreshes what it touched.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
@@ -18,12 +20,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTabWidget,
     QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
+import mml_cloud_courier
 from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.connection_dialogs import ConnectionsDialog
 from mml_cloud_courier.gui.errors_model import (
@@ -32,6 +36,7 @@ from mml_cloud_courier.gui.errors_model import (
     fetch_group_paths,
 )
 from mml_cloud_courier.gui.errors_view import ErrorsTab
+from mml_cloud_courier.gui.first_run import FirstRunScreen
 from mml_cloud_courier.gui.job_tabs import FilesTab, ProgressTab, SummaryTab
 from mml_cloud_courier.gui.jobs_model import (
     JOB_ID_ROLE,
@@ -112,6 +117,8 @@ class MainWindow(QMainWindow):
     # -- normal UI --------------------------------------------------------
 
     def _build_full_ui(self) -> None:
+        # _update_action_states (called from _build_toolbar) reads
+        # _no_connections, so it must exist before _build_toolbar() runs.
         self._no_connections = False
         self.banner = QWidget()
         self.banner.setObjectName("serviceBanner")
@@ -171,11 +178,19 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
+        self._first_run = FirstRunScreen(
+            on_add_connection=self._open_connections,
+            on_open_guide=self._open_setup_guide,
+        )
+        self._content_stack = QStackedWidget()
+        self._content_stack.addWidget(splitter)
+        self._content_stack.addWidget(self._first_run)
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.banner)
-        layout.addWidget(splitter)
+        layout.addWidget(self._content_stack)
         self.setCentralWidget(central)
 
         self._build_toolbar()
@@ -241,10 +256,16 @@ class MainWindow(QMainWindow):
     def _update_action_states(self) -> None:
         status = self._selected_status
         up = self._service_up
-        self.new_transfer_button.setEnabled(up)
+        self.new_transfer_button.setEnabled(up and not self._no_connections)
         self.pause_button.setEnabled(up and status in _PAUSABLE)
         self.resume_button.setEnabled(up and status in _RESUMABLE)
         self.cancel_button.setEnabled(up and status in _CANCELLABLE)
+
+    def _update_first_run(self) -> None:
+        show_first_run = self._no_connections and not self._last_jobs
+        self._content_stack.setCurrentWidget(
+            self._first_run if show_first_run else self._content_stack.widget(0)
+        )
 
     # -- rail: selection, sync, reselect -----------------------------
 
@@ -287,6 +308,7 @@ class MainWindow(QMainWindow):
             self._tray.notify_transitions(self._last_statuses, jobs)
         self._last_statuses = {job["id"]: job["status"] for job in jobs}
         sync_rail(self.rail_model, jobs, service_up=self._service_up)
+        self._update_first_run()
         target = self._pending_select or self._selected_job_id
         if target is None:
             return
@@ -319,6 +341,8 @@ class MainWindow(QMainWindow):
         self._no_connections = not profiles
         if self._service_up:
             self.pill.set_state("noconn" if self._no_connections else "ok")
+        self._update_action_states()
+        self._update_first_run()
 
     def _on_start_service(self) -> None:
         if start_service_elevated():
@@ -441,6 +465,17 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self) -> None:
         SettingsDialog(self.client, self).exec()
+
+    def _open_setup_guide(self) -> None:
+        guide_path = (
+            Path(mml_cloud_courier.__file__).resolve().parents[2] / "docs" / "gui.md"
+        )
+        if guide_path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(guide_path)))
+        else:
+            QDesktopServices.openUrl(QUrl(
+                "https://github.com/pmahoney-noaa/mml-cloud-courier/blob/master/docs/gui.md"
+            ))
 
     def _run_job_action(self, method) -> None:
         job_id = self._selected_job_id
