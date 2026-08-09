@@ -460,13 +460,25 @@ class NewConnectionDialog(QDialog):
                    on_done=self._service_ok, on_failed=self._service_down)
 
     def _open_main_window(self) -> None:
-        parent = self.parentWidget()
-        if parent is None:
-            return
-        top = parent.window()
-        top.show()
-        top.raise_()
-        top.activateWindow()
+        # Merely raising the main window is useless while a modal chain
+        # covers it (exec() disables the owner window on Windows), so close
+        # the modal dialogs first, then hand the main window focus.
+        # Non-modal parents (the transfer wizard) stay open.
+        top = None
+        widget = self.parentWidget()
+        while widget is not None:
+            top = widget
+            widget = widget.parentWidget()
+        self.reject()
+        dialog = self.parentWidget()
+        while dialog is not None:
+            if isinstance(dialog, QDialog) and dialog.isModal():
+                dialog.reject()
+            dialog = dialog.parentWidget()
+        if top is not None:
+            top.show()
+            top.raise_()
+            top.activateWindow()
 
     # -- credential paths (Task 5) ---------------------------------------
 

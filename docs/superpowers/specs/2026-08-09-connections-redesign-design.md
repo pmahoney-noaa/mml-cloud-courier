@@ -122,8 +122,10 @@ footer primary).
   `Open the main window` outline) sits above the section label and both cards take the
   readable-but-disabled treatment — headings `faint`, body `disabled`, pills
   `track`/`faint`, nothing pressable, no tab-reachable credential action. `Check again`
-  re-runs `health()`. `Open the main window` raises/activates the main window without
-  closing the stepper.
+  re-runs `health()`. `Open the main window` closes the modal dialog chain (stepper, and
+  the manager if it is beneath) and then raises/activates the main window — the handoff's
+  "without closing the stepper" is unimplementable over exec()-modal dialogs on Windows
+  (ruled in review).
 - **Wrong file type**: `load_key_file`'s exception text renders inside Card A in a
   `danger_soft` sub-block — raw text in mono (`break-all`; the path matters), then "That
   file is an OAuth client configuration, not a key. Use it under Google sign-in below, or

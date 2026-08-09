@@ -103,3 +103,36 @@ def test_check_again_recovers_when_service_comes_up(qtbot):
     wait_health(qtbot, dialog)
     assert dialog.key_button.isEnabled()
     assert dialog.card_key.property("state") != "disabled"
+
+
+def test_open_main_window_closes_the_stepper(qtbot):
+    from PySide6.QtWidgets import QDialog
+    dialog = NewConnectionDialog(DeadClient())
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: "not reachable" in dialog.status_label.text(),
+                    timeout=5000)
+    dialog.open_main_button.click()
+    assert dialog.result() == QDialog.DialogCode.Rejected
+
+
+def test_open_main_window_closes_a_modal_manager_beneath(qtbot):
+    from PySide6.QtWidgets import QDialog
+    from mml_cloud_courier.gui.connection_dialogs import ConnectionsDialog
+
+    class ListingClient:
+        def list_profiles(self):
+            return []
+
+        def health(self):
+            raise ConnectionError("nope")
+
+    manager = ConnectionsDialog(ListingClient())
+    qtbot.addWidget(manager)
+    manager.setModal(True)
+    stepper = NewConnectionDialog(ListingClient(), manager)
+    qtbot.addWidget(stepper)
+    qtbot.waitUntil(lambda: "not reachable" in stepper.status_label.text(),
+                    timeout=5000)
+    stepper.open_main_button.click()
+    assert stepper.result() == QDialog.DialogCode.Rejected
+    assert manager.result() == QDialog.DialogCode.Rejected
