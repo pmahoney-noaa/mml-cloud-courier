@@ -52,6 +52,15 @@ def test_main_window_renders_a_seeded_job(qtbot, gui_host):
     assert "denied" in label.lower()
     assert "1 file" in label
 
+    # MainWindow._render_errors must push the cause counts into the
+    # Summary tab's sentence (set_causes), not just the Errors tab.
+    qtbot.waitUntil(lambda: "cause" in window.summary_tab.sentence_label.text(),
+                    timeout=10_000)
+    assert window.summary_tab.sentence_label.text() == (
+        "0 of 2 files arrived and verified. 1 did not,"
+        " from 1 cause — 1 still need you."
+    )
+
     window.shutdown()
 
 

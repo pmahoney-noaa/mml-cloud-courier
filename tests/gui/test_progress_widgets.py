@@ -2,8 +2,18 @@
 """Custom-painted Progress widgets: logic-level tests (fractions, clamping,
 token mapping); pixels are reviewed by eye."""
 import pytest
+from PySide6.QtCore import Qt
 
-from mml_cloud_courier.gui.progress_widgets import SegmentedBar
+from mml_cloud_courier.gui.progress_widgets import SegmentedBar, StateBarCard
+
+
+def test_state_bar_card_paints_styled_background(qtbot):
+    # StateBarCard is a custom QWidget subclass carrying objectName
+    # "surfaceCard" -- without WA_StyledBackground its QSS background/border
+    # never paints and the card renders as an invisible bubble.
+    card = StateBarCard()
+    qtbot.addWidget(card)
+    assert card.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
 
 def test_segmented_bar_clamps_fractions(qtbot):
@@ -46,7 +56,16 @@ def test_event_kind_token_mapping():
     assert event_kind_token("verified") == "accent_text"
     assert event_kind_token("failed") == "danger"
     assert event_kind_token("retry") == "warn"
-    assert event_kind_token("run_started") == "muted"
+    # Real kinds recorded by engine/service/worker/scan_command -- the
+    # broadened map covers the actual vocabulary, not just the three
+    # generic placeholder names above.
+    assert event_kind_token("run_started") == "accent_2"          # start-ish
+    assert event_kind_token("job_unstalled") == "accent_text"     # success-ish
+    assert event_kind_token("worker_error") == "danger"           # error-ish
+    assert event_kind_token("job_stalled") == "warn"               # stall-ish
+    assert event_kind_token("files_retried") == "warn"             # retry-ish
+    assert event_kind_token("cancelled_by_user") == "muted"        # no clean bucket
+    assert event_kind_token("something_unheard_of") == "muted"     # fallback
 
 
 def test_state_card_legend_not_rebuilt_when_counts_unchanged(qtbot):

@@ -157,8 +157,9 @@ QPushButton#segmentButton {{ background: transparent; border: none; border-radiu
 QPushButton#segmentButton:enabled {{ background: {t.surface}; color: {t.ink}; }}
 QPushButton#segmentButton:disabled {{ background: transparent; color: {t.disabled}; }}
 QPushButton#segmentButton:checked {{ background: {t.accent}; color: {t.accent_ink}; }}
-QPushButton#textButton {{ background: transparent; border: none; color: {t.muted}; }}
-QPushButton#textButton:hover {{ color: {t.ink}; }}
+QPushButton#textButton {{ background: transparent; border: none; color: {t.ink};
+                          font-weight: 600; }}
+QPushButton#textButton:hover {{ color: {t.accent_text}; }}
 QWidget#statusPill {{ border-radius: 12px; padding: 0px; background: {t.accent_soft};
                       border: 1px solid {t.accent_edge}; }}
 QWidget#statusPill[pillState="down"] {{ background: {t.danger_soft}; border-color: {t.danger_edge}; }}
@@ -174,7 +175,8 @@ QWidget#serviceBanner QPushButton {{ background: {t.danger}; color: #ffffff; bor
 QLabel#filesHeader {{ color: {t.faint}; background: transparent; }}
 QLabel#headlineRoute {{ color: {t.faint}; background: transparent; }}
 QWidget#surfaceCard {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
-QWidget#statCell {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
+QWidget#statStrip {{ background: {t.line}; border: 1px solid {t.line}; border-radius: 9px; }}
+QWidget#statCell {{ background: {t.surface}; border: none; }}
 QWidget#surfaceCard[tone="danger"] {{ border-left: 3px solid {t.danger}; }}
 QWidget#surfaceCard[tone="warn"] {{ border-left: 3px solid {t.warn}; }}
 QWidget#surfaceCard[tone="accent"] {{ border-left: 3px solid {t.accent_2}; }}

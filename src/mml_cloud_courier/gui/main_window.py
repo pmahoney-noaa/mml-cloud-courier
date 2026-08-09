@@ -35,7 +35,7 @@ from mml_cloud_courier.gui.errors_model import (
     fetch_group_page,
     fetch_group_paths,
 )
-from mml_cloud_courier.gui.errors_view import ErrorsTab
+from mml_cloud_courier.gui.errors_view import ErrorsTab, needs_you_count
 from mml_cloud_courier.gui.first_run import FirstRunScreen
 from mml_cloud_courier.gui.job_tabs import FilesTab, ProgressTab, SummaryTab
 from mml_cloud_courier.gui.jobs_model import (
@@ -282,6 +282,7 @@ class MainWindow(QMainWindow):
 
         self.progress_tab.reset()
         self.errors_tab.load_groups([])
+        self.summary_tab.set_causes(None, None)   # drop the previous job's causes
         self.files_tab.attach(lambda **kw: self.client.files(job_id, **kw))
         self.watcher.start(self.client, job_id)
 
@@ -429,7 +430,12 @@ class MainWindow(QMainWindow):
         self.summary_tab.update_job(job)
 
     def _render_errors(self, raw: list[dict]) -> None:
-        self.errors_tab.load_groups(build_error_groups(raw))
+        groups = build_error_groups(raw)
+        self.errors_tab.load_groups(groups)
+        if groups:
+            self.summary_tab.set_causes(len(groups), needs_you_count(groups))
+        else:
+            self.summary_tab.set_causes(None, None)
 
     def _refresh_selected_job(self) -> None:
         job_id = self._selected_job_id

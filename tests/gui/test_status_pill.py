@@ -1,4 +1,15 @@
+from PySide6.QtCore import Qt
+
 from mml_cloud_courier.gui.status_pill import PILL_TEXT, StatusPill
+
+
+def test_pill_paints_styled_background(qtbot):
+    # StatusPill is a custom QWidget subclass carrying objectName
+    # "statusPill" -- without WA_StyledBackground its QSS background/border
+    # never paints and the pill renders as an invisible bubble.
+    pill = StatusPill()
+    qtbot.addWidget(pill)
+    assert pill.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
 
 def test_pill_states_and_text(qtbot):

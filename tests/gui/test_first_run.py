@@ -1,4 +1,16 @@
+from PySide6.QtCore import Qt
+
 from mml_cloud_courier.gui.first_run import FirstRunScreen
+
+
+def test_step_card_paints_styled_background(qtbot):
+    # _StepCard is a custom QWidget subclass carrying objectName
+    # "firstRunStep" -- without WA_StyledBackground its QSS background/border
+    # never paints and the card renders as an invisible bubble.
+    screen = FirstRunScreen(on_add_connection=lambda: None, on_open_guide=lambda: None)
+    qtbot.addWidget(screen)
+    for step in screen.steps:
+        assert step.testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
 
 def test_first_run_copy_and_buttons(qtbot):

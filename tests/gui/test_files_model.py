@@ -90,6 +90,56 @@ def test_error_recovery_on_refresh(qapp):
     assert model.last_error is None
 
 
+def test_state_column_decoration_is_state_token_color(qapp):
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    model = FileTableModel(RecordingFetcher(_rows(1, state="verified")))
+    model.set_filter()
+    color = model.data(model.index(0, 2), Qt.ItemDataRole.DecorationRole)
+    assert color.name() == theme._qcolor(theme.LIGHT.accent).name()
+    theme.apply_theme(qapp, theme.LIGHT)   # leave global state clean
+
+
+def test_state_column_decoration_falls_back_to_skip_for_unknown_state(qapp):
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    model = FileTableModel(RecordingFetcher(_rows(1, state="bogus_state")))
+    model.set_filter()
+    color = model.data(model.index(0, 2), Qt.ItemDataRole.DecorationRole)
+    assert color.name() == theme._qcolor(theme.LIGHT.skip).name()
+
+
+def test_state_column_foreground_is_danger_text_for_failure_states(qapp):
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    model = FileTableModel(RecordingFetcher(_rows(1, state="quarantined")))
+    model.set_filter()
+    color = model.data(model.index(0, 2), Qt.ItemDataRole.ForegroundRole)
+    assert color.name() == theme._qcolor(theme.LIGHT.danger_text).name()
+
+    model = FileTableModel(RecordingFetcher(_rows(1, state="failed")))
+    model.set_filter()
+    color = model.data(model.index(0, 2), Qt.ItemDataRole.ForegroundRole)
+    assert color.name() == theme._qcolor(theme.LIGHT.danger_text).name()
+
+
+def test_state_column_foreground_unset_for_non_failure_states(qapp):
+    model = FileTableModel(RecordingFetcher(_rows(1, state="verified")))
+    model.set_filter()
+    assert model.data(model.index(0, 2), Qt.ItemDataRole.ForegroundRole) is None
+
+
+def test_files_tab_hides_row_number_header(qtbot):
+    from mml_cloud_courier.gui.job_tabs import FilesTab
+
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    assert not tab.table.verticalHeader().isVisible()
+
+
 def test_path_column_tooltip_is_full_path():
     from PySide6.QtCore import Qt
     model = FileTableModel(lambda **kw: [])

@@ -53,6 +53,30 @@ _RESUME_VISIBLE = frozenset({"paused", "stalled", "incomplete", "cancelled"})
 _REPORT_VISIBLE = frozenset({"complete", "paused", "stalled", "incomplete", "cancelled"})
 
 
+def _local_event_time(at: str) -> tuple[str, str | None]:
+    """Parse an ISO 8601 event timestamp and return (HH:MM:SS local display
+    time, YYYY-MM-DD local date). Falls back to the raw string with no date
+    when `at` isn't a parseable ISO timestamp -- malformed or legacy rows
+    must not crash the events list."""
+    try:
+        parsed = datetime.fromisoformat(at)
+    except (ValueError, TypeError):
+        return at, None
+    local = parsed.astimezone()
+    return local.strftime("%H:%M:%S"), local.strftime("%Y-%m-%d")
+
+
+def _date_separator_item(date: str) -> QListWidgetItem:
+    """A non-selectable row marking the start of a new local date in a
+    multi-date events log. EVENT_ROLE's first slot ("at" for a normal row)
+    carries the sentinel "date" so EventsDelegate can branch on it."""
+    display = datetime.strptime(date, "%Y-%m-%d").strftime("%b %d")
+    item = QListWidgetItem(display)
+    item.setData(EVENT_ROLE, ("date", display, ""))
+    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+    return item
+
+
 class ProgressTab(QWidget):
     """Live view of one job: headline, byte/file progress, throughput,
     in-flight files, and a capped rolling event log."""
@@ -141,6 +165,7 @@ class ProgressTab(QWidget):
 
         self._events: list[str] = []
         self._event_tuples: list[tuple[str, str, str]] = []
+        self._event_dates: list[str | None] = []
         self._last_bytes: int | None = None
         self._last_time: float | None = None
         self._rate: float | None = None
@@ -153,6 +178,7 @@ class ProgressTab(QWidget):
         blend two jobs' byte deltas into one bogus rate."""
         self._events = []
         self._event_tuples = []
+        self._event_dates = []
         self._last_bytes = None
         self._last_time = None
         self._rate = None
@@ -249,12 +275,28 @@ class ProgressTab(QWidget):
             return
         for event in new_events:
             at, kind, detail = event.get("at", ""), event.get("kind", ""), event.get("detail", "")
-            self._events.append(f"{at}  {kind}: {detail}")
-            self._event_tuples.append((at, kind, detail))
+            display_time, date = _local_event_time(at)
+            self._events.append(f"{display_time}  {kind}: {detail}")
+            self._event_tuples.append((display_time, kind, detail))
+            self._event_dates.append(date)
         self._events = self._events[-200:]
         self._event_tuples = self._event_tuples[-200:]
+        self._event_dates = self._event_dates[-200:]
+        self._rebuild_events_list()
+
+    def _rebuild_events_list(self) -> None:
+        # Separators are derived here from the (already 200-capped) real
+        # events -- they are never counted against the cap themselves.
+        # A single-date log (the common case: a job that runs same-day)
+        # gets no separators at all.
+        distinct_dates = {d for d in self._event_dates if d is not None}
+        multi_date = len(distinct_dates) > 1
+        last_date: str | None = None
         self.events_list.clear()
-        for text, tup in zip(self._events, self._event_tuples):
+        for text, tup, date in zip(self._events, self._event_tuples, self._event_dates):
+            if multi_date and date is not None and date != last_date:
+                self.events_list.addItem(_date_separator_item(date))
+                last_date = date
             # Display text is an accessible fallback; EventsDelegate paints
             # the real row from EVENT_ROLE.
             item = QListWidgetItem(text)
@@ -291,6 +333,9 @@ class FilesTab(QWidget):
         self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self.table.setTextElideMode(Qt.TextElideMode.ElideLeft)
         self.table.setAlternatingRowColors(True)
+        # The row-number header is dead weight on a virtualized 61,000-row
+        # table -- it was rendering as a blank first column.
+        self.table.verticalHeader().setVisible(False)
 
         self.error_label = QLabel("")
         self.error_label.setWordWrap(True)
@@ -368,6 +413,11 @@ class SummaryTab(QWidget):
         self._on_open_report = on_open_report
         self._on_resume = on_resume
         self._last_job: dict | None = None
+        # Cached like _last_job: causes arrive separately (from
+        # MainWindow._render_errors, after the errors groups load) and must
+        # survive a theme replay's update_job(self._last_job) re-render.
+        self._causes_total: int | None = None
+        self._causes_needs_you: int | None = None
 
         self.verdict_label = QLabel("")
         verdict_font = self.verdict_label.font()
@@ -383,9 +433,15 @@ class SummaryTab(QWidget):
         verdict_row.addWidget(self.verdict_tag)
         verdict_row.addStretch(1)
 
+        self.sentence_label = QLabel("")
+        self.sentence_label.setWordWrap(True)
+
         self.stat_values: dict[str, QLabel] = {}
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(1)
+        strip = QWidget()
+        strip.setObjectName("statStrip")
+        strip_layout = QHBoxLayout(strip)
+        strip_layout.setSpacing(1)
+        strip_layout.setContentsMargins(1, 1, 1, 1)
         for key, label_text in (("files", "FILES"), ("transferred", "TRANSFERRED"),
                                 ("duration", "DURATION"),
                                 ("did_not_transfer", "DID NOT TRANSFER")):
@@ -401,10 +457,20 @@ class SummaryTab(QWidget):
             self.stat_values[key] = value
             cell_layout.addWidget(title)
             cell_layout.addWidget(value)
-            stats_row.addWidget(cell, 1)
+            strip_layout.addWidget(cell, 1)
 
         self.state_rows_layout = QVBoxLayout()
         self.state_rows_layout.setSpacing(6)
+        final_state_title = QLabel("FINAL STATE OF EVERY FILE")
+        final_state_title.setObjectName("sectionLabel")
+        final_state_title.setFont(theme.mono_font(8.0))
+        final_state_card = QWidget()
+        final_state_card.setObjectName("surfaceCard")
+        final_state_layout = QVBoxLayout(final_state_card)
+        final_state_layout.setContentsMargins(15, 13, 15, 13)
+        final_state_layout.setSpacing(9)
+        final_state_layout.addWidget(final_state_title)
+        final_state_layout.addLayout(self.state_rows_layout)
 
         self.footer_label = QLabel(
             "Excluded files stay recorded in the ledger. The job keeps the"
@@ -427,8 +493,9 @@ class SummaryTab(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addLayout(verdict_row)
-        layout.addLayout(stats_row)
-        layout.addLayout(self.state_rows_layout)
+        layout.addWidget(self.sentence_label)
+        layout.addWidget(strip)
+        layout.addWidget(final_state_card)
         layout.addStretch(1)
         layout.addLayout(footer_row)
 
@@ -446,6 +513,16 @@ class SummaryTab(QWidget):
         bytes_done = progress.get("bytes_done", 0)
         state_counts = progress.get("state_counts") or {}
         did_not_transfer = state_counts.get("failed", 0) + state_counts.get("quarantined", 0)
+
+        verified = state_counts.get("verified", 0)
+        sentence = f"{verified:,} of {files_total:,} files arrived and verified."
+        if did_not_transfer > 0:
+            sentence += f" {did_not_transfer:,} did not"
+            if self._causes_total is not None and self._causes_needs_you is not None:
+                cause_word = "cause" if self._causes_total == 1 else "causes"
+                sentence += (f", from {self._causes_total} {cause_word}"
+                            f" — {self._causes_needs_you} still need you.")
+        self.sentence_label.setText(sentence)
 
         self.stat_values["files"].setText(f"{files_total:,}")
         self.stat_values["transferred"].setText(human_bytes(bytes_done))
@@ -472,6 +549,7 @@ class SummaryTab(QWidget):
             row_layout.setSpacing(10)
             label = QLabel(STATE_LABELS.get(state, state))
             label.setMinimumWidth(200)
+            label.setStyleSheet(f"color: {theme.current().muted};")
             bar = _StackedStateBar()
             bar.setFixedHeight(7)
             bar.set_counts({state: count}, total=files_total)
@@ -488,6 +566,17 @@ class SummaryTab(QWidget):
 
         self.report_button.setVisible(status in _REPORT_VISIBLE)
         self.resume_button.setVisible(status in _RESUME_VISIBLE)
+
+    def set_causes(self, total: int | None, needs_you: int | None) -> None:
+        """Cause counts for the sentence's trailing clause, pushed
+        separately from job data by MainWindow._render_errors once the
+        errors groups for the current job are known. (None, None) drops
+        the clause -- used on a job switch, before the new job's causes
+        (if any) have loaded, so a previous job's counts never leak in."""
+        self._causes_total = total
+        self._causes_needs_you = needs_you
+        if self._last_job is not None:
+            self.update_job(self._last_job)
 
     def _on_theme_changed(self, _t) -> None:
         if self._last_job is not None:

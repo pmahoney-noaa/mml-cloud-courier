@@ -1,8 +1,10 @@
 import pytest
+from PySide6.QtCore import Qt
 
 from mml_cloud_courier.gui.errors_model import ErrorGroup
 from mml_cloud_courier.gui.errors_view import (
-    ErrorsTab, group_fill_rows, group_tone, header_sentence, order_groups,
+    ErrorsTab, group_fill_rows, group_tone, header_sentence, needs_you_count,
+    order_groups,
 )
 
 
@@ -32,6 +34,16 @@ def test_order_groups_needs_you_first_then_count():
         "permission_denied", "credential", "network", "file_locked"]
 
 
+def test_needs_you_count_matches_header_sentence_needs_figure():
+    # SummaryTab's sentence uses this for "N still need you" -- must agree
+    # with the count header_sentence already derives independently.
+    groups = [_group("credential", 2), _group("permission_denied", 15),
+              _group("network", 400), _group("file_locked", 6)]
+    assert needs_you_count(groups) == 2   # credential, permission_denied
+    assert needs_you_count([]) == 0
+    assert needs_you_count([_group("network", 3)]) == 0   # self-clearing only
+
+
 def test_header_sentence_counts():
     groups = [_group("credential", 2), _group("permission_denied", 15),
               _group("network", 400), _group("file_locked", 6)]
@@ -42,6 +54,17 @@ def test_header_sentence_counts():
     one = header_sentence([_group("network", 3)], files_total=10)
     assert one == ("3 of 10 files did not transfer, from 1 cause."
                    " 1 clears itself; 0 need something from you.")
+
+
+def test_error_card_paints_styled_background(qtbot):
+    # ErrorCard is a custom QWidget subclass carrying objectName
+    # "surfaceCard" -- without WA_StyledBackground its QSS background/border
+    # never paints and the card renders as an invisible bubble.
+    tab = ErrorsTab(on_retry=lambda c: None, on_exclude=lambda c: None,
+                    on_copy=lambda c: None)
+    qtbot.addWidget(tab)
+    tab.load_groups([_group("network", 400)])
+    assert tab.card(0).testAttribute(Qt.WidgetAttribute.WA_StyledBackground)
 
 
 def test_cards_built_per_group_with_own_buttons(qtbot):

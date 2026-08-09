@@ -3,6 +3,7 @@ taxonomy's message/action/count per cause, a needs-you/self-clearing tag,
 and per-card buttons — the grouping logic in errors_model is untouched."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
@@ -28,6 +29,12 @@ def group_tone(category: str) -> str:
 
 def _needs_you(category: str) -> bool:
     return group_tone(category) == "danger"
+
+
+def needs_you_count(groups: list[ErrorGroup]) -> int:
+    """How many of these causes need the user, vs. clearing on their own --
+    the SummaryTab sentence's "N still need you" figure."""
+    return sum(1 for g in groups if _needs_you(g.category))
 
 
 def order_groups(groups: list[ErrorGroup]) -> list[ErrorGroup]:
@@ -66,6 +73,10 @@ class ErrorCard(QWidget):
         tone = group_tone(group.category)
         self.setObjectName("surfaceCard")
         self.setProperty("tone", tone)
+        # Custom QWidget subclasses don't paint QSS backgrounds/borders
+        # unless this attribute is set -- without it the card is invisible
+        # (transparent) and just shows whatever is behind it.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         self.message_label = QLabel(group.message)
         self.message_label.setWordWrap(True)

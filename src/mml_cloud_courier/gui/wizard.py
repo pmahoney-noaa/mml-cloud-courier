@@ -186,28 +186,11 @@ class NewTransferWizard(QDialog):
 
         self._direction_group.buttonToggled.connect(self._on_direction_toggled)
 
-        # -- left column: local folder ---------------------------------
-        self.source_label = QLabel()
-        self.source_edit = QLineEdit()
-        self.source_browse = QPushButton("Browse…")
-        self.source_browse.setAutoDefault(False)
-        self.source_browse.clicked.connect(self._browse_source)
-        self.mapped_label = QLabel("")
-        self.mapped_label.setWordWrap(True)
-
-        self.source_edit.textChanged.connect(self._update_mapped_label)
-        self.source_edit.textChanged.connect(self._on_source_changed)
-
-        source_row = QHBoxLayout()
-        source_row.addWidget(self.source_edit, 1)
-        source_row.addWidget(self.source_browse)
-
-        left_column = QVBoxLayout()
-        left_column.addWidget(self.source_label)
-        left_column.addLayout(source_row)
-        left_column.addWidget(self.mapped_label)
-
-        # -- right column: connection + remote prefix -------------------
+        # -- connection row: combo + Refresh + New connection… -----------
+        # Stacked-row layout: this and the next three sections were
+        # formerly two side-by-side columns (source | connection+prefix);
+        # each is now its own full-width row, in reading order
+        # connection -> destination prefix -> source folder -> job name.
         self.profile_combo = QComboBox()
         self.refresh_button = QPushButton("Refresh")
         self.new_button = QPushButton("New connection…")
@@ -226,20 +209,34 @@ class NewTransferWizard(QDialog):
         connection_row.addWidget(self.profile_combo, 1)
         connection_row.addWidget(self.refresh_button)
         connection_row.addWidget(self.new_button)
+        layout.addLayout(connection_row)
 
+        # -- destination prefix (in the bucket) ---------------------------
         self.prefix_label = QLabel()
         self.prefix_edit = QLineEdit()
         self.prefix_edit.textChanged.connect(self._on_prefix_changed)
+        layout.addWidget(self.prefix_label)
+        layout.addWidget(self.prefix_edit)
 
-        right_column = QVBoxLayout()
-        right_column.addLayout(connection_row)
-        right_column.addWidget(self.prefix_label)
-        right_column.addWidget(self.prefix_edit)
+        # -- source folder ------------------------------------------------
+        self.source_label = QLabel()
+        self.source_edit = QLineEdit()
+        self.source_browse = QPushButton("Browse…")
+        self.source_browse.setAutoDefault(False)
+        self.source_browse.clicked.connect(self._browse_source)
+        self.mapped_label = QLabel("")
+        self.mapped_label.setWordWrap(True)
 
-        columns_row = QHBoxLayout()
-        columns_row.addLayout(left_column, 1)
-        columns_row.addLayout(right_column, 1)
-        layout.addLayout(columns_row)
+        self.source_edit.textChanged.connect(self._update_mapped_label)
+        self.source_edit.textChanged.connect(self._on_source_changed)
+
+        source_row = QHBoxLayout()
+        source_row.addWidget(self.source_edit, 1)
+        source_row.addWidget(self.source_browse)
+
+        layout.addWidget(self.source_label)
+        layout.addLayout(source_row)
+        layout.addWidget(self.mapped_label)
 
         self._update_direction_labels()
 

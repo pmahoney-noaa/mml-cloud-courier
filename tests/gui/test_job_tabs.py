@@ -66,6 +66,39 @@ def test_summary_tag_and_footer_hidden_when_clean(qtbot):
     assert not tab.footer_label.isVisibleTo(tab)
 
 
+def test_summary_sentence_for_a_clean_job(qtbot):
+    tab = _summary_tab(qtbot)
+    job = _summary_job(status="complete")
+    job["progress"]["state_counts"] = {"verified": 61022}
+    tab.update_job(job)
+    assert tab.sentence_label.text() == "61,022 of 61,022 files arrived and verified."
+
+
+def test_summary_sentence_for_incomplete_job_with_causes(qtbot):
+    tab = _summary_tab(qtbot)
+    tab.set_causes(4, 2)
+    tab.update_job(_summary_job())
+    assert tab.sentence_label.text() == (
+        "60,599 of 61,022 files arrived and verified. 423 did not,"
+        " from 4 causes — 2 still need you."
+    )
+
+
+def test_summary_sentence_omits_clause_when_causes_are_none(qtbot):
+    tab = _summary_tab(qtbot)
+    tab.set_causes(4, 2)
+    tab.update_job(_summary_job())
+    assert "causes" in tab.sentence_label.text()
+
+    # A job switch (or causes not yet loaded) must drop the stale clause,
+    # not carry the previous job's cause counts into the new sentence.
+    tab.set_causes(None, None)
+    assert tab.sentence_label.text() == (
+        "60,599 of 61,022 files arrived and verified. 423 did not"
+    )
+    assert "causes" not in tab.sentence_label.text()
+
+
 def test_summary_state_rows_order_and_total_override(qtbot):
     """state_rows_layout must contain one row per nonzero state, ordered
     STATE_ORDER-first then unknown states appended, and each row's bar must
@@ -256,6 +289,69 @@ def test_events_cap_holds_at_200_for_display_text_and_role_data(qtbot):
     # display-text cap and the parallel role-data cap.
     assert tab._event_tuples[0] == ("t50", "run_started", "")
     assert tab.events_list.item(0).data(EVENT_ROLE) == ("t50", "run_started", "")
+
+
+def _local_iso(hour: int):
+    """An ISO 8601 timestamp for `hour` o'clock today, in the machine's own
+    local timezone -- avoids hardcoding an offset the test host may not
+    share, while still round-tripping to the exact same local date/time."""
+    import datetime as dt
+    return dt.datetime.now().astimezone().replace(
+        hour=hour, minute=0, second=0, microsecond=0)
+
+
+def test_events_time_only_local_formatting(qtbot):
+    from mml_cloud_courier.gui.progress_widgets import EVENT_ROLE
+
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    at = _local_iso(14).isoformat()
+    tab._append_events([{"at": at, "kind": "run_started", "detail": "x"}])
+    stored_time, kind, detail = tab.events_list.item(0).data(EVENT_ROLE)
+    # Time-only, local: no date component, HH:MM:SS shape.
+    assert stored_time == "14:00:00"
+    assert kind == "run_started" and detail == "x"
+
+
+def test_events_no_separator_for_single_date_log(qtbot):
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    import datetime as dt
+    base = _local_iso(9)
+    tab._append_events([
+        {"at": base.isoformat(), "kind": "run_started", "detail": "a"},
+        {"at": (base + dt.timedelta(hours=1)).isoformat(), "kind": "run_finished", "detail": "b"},
+    ])
+    # Same local date: no separator rows, just the two real events.
+    assert tab.events_list.count() == 2
+
+
+def test_events_date_separator_inserted_for_multi_date_log(qtbot):
+    from PySide6.QtCore import Qt
+
+    from mml_cloud_courier.gui.progress_widgets import EVENT_ROLE
+
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    import datetime as dt
+    base = _local_iso(10)
+    tab._append_events([
+        {"at": base.isoformat(), "kind": "run_started", "detail": "a"},
+        {"at": (base + dt.timedelta(days=1)).isoformat(), "kind": "run_finished", "detail": "b"},
+    ])
+    # Two distinct local dates: a separator precedes each date's first
+    # event -- sep, event, sep, event (4 rows for 2 real events, and the
+    # separators are derived at render, not counted against the 200 cap).
+    assert tab.events_list.count() == 4
+    assert len(tab._event_tuples) == 2
+    rows = [tab.events_list.item(i).data(EVENT_ROLE) for i in range(4)]
+    # Separator rows: ("date", <display date>, ""); real rows keep the
+    # normal (time, kind, detail) shape.
+    assert rows[0][0] == "date" and rows[2][0] == "date"
+    assert rows[1] == ("10:00:00", "run_started", "a")
+    assert rows[3][1:] == ("run_finished", "b")
+    assert not (tab.events_list.item(0).flags() & Qt.ItemFlag.ItemIsSelectable)
+    assert not (tab.events_list.item(2).flags() & Qt.ItemFlag.ItemIsSelectable)
 
 
 # -- _verdict_style token usage -----------------------------------------------

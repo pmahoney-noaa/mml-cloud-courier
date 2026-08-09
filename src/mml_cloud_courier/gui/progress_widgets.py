@@ -117,6 +117,10 @@ class StateBarCard(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("surfaceCard")
+        # Custom QWidget subclasses don't paint QSS backgrounds/borders
+        # unless this attribute is set -- without it the card is invisible
+        # (transparent) and just shows whatever is behind it.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.title = QLabel("EVERY FILE, BY STATE")
         self.title.setObjectName("sectionLabel")
         self.title.setFont(theme.mono_font(8.0))
@@ -186,7 +190,30 @@ class StateBarCard(QWidget):
 INFLIGHT_ROLE = Qt.ItemDataRole.UserRole + 1
 EVENT_ROLE = Qt.ItemDataRole.UserRole + 1
 
-_EVENT_KIND_TOKENS = {"verified": "accent_text", "failed": "danger", "retry": "warn"}
+# kind -> token. The original three (verified/failed/retry) are generic
+# example names kept for compatibility; everything else below is the real
+# vocabulary found via `git grep -nE 'kind=|"kind"' -- service engine` and
+# cross-referencing every repo.record_event(...) call site in engine/runner.py,
+# service/app.py, service/worker.py, cli/scan_command.py, store/repository.py.
+_EVENT_KIND_TOKENS = {
+    "verified": "accent_text", "failed": "danger", "retry": "warn",
+    # success/verified-ish
+    "job_unstalled": "accent_text",
+    # failed/error-ish
+    "scan_error": "danger", "audit_error": "danger", "worker_error": "danger",
+    "report_error": "danger", "quarantined": "danger",
+    # retry/pause/stall-ish
+    "files_retried": "warn", "paused_by_user": "warn", "run_paused": "warn",
+    "job_stalled": "warn", "job_lock_contended": "warn", "source_changed": "warn",
+    # start/resume/progress/info-ish
+    "scan_started": "accent_2", "run_started": "accent_2",
+    "resumed_by_user": "accent_2", "recovered_at_startup": "accent_2",
+    "job_submitted": "accent_2", "scheduled": "accent_2",
+    "run_stopped": "accent_2", "run_finished": "accent_2",
+    "scan_finished": "accent_2", "audit_finished": "accent_2",
+    # anything else -- neutral user actions with no clean bucket
+    "cancelled_by_user": "muted", "files_excluded": "muted",
+}
 
 
 def event_kind_token(kind: str) -> str:
@@ -247,6 +274,21 @@ class EventsDelegate(QStyledItemDelegate):
         rect = option.rect.adjusted(8, 3, -8, -3)
         painter.setFont(theme.mono_font(8.0))
         metrics = painter.fontMetrics()
+        if at == "date":
+            # A date-separator row (see job_tabs._append_events): the
+            # "kind" slot carries the display date text instead of a kind
+            # string, and "detail" is unused.
+            painter.setPen(token_color("faint"))
+            painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, kind)
+            text_width = metrics.horizontalAdvance(kind)
+            line_y = rect.top() + rect.height() // 2
+            line_left = rect.left() + text_width + 8
+            line_right = rect.right()
+            if line_right > line_left:
+                painter.fillRect(QRect(line_left, line_y, line_right - line_left, 1),
+                                 token_color("line"))
+            painter.restore()
+            return
         time_width = metrics.horizontalAdvance(at) + 10
         painter.setPen(token_color("faint"))
         painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, at)

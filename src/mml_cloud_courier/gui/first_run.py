@@ -24,6 +24,10 @@ class _StepCard(QWidget):
     def __init__(self, number: int, title: str, body: str, parent=None):
         super().__init__(parent)
         self.setObjectName("firstRunStep")
+        # Custom QWidget subclasses don't paint QSS backgrounds/borders
+        # unless this attribute is set -- without it the card is invisible
+        # (transparent) and just shows whatever is behind it.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.badge = QLabel(str(number))
         self.badge.setObjectName("stepBadge")
         self.badge.setFixedSize(20, 20)

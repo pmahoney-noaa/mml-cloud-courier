@@ -122,6 +122,10 @@ class NewConnectionDialog(QDialog):
         self.key_button = QPushButton("Choose a key file…")
         self.key_button.setWhatsThis(COPY_CHOOSE_KEY)
         self.key_button.clicked.connect(self._choose_key)
+        # The key path is the one COPY_CHOOSE_KEY itself calls out as
+        # "recommended for unattended, recurring transfers" -- the create
+        # action a new connection should default toward.
+        self.key_button.setObjectName("primaryButton")
 
         signin_label = QLabel(COPY_CHOOSE_SIGNIN)
         signin_label.setWordWrap(True)
@@ -133,6 +137,8 @@ class NewConnectionDialog(QDialog):
         self.status_label.setWordWrap(True)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(11)
         layout.addLayout(form)
         layout.addWidget(key_label)
         layout.addWidget(self.key_button)
@@ -253,6 +259,10 @@ class ConnectionsDialog(QDialog):
 
         self.list_widget = QListWidget()
         self.new_button = QPushButton("New…")
+        # The one clear primary action in this dialog: everything else
+        # (Check/Remove) acts on a selection, New… is the only action that
+        # doesn't need one.
+        self.new_button.setObjectName("primaryButton")
         self.check_button = QPushButton("Check")
         self.remove_button = QPushButton("Remove")
         self.close_button = QPushButton("Close")
@@ -260,6 +270,7 @@ class ConnectionsDialog(QDialog):
         self.status_label.setWordWrap(True)
 
         buttons = QHBoxLayout()
+        buttons.setSpacing(11)
         buttons.addWidget(self.new_button)
         buttons.addWidget(self.check_button)
         buttons.addWidget(self.remove_button)
@@ -267,6 +278,8 @@ class ConnectionsDialog(QDialog):
         buttons.addWidget(self.close_button)
 
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+        layout.setSpacing(11)
         layout.addWidget(self.list_widget)
         layout.addWidget(self.status_label)
         layout.addLayout(buttons)
