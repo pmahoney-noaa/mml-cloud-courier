@@ -157,20 +157,47 @@ def dialog(qtbot):
     return d
 
 
-def test_theme_combo_lists_three_options_and_defaults_to_setting(dialog):
-    datas = [dialog.theme_combo.itemData(i) for i in range(dialog.theme_combo.count())]
-    assert datas == ["system", "light", "dark"]
-
-
-def test_theme_change_persists_and_applies(dialog, monkeypatch):
+@pytest.fixture
+def isolated_theme_settings(tmp_path, monkeypatch):
+    """Isolate QSettings to a temp ini so theme tests never touch the real
+    registry — same idiom as tests/gui/test_theme.py's
+    test_setting_roundtrip_and_default."""
+    from PySide6.QtCore import QSettings
     from mml_cloud_courier.gui import theme
+    monkeypatch.setattr(
+        theme, "_qsettings",
+        lambda: QSettings(str(tmp_path / "t.ini"), QSettings.Format.IniFormat),
+    )
+
+
+def test_theme_combo_lists_three_options_and_defaults_to_setting(isolated_theme_settings, qtbot):
+    from mml_cloud_courier.gui import theme
+    theme.set_theme_setting("light")   # seed the isolated store BEFORE constructing the dialog
+    client = FakeSettingsClient()
+    d = SettingsDialog(client)
+    qtbot.addWidget(d)
+    qtbot.waitUntil(lambda: d.workers_spin.value() == 4, timeout=5000)
+
+    datas = [d.theme_combo.itemData(i) for i in range(d.theme_combo.count())]
+    assert datas == ["system", "light", "dark"]
+    assert d.theme_combo.currentIndex() == 1
+
+
+def test_theme_change_persists_and_applies(isolated_theme_settings, qtbot, monkeypatch):
+    from mml_cloud_courier.gui import theme
+    theme.set_theme_setting("light")   # known starting point: index 1, so ->2 is a real transition
+    client = FakeSettingsClient()
+    d = SettingsDialog(client)
+    qtbot.addWidget(d)
+    qtbot.waitUntil(lambda: d.workers_spin.value() == 4, timeout=5000)
+
     applied = []
     monkeypatch.setattr(theme, "set_theme_setting", lambda v: applied.append(("set", v)))
     monkeypatch.setattr(
         "mml_cloud_courier.gui.settings_dialog.apply_theme_for_setting",
         lambda v: applied.append(("apply", v)),
     )
-    dialog.theme_combo.setCurrentIndex(2)   # dark
+    d.theme_combo.setCurrentIndex(2)   # dark
     assert ("set", "dark") in applied and ("apply", "dark") in applied
 
 
