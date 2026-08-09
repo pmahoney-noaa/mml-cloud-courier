@@ -31,7 +31,8 @@ from mml_cloud_courier.gui.errors_model import (
     fetch_group_page,
     fetch_group_paths,
 )
-from mml_cloud_courier.gui.job_tabs import ErrorsTab, FilesTab, ProgressTab, SummaryTab
+from mml_cloud_courier.gui.errors_view import ErrorsTab
+from mml_cloud_courier.gui.job_tabs import FilesTab, ProgressTab, SummaryTab
 from mml_cloud_courier.gui.jobs_model import (
     JOB_ID_ROLE,
     RAIL_GROUPS,
@@ -370,6 +371,7 @@ class MainWindow(QMainWindow):
         self.progress_tab.update_snapshot(snap)
         self.summary_tab.update_job(job)
         self.files_tab.set_total(job.get("planned_files"))
+        self.errors_tab.set_files_total((job.get("progress") or {}).get("files_total"))
 
     def _render_summary_only(self, job: dict) -> None:
         self._selected_status = job.get("status", self._selected_status)

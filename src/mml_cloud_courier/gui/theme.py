@@ -172,7 +172,14 @@ QWidget#serviceBanner QPushButton {{ background: {t.danger}; color: #ffffff; bor
                                      padding: 7px 14px; border-radius: 6px; }}
 QLabel#filesHeader {{ color: {t.faint}; background: transparent; }}
 QWidget#surfaceCard {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
+QWidget#surfaceCard[tone="danger"] {{ border-left: 3px solid {t.danger}; }}
+QWidget#surfaceCard[tone="warn"] {{ border-left: 3px solid {t.warn}; }}
+QWidget#surfaceCard[tone="accent"] {{ border-left: 3px solid {t.accent_2}; }}
 QLabel#sectionLabel {{ color: {t.faint}; background: transparent; letter-spacing: 1px; }}
+QLabel#tag {{ border-radius: 4px; padding: 4px 7px; font-size: 10.5px; font-weight: 500; }}
+QLabel#tag[tone="danger"] {{ background: {t.danger_soft}; color: {t.danger_text}; }}
+QLabel#tag[tone="warn"] {{ background: {t.warn_soft}; color: {t.warn_text}; }}
+QLabel#tag[tone="accent"] {{ background: {t.accent_soft}; color: {t.accent_text}; }}
 QTabWidget::pane {{ border: none; }}
 QTabBar {{ background: {t.chrome}; }}
 QTabBar::tab {{ background: transparent; color: {t.faint}; padding: 13px 15px 11px;

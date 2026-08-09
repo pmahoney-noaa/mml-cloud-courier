@@ -25,14 +25,11 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QTableView,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from mml_cloud_courier.gui import theme
-from mml_cloud_courier.gui.errors_model import ErrorGroup
 from mml_cloud_courier.gui.files_model import FileTableModel
 from mml_cloud_courier.gui.format import (
     STATE_LABELS,
@@ -51,26 +48,8 @@ from mml_cloud_courier.gui.progress_widgets import (
     inflight_detail_text,
 )
 
-_CATEGORY_ROLE = Qt.ItemDataRole.UserRole + 1
-_FILLED_ROLE = Qt.ItemDataRole.UserRole + 2
-
 _RESUME_VISIBLE = frozenset({"paused", "stalled", "incomplete", "cancelled"})
 _REPORT_VISIBLE = frozenset({"complete", "paused", "stalled", "incomplete", "cancelled"})
-
-
-def group_fill_rows(page: list[str], group_count: int) -> list[str]:
-    """Rows to display for a lazily-filled error group.
-
-    ``page`` is a single (already page-size-bounded) fetch of paths; the
-    trailing "...and N more" row is sized from the group's already-known
-    ``group_count`` rather than by fetching every remaining page, so
-    expanding a large group costs exactly one round trip.
-    """
-    rows = list(page)
-    remaining = group_count - len(page)
-    if remaining > 0:
-        rows.append(f"…and {remaining:,} more")
-    return rows
 
 
 class ProgressTab(QWidget):
@@ -374,139 +353,6 @@ class FilesTab(QWidget):
             self.error_label.show()
         else:
             self.error_label.hide()
-
-
-class ErrorsTab(QWidget):
-    """Errors grouped by cause. Children (file paths) are lazily fetched
-    the first time a group is expanded, so opening the tab never pays for
-    paths the user never looks at."""
-
-    def __init__(self, *, on_retry, on_exclude, on_copy, on_expand=None, parent=None):
-        super().__init__(parent)
-        self._on_retry = on_retry
-        self._on_exclude = on_exclude
-        self._on_copy = on_copy
-        self._on_expand = on_expand
-        self._groups: list[ErrorGroup] = []
-
-        self.tree = QTreeWidget()
-        self.tree.setHeaderHidden(True)
-        self.tree.itemExpanded.connect(self._on_item_expanded)
-        self.tree.currentItemChanged.connect(self._on_current_changed)
-
-        # The taxonomy's suggested action for the selected group — the
-        # spec's "what to do about it" line, shown right above the buttons
-        # that act on it.
-        self.action_label = QLabel("")
-        self.action_label.setWordWrap(True)
-
-        self.retry_button = QPushButton("Retry these files")
-        self.exclude_button = QPushButton("Stop retrying these files")
-        self.copy_button = QPushButton("Copy file list")
-        self.retry_button.clicked.connect(self._retry_clicked)
-        self.exclude_button.clicked.connect(self._exclude_clicked)
-        self.copy_button.clicked.connect(self._copy_clicked)
-
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.retry_button)
-        buttons.addWidget(self.exclude_button)
-        buttons.addWidget(self.copy_button)
-        buttons.addStretch(1)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.tree, 1)
-        layout.addWidget(self.action_label)
-        layout.addLayout(buttons)
-
-    def load_groups(self, groups: list[ErrorGroup]) -> None:
-        self._groups = list(groups)
-        self.tree.clear()
-        self.action_label.setText("")
-        for group in self._groups:
-            item = QTreeWidgetItem([group.label])
-            item.setData(0, _CATEGORY_ROLE, group.category)
-            item.setData(0, _FILLED_ROLE, False)
-            item.setToolTip(0, group.action)
-            item.addChild(QTreeWidgetItem(["Loading…"]))   # placeholder for the arrow
-            self.tree.addTopLevelItem(item)
-        if self._groups:
-            # Auto-select the first group: single-cause jobs (the common
-            # case) show their guidance without a click, and the action
-            # buttons have a target immediately.
-            self.tree.setCurrentItem(self.tree.topLevelItem(0))
-
-    def _on_current_changed(self, current, _previous) -> None:
-        item = current
-        while item is not None and item.parent() is not None:
-            item = item.parent()
-        text = ""
-        if item is not None:
-            category = item.data(0, _CATEGORY_ROLE)
-            for group in self._groups:
-                if group.category == category:
-                    text = group.action
-                    break
-        self.action_label.setText(text)
-
-    # -- test/UI hooks ------------------------------------------------
-
-    def group_count(self) -> int:
-        return len(self._groups)
-
-    def group_label(self, i: int) -> str:
-        return self._groups[i].label
-
-    def selected_category(self) -> str | None:
-        item = self.tree.currentItem()
-        if item is None:
-            return None
-        if item.parent() is not None:
-            item = item.parent()
-        return item.data(0, _CATEGORY_ROLE)
-
-    # -- lazy fill ------------------------------------------------------
-
-    def _group_count(self, category: str) -> int:
-        for group in self._groups:
-            if group.category == category:
-                return group.count
-        return 0
-
-    def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
-        if item.parent() is not None or item.data(0, _FILLED_ROLE):
-            return
-        item.setData(0, _FILLED_ROLE, True)
-        category = item.data(0, _CATEGORY_ROLE)
-        try:
-            page = self._on_expand(category) if self._on_expand is not None else []
-            rows = group_fill_rows(page, self._group_count(category))
-        except Exception as exc:
-            # Leave the group re-expandable (clear _FILLED_ROLE) so the user
-            # can retry instead of being stuck at "Loading..." forever.
-            item.setData(0, _FILLED_ROLE, False)
-            item.takeChildren()
-            item.addChild(QTreeWidgetItem([f"Failed to load: {exc}"]))
-            return
-        item.takeChildren()
-        for row in rows:
-            item.addChild(QTreeWidgetItem([row]))
-
-    # -- buttons ----------------------------------------------------------
-
-    def _retry_clicked(self) -> None:
-        category = self.selected_category()
-        if category is not None:
-            self._on_retry(category)
-
-    def _exclude_clicked(self) -> None:
-        category = self.selected_category()
-        if category is not None:
-            self._on_exclude(category)
-
-    def _copy_clicked(self) -> None:
-        category = self.selected_category()
-        if category is not None:
-            self._on_copy(category)
 
 
 class SummaryTab(QWidget):
