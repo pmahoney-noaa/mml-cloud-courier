@@ -34,6 +34,10 @@ JOB_ID_ROLE = Qt.ItemDataRole.UserRole + 1
 STATUS_ROLE = Qt.ItemDataRole.UserRole + 2
 SECOND_LINE_ROLE = Qt.ItemDataRole.UserRole + 3
 
+# The second-line text substituted when a job looks active but the service
+# is down -- lives here (not in the delegate) so the literal exists once.
+STALLED_OVERRIDE = "Stalled — service stopped"
+
 
 def group_for_status(status: str) -> str:
     # Unknown statuses surface at the top rather than vanishing.
@@ -51,7 +55,7 @@ def build_rail_model() -> QStandardItemModel:
 
 def rail_row_lines(job: dict, service_up: bool = True) -> tuple[str, str]:
     if not service_up and job["status"] in ("running", "scanning"):
-        status = "Stalled — service stopped"
+        status = STALLED_OVERRIDE
     else:
         status = STATUS_LABELS.get(job["status"], job["status"])
     if job["status"] == "pending" and job.get("scheduled_start_at"):

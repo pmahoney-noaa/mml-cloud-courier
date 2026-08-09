@@ -84,3 +84,20 @@ def test_job_item_roles_carry_second_line():
     item = _job_item({"id": 7, "name": "leg3", "status": "running"})
     assert item.text() == "#7 leg3"
     assert item.data(SECOND_LINE_ROLE) == "Running"
+
+
+def test_rail_row_lines_stalled_override_matches_constant():
+    from mml_cloud_courier.gui.jobs_model import STALLED_OVERRIDE, rail_row_lines
+    line2 = rail_row_lines({"id": 1, "name": "n", "status": "running"}, service_up=False)[1]
+    assert line2 == STALLED_OVERRIDE
+
+
+def test_delegate_dot_token_warns_on_stalled_override():
+    # The override row (real status "running", but the service is down and
+    # the second line reads "Stalled - service stopped") must show a warn
+    # dot rather than the accent_2 the raw "running" status would map to.
+    from mml_cloud_courier.gui.jobs_model import STALLED_OVERRIDE
+    from mml_cloud_courier.gui.rail_delegate import _dot_token
+    assert _dot_token("running", STALLED_OVERRIDE) == "warn"
+    assert _dot_token("running", "Running") == "accent_2"
+    assert _dot_token("incomplete", "Needs attention") == "danger"

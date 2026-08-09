@@ -89,6 +89,7 @@ def test_apply_theme_emits_notifier(qapp, qtbot):
     with qtbot.waitSignal(theme.notifier.changed, timeout=1000) as blocker:
         theme.apply_theme(qapp, theme.DARK)
     assert blocker.args[0] is theme.DARK
+    theme.apply_theme(qapp, theme.LIGHT)   # leave the session qapp in LIGHT
 
 
 def test_disabled_group_uses_disabled_token(qapp):
@@ -96,6 +97,7 @@ def test_disabled_group_uses_disabled_token(qapp):
     theme.apply_theme(qapp, theme.DARK)
     got = qapp.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
     assert got.name() == theme.DARK.disabled
+    theme.apply_theme(qapp, theme.LIGHT)   # leave the session qapp in LIGHT
 
 
 def test_mono_font_prefers_cascadia():

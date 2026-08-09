@@ -83,6 +83,30 @@ def test_banner_carries_no_inline_hex(window):
 
 
 @pytest.mark.gui
+def test_on_down_preserves_selection_across_repeated_ticks(qtbot, gui_host):
+    from mml_cloud_courier.gui.jobs_model import JOB_ID_ROLE
+
+    host, config, token = gui_host
+    job_id = _seed_incomplete_job(config)
+
+    window = MainWindow(discover_session(), poll_interval=0.2)
+    qtbot.addWidget(window)
+    qtbot.waitUntil(lambda: window.rail_job_ids() == [job_id], timeout=10_000)
+    window.select_job(job_id)
+    qtbot.waitUntil(lambda: window.selected_job_id == job_id, timeout=10_000)
+
+    window._on_down("x")
+    assert window.rail_view.currentIndex().data(JOB_ID_ROLE) == job_id
+
+    # A second failed tick (the poller keeps calling _on_down every miss)
+    # must not clear the selection either.
+    window._on_down("x")
+    assert window.rail_view.currentIndex().data(JOB_ID_ROLE) == job_id
+
+    window.shutdown()
+
+
+@pytest.mark.gui
 def test_rail_shows_stalled_override_when_down(qapp):
     # unused; build_rail_model draws QPixmap icons and needs a live QApplication
     from mml_cloud_courier.gui.jobs_model import SECOND_LINE_ROLE, build_rail_model, sync_rail

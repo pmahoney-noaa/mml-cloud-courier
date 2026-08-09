@@ -297,11 +297,22 @@ class MainWindow(QMainWindow):
             self._pending_select = None
 
     def _on_down(self, _message: str) -> None:
+        was_up = self._service_up
         self._service_up = False
         self.pill.set_state("down")
         self._update_action_states()
         self.banner.show()
-        sync_rail(self.rail_model, self._last_jobs, service_up=False)
+        # The poller calls this on every failed tick, not just the up->down
+        # transition. sync_rail destroys and recreates rows, which wipes the
+        # rail's selection -- so only re-sync (and reselect) on the actual
+        # transition; a repeat failed tick would otherwise clear the user's
+        # selection on every miss.
+        if was_up:
+            sync_rail(self.rail_model, self._last_jobs, service_up=False)
+            if self._selected_job_id is not None:
+                index = self._find_rail_index(self._selected_job_id)
+                if index is not None:
+                    self.rail_view.setCurrentIndex(index)
 
     def _on_profiles(self, profiles: list) -> None:
         self._no_connections = not profiles

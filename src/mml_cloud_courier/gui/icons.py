@@ -8,29 +8,11 @@ from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 
 from mml_cloud_courier.gui import theme
 
-_GROUP_TOKENS = {"needs_attention": "danger", "running": "accent_2",
-                 "queued": "skip", "completed": "accent"}
 
-# Every token used in this module (danger, accent_2, skip, accent) is a plain
-# hex string in BOTH Theme constants, so no rgba parsing is needed here.
+# Every token used in this module (accent) is a plain hex string in BOTH
+# Theme constants, so no rgba parsing is needed here.
 def _token_color(token: str) -> str:
     return getattr(theme.current(), token)
-
-
-def _circle(color: str, size: int = 16) -> QIcon:
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(color))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(2, 2, size - 4, size - 4)
-    painter.end()
-    return QIcon(pixmap)
-
-
-def group_icon(group: str) -> QIcon:
-    return _circle(_token_color(_GROUP_TOKENS.get(group, "skip")))
 
 
 def app_icon() -> QIcon:

@@ -25,7 +25,7 @@ class StatusPill(QWidget):
         layout.setSpacing(6)
         layout.addWidget(self.dot)
         layout.addWidget(self.label)
-        self._state = "ok"
+        self._state = None
         self.set_state("ok")
 
     @property
@@ -35,9 +35,16 @@ class StatusPill(QWidget):
     def set_state(self, state: str) -> None:
         if state not in PILL_TEXT:
             return
+        if state == self._state:
+            return
         self._state = state
         self.label.setText(PILL_TEXT[state])
         # "noconn" keeps the ok (accent) tones; only "down" flips to danger.
         self.setProperty("pillState", state)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        # QStyleSheetStyle caches descendant rules per-child, so re-polishing
+        # only `self` leaves pillDot/pillLabel stuck on the previous state's
+        # colors -- every widget whose stylesheet rule keys off pillState
+        # must be unpolished and repolished.
+        for w in (self, self.dot, self.label):
+            self.style().unpolish(w)
+            self.style().polish(w)

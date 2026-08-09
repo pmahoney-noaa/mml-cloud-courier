@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QStyle, QStyledItemDelegate
 
 from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.jobs_model import (
-    JOB_ID_ROLE, RAIL_GROUPS, SECOND_LINE_ROLE, STATUS_ROLE,
+    JOB_ID_ROLE, RAIL_GROUPS, SECOND_LINE_ROLE, STALLED_OVERRIDE, STATUS_ROLE,
 )
 
 GROUP_DOT_TOKENS = {"needs_attention": "danger", "running": "accent_2",
@@ -19,6 +19,15 @@ _HEADER_TEXT_TOKENS = {"needs_attention": "danger", "running": "accent_text",
 _STATUS_DOT_TOKENS = {"incomplete": "danger", "stalled": "warn", "paused": "warn",
                       "running": "accent_2", "scanning": "accent_2",
                       "pending": "skip", "complete": "accent", "cancelled": "skip"}
+
+
+def _dot_token(status: str, second_line: str | None) -> str:
+    # A row whose second line has been overridden to the stalled message
+    # (real status still "running"/"scanning") must show a warn dot, not
+    # whatever the raw status maps to.
+    if second_line == STALLED_OVERRIDE:
+        return "warn"
+    return _STATUS_DOT_TOKENS.get(status, "danger")
 
 
 def _color(token: str) -> QColor:
@@ -35,7 +44,6 @@ class RailDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         rect = option.rect
-        t = theme.current()
         if index.data(JOB_ID_ROLE) is None:
             group = RAIL_GROUPS[index.row()]
             font = theme.mono_font(8.0, 600)
@@ -50,7 +58,7 @@ class RailDelegate(QStyledItemDelegate):
                 painter.fillRect(rect, _color("rail_selected"))
                 painter.fillRect(QRect(rect.left(), rect.top(), 2, rect.height()),
                                  _color("accent"))
-            dot = _STATUS_DOT_TOKENS.get(index.data(STATUS_ROLE), "danger")
+            dot = _dot_token(index.data(STATUS_ROLE), index.data(SECOND_LINE_ROLE))
             painter.setBrush(_color(dot))
             painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(rect.left() + 10, rect.top() + 12, 6, 6)
