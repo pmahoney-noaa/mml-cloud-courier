@@ -156,6 +156,7 @@ QPushButton#segmentButton {{ background: transparent; border: none; border-radiu
                              padding: 6px 12px; }}
 QPushButton#segmentButton:enabled {{ background: {t.surface}; color: {t.ink}; }}
 QPushButton#segmentButton:disabled {{ background: transparent; color: {t.disabled}; }}
+QPushButton#segmentButton:checked {{ background: {t.accent}; color: {t.accent_ink}; }}
 QPushButton#textButton {{ background: transparent; border: none; color: {t.muted}; }}
 QPushButton#textButton:hover {{ color: {t.ink}; }}
 QWidget#statusPill {{ border-radius: 12px; padding: 0px; background: {t.accent_soft};

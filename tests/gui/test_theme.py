@@ -114,6 +114,13 @@ def test_qss_mentions_every_bound_object_name():
         assert name in text
 
 
+def test_qss_segment_button_has_checked_rule():
+    # The direction well's Upload/Download buttons are checkable — without
+    # a :checked rule both render as identical surface chips (both always
+    # enabled), so the only cue to which is selected would be label text.
+    assert "segmentButton:checked" in theme.qss(theme.LIGHT)
+
+
 def test_qcolor_hex_round_trip():
     from mml_cloud_courier.gui.theme import _qcolor
     color = _qcolor("#006ea0")

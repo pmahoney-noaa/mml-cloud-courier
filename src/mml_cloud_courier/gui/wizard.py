@@ -413,6 +413,7 @@ class NewTransferWizard(QDialog):
 
     def cancel_preview(self) -> None:
         self._scan_cancel.set()
+        self._preview_timer.stop()
 
     def _restart_preview(self) -> None:
         self._scan_cancel.set()

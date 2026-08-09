@@ -113,3 +113,14 @@ def test_set_profile_by_name(wizard):
     assert wizard.profile_combo.currentIndex() == 0
     assert wizard.state.profile_name == "lab"
     assert wizard.set_profile_by_name("no-such-connection") is False
+
+
+def test_reject_stops_pending_preview_timer(wizard, tmp_path):
+    # A source edit arms the 400ms debounce timer. Dismissing the dialog
+    # (Cancel) must stop it too, not just cancel the in-flight scan event —
+    # otherwise a timer left running fires _restart_preview on the hidden
+    # dialog and starts a scan nothing will ever collect.
+    wizard.set_source(str(tmp_path))
+    assert wizard._preview_timer.isActive()
+    wizard.reject()
+    assert not wizard._preview_timer.isActive()
