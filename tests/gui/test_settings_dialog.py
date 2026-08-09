@@ -143,3 +143,36 @@ def test_dialog_two_save_sequence_refreshes_had_stored_policy(qtbot):
     payload2 = dialog.build_payload()
     # Now payload should have size_policy: "" to clear it
     assert payload2.get("size_policy") == ""
+
+
+@pytest.fixture
+def dialog(qtbot):
+    """A loaded SettingsDialog over a fresh FakeSettingsClient, matching this
+    file's existing construction pattern (client -> dialog -> qtbot.addWidget
+    -> wait for the async load to land)."""
+    client = FakeSettingsClient()
+    d = SettingsDialog(client)
+    qtbot.addWidget(d)
+    qtbot.waitUntil(lambda: d.workers_spin.value() == 4, timeout=5000)
+    return d
+
+
+def test_theme_combo_lists_three_options_and_defaults_to_setting(dialog):
+    datas = [dialog.theme_combo.itemData(i) for i in range(dialog.theme_combo.count())]
+    assert datas == ["system", "light", "dark"]
+
+
+def test_theme_change_persists_and_applies(dialog, monkeypatch):
+    from mml_cloud_courier.gui import theme
+    applied = []
+    monkeypatch.setattr(theme, "set_theme_setting", lambda v: applied.append(("set", v)))
+    monkeypatch.setattr(
+        "mml_cloud_courier.gui.settings_dialog.apply_theme_for_setting",
+        lambda v: applied.append(("apply", v)),
+    )
+    dialog.theme_combo.setCurrentIndex(2)   # dark
+    assert ("set", "dark") in applied and ("apply", "dark") in applied
+
+
+def test_build_payload_never_contains_theme(dialog):
+    assert "theme" not in dialog.build_payload()

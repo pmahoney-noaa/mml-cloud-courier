@@ -15,6 +15,17 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("MML Cloud Courier")
     app.setWindowIcon(app_icon())
+
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(app, theme.resolve(theme.theme_setting()))
+
+    def _on_scheme_changed(_scheme):
+        if theme.theme_setting() == "system":
+            theme.apply_theme(app, theme.resolve("system"))
+
+    app.styleHints().colorSchemeChanged.connect(_on_scheme_changed)
+
     if QSystemTrayIcon.isSystemTrayAvailable():
         # Without this, Qt quits as soon as the last *visible* window closes.
         # Closing the main window to the tray, then opening and finishing a
@@ -26,6 +37,8 @@ def main() -> int:
         # the window exits the app as expected.
         app.setQuitOnLastWindowClosed(False)
     window = MainWindow(discover_session())
+    theme.apply_dark_titlebar(window, theme.current().dark)
+    theme.notifier.changed.connect(lambda t: theme.apply_dark_titlebar(window, t.dark))
     window.show()
     code = app.exec()
     window.shutdown()

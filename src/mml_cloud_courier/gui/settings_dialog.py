@@ -7,6 +7,8 @@ and radio buttons. Loads/saves via call_async to keep the Qt loop responsive.
 from __future__ import annotations
 
 from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
     QDialog,
     QFormLayout,
     QGroupBox,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
 )
 
+from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.workers import call_async
 
 MIB = 1024 * 1024
@@ -35,6 +38,13 @@ def policy_fields(text: str | None) -> tuple[int, int, int] | None:
         return None
     single, resumable, min_slice = (int(part) for part in text.split(","))
     return (single // MIB, resumable // MIB, min_slice // MIB)
+
+
+def apply_theme_for_setting(value: str) -> None:
+    """Resolve and apply a theme setting to the running QApplication, if any."""
+    app = QApplication.instance()
+    if app is not None:
+        theme.apply_theme(app, theme.resolve(value))
 
 
 class SettingsDialog(QDialog):
@@ -110,6 +120,15 @@ class SettingsDialog(QDialog):
         form.addRow("Concurrent file transfers:", self.workers_spin)
         form.addRow("Resume interrupted jobs on startup:", self.auto_resume_check)
 
+        self.theme_combo = QComboBox()
+        for label, value in (("System", "system"), ("Light", "light"), ("Dark", "dark")):
+            self.theme_combo.addItem(label, value)
+        self.theme_combo.setCurrentIndex(
+            max(0, ["system", "light", "dark"].index(theme.theme_setting()))
+        )
+        self.theme_combo.currentIndexChanged.connect(self._on_theme_changed)
+        form.addRow("Appearance:", self.theme_combo)
+
         layout = QVBoxLayout(self)
         layout.addLayout(form)
         layout.addWidget(policy_group)
@@ -172,6 +191,12 @@ class SettingsDialog(QDialog):
         """Mark size policy as dirty (user has edited it) unless loading."""
         if not self._loading:
             self._policy_dirty = True
+
+    def _on_theme_changed(self, index: int) -> None:
+        """Theme is a CLIENT preference — applied immediately, never saved to the service."""
+        value = self.theme_combo.itemData(index)
+        theme.set_theme_setting(value)
+        apply_theme_for_setting(value)
 
     def build_payload(self) -> dict:
         """Build the PUT payload for put_settings.
