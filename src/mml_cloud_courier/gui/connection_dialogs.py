@@ -139,6 +139,8 @@ class NewConnectionDialog(QDialog):
         self.page_credential = self._build_page_credential()
         self._stack.addWidget(self.page_where)
         self._stack.addWidget(self.page_credential)
+        self.page_signin = self._build_page_signin()
+        self._stack.addWidget(self.page_signin)
 
         footer = QWidget()
         footer.setObjectName("connFooter")
@@ -392,6 +394,56 @@ class NewConnectionDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    def _build_page_signin(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 30, 20, 15)
+        layout.setSpacing(13)
+        self.signin_spinner = RingSpinner()
+        layout.addWidget(self.signin_spinner,
+                         alignment=Qt.AlignmentFlag.AlignHCenter)
+        waiting = QLabel("Waiting for you to finish signing in")
+        waiting.setObjectName("connCardHeading")
+        waiting.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(waiting)
+        browser_line = QLabel(
+            "A browser window opened. Sign in there and allow access; this"
+            " dialog carries on by itself.")
+        browser_line.setObjectName("connIntro")
+        browser_line.setWordWrap(True)
+        browser_line.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(browser_line)
+        timeout_line = QLabel("gives up after 5 minutes")
+        timeout_line.setObjectName("connFaintMono")
+        timeout_line.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(timeout_line)
+        note_card = QWidget()
+        note_card.setObjectName("connCard")
+        note_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        note_layout = QHBoxLayout(note_card)
+        note_layout.setContentsMargins(15, 13, 15, 13)
+        note_layout.setSpacing(9)
+        note_layout.addWidget(Dot(tone="warn"),
+                              alignment=Qt.AlignmentFlag.AlignTop)
+        self.signin_cancel_note = QLabel(
+            "Nothing is saved yet. After sign-in the service still tests this"
+            " credential against the bucket, and will refuse it if it cannot"
+            " do everything a transfer needs.")
+        self.signin_cancel_note.setObjectName("connBody")
+        self.signin_cancel_note.setWordWrap(True)
+        note_layout.addWidget(self.signin_cancel_note, 1)
+        layout.addWidget(note_card)
+        layout.addStretch(1)
+        return page
+
+    def _fields(self) -> dict:
+        return {
+            "name": self.name_edit.text().strip(),
+            "bucket": self.bucket_edit.text().strip(),
+            "prefix": self.prefix_edit.text().strip(),
+            "project": self.project_edit.text().strip(),
+        }
+
     # -- navigation ------------------------------------------------------
 
     def _target_path(self) -> str:
@@ -480,13 +532,92 @@ class NewConnectionDialog(QDialog):
             top.raise_()
             top.activateWindow()
 
-    # -- credential paths (Task 5) ---------------------------------------
+    # -- service-account key path ----------------------------------------
 
     def _choose_key(self):
-        pass
+        path, _filter = QFileDialog.getOpenFileName(
+            self, "Choose a service account key",
+            filter="OAuth/service-account JSON (*.json)",
+        )
+        if not path:
+            return
+        try:
+            key = load_key_file(path)
+        except ValueError as exc:
+            self.key_error_mono.setText(str(exc))
+            self.key_error_block.show()
+            self.key_button.setText("Choose a different file…")
+            return
+        self.key_error_block.hide()
+        self._key_path = path
+        fields = self._fields()
+        self._start_create(key_profile_payload(
+            name=fields["name"], bucket=fields["bucket"],
+            prefix=fields["prefix"], project=fields["project"], key=key))
+
+    # -- Google sign-in path ----------------------------------------------
 
     def _choose_signin(self):
-        pass
+        source = os.environ.get("MMLCC_OAUTH_CLIENT")
+        if not source:
+            path, _filter = QFileDialog.getOpenFileName(
+                self, "Choose the OAuth client configuration",
+                filter="OAuth client JSON (*.json)",
+            )
+            if not path:
+                return
+            source = path
+        try:
+            config = load_client_config(source)
+        except ValueError as exc:
+            self.signin_error_label.setText(str(exc))
+            self.signin_error_label.show()
+            return
+        self.signin_error_label.hide()
+        self._key_path = None
+        self._phase = "signing-in"
+        self._login_generation += 1
+        generation = self._login_generation
+        self._stack.setCurrentWidget(self.page_signin)
+        self.signin_spinner.start()
+        self.back_button.setEnabled(False)
+        self.next_button.hide()
+        call_async(lambda: run_login(config, timeout_seconds=300), parent=self,
+                   on_done=lambda cred: self._signed_in(cred, generation),
+                   on_failed=lambda msg: self._signin_failed(msg, generation))
+
+    def _signed_in(self, credential, generation: int) -> None:
+        if generation != self._login_generation:
+            return                          # cancelled; discard the late result
+        self.signin_spinner.stop()
+        fields = self._fields()
+        self._start_create(oauth_profile_payload(
+            name=fields["name"], bucket=fields["bucket"],
+            prefix=fields["prefix"], project=fields["project"],
+            credential=credential))
+
+    def _signin_failed(self, message: str, generation: int) -> None:
+        if generation != self._login_generation:
+            return
+        self.signin_spinner.stop()
+        self._go_to_step(2)
+        self.signin_error_label.setText(message)
+        self.signin_error_label.show()
+
+    # -- create (real flow lands in Task 6) -------------------------------
+
+    def _start_create(self, payload: dict) -> None:
+        self._pending_payload = payload
+        self._phase = "validating"
+
+    def reject(self) -> None:
+        # Escape during sign-in must abandon the pending run_login: there is
+        # no server-side cancel hook (flow.run_local_server blocks), so the
+        # generation bump makes the eventual result a no-op and the local
+        # listener times out on its own.
+        self._login_generation += 1
+        self.signin_spinner.stop()
+        super().reject()
 
 
 class ConnectionsDialog(QDialog):

@@ -136,3 +136,100 @@ def test_open_main_window_closes_a_modal_manager_beneath(qtbot):
     stepper.open_main_button.click()
     assert stepper.result() == QDialog.DialogCode.Rejected
     assert manager.result() == QDialog.DialogCode.Rejected
+
+
+def _to_step2(qtbot, dialog, name="n", bucket="b", prefix=""):
+    wait_health(qtbot, dialog)
+    dialog.name_edit.setText(name)
+    dialog.bucket_edit.setText(bucket)
+    if prefix:
+        dialog.prefix_edit.setText(prefix)
+    dialog.next_button.click()
+    assert dialog._step == 2
+
+
+def test_wrong_file_type_stays_on_step2_and_points_at_signin(qtbot, tmp_path, monkeypatch):
+    import json
+    bad = tmp_path / "client_secret_884213.json"
+    bad.write_text(json.dumps({"type": None, "installed": {}}))
+    from PySide6.QtWidgets import QFileDialog
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        staticmethod(lambda *a, **k: (str(bad), "")))
+    dialog = NewConnectionDialog(HealthyClient())
+    qtbot.addWidget(dialog)
+    _to_step2(qtbot, dialog)
+    dialog.key_button.click()
+    assert dialog.key_error_block.isVisibleTo(dialog)
+    assert str(bad) in dialog.key_error_mono.text()          # raw exception, full path
+    assert "OAuth client configuration" in dialog.key_error_plain.text()
+    assert dialog.key_button.text() == "Choose a different file…"
+    assert dialog.key_button.isEnabled()
+    assert dialog.signin_button.isEnabled()                  # the other card stays live
+
+
+def test_good_key_starts_create_with_key_payload(qtbot, tmp_path, monkeypatch):
+    import json
+    good = tmp_path / "key.json"
+    good.write_text(json.dumps({"type": "service_account", "project_id": "p1"}))
+    from PySide6.QtWidgets import QFileDialog
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        staticmethod(lambda *a, **k: (str(good), "")))
+    dialog = NewConnectionDialog(HealthyClient())
+    qtbot.addWidget(dialog)
+    _to_step2(qtbot, dialog, name="MML imagery", bucket="bkt", prefix="2026")
+    dialog.key_button.click()
+    assert dialog._phase == "validating"
+    assert dialog._pending_payload["auth_type"] == "service_account_key"
+    assert dialog._pending_payload["name"] == "MML imagery"
+    assert dialog._key_path == str(good)
+
+
+def test_signin_shows_waiting_page_then_feeds_oauth_payload(qtbot, tmp_path, monkeypatch):
+    import json
+    import threading
+    from mml_cloud_courier.gui import connection_dialogs as mod
+    config = tmp_path / "client.json"
+    config.write_text(json.dumps({"installed": {"client_id": "x"}}))
+    monkeypatch.setenv("MMLCC_OAUTH_CLIENT", str(config))
+    monkeypatch.setattr(mod, "load_client_config", lambda source: {"ok": True})
+    release = threading.Event()
+    monkeypatch.setattr(
+        mod, "run_login",
+        lambda config, timeout_seconds=300: (release.wait(5),
+                                             {"type": "authorized_user"})[1])
+    dialog = NewConnectionDialog(HealthyClient())
+    qtbot.addWidget(dialog)
+    _to_step2(qtbot, dialog)
+    dialog.signin_button.click()
+    assert dialog._phase == "signing-in"
+    assert dialog._stack.currentWidget() is dialog.page_signin
+    assert not dialog.next_button.isVisibleTo(dialog)
+    assert "Nothing is saved yet" in dialog.signin_cancel_note.text()
+    release.set()
+    qtbot.waitUntil(lambda: dialog._phase == "validating", timeout=5000)
+    assert dialog._pending_payload["auth_type"] == "oauth_user"
+
+
+def test_escape_during_signin_discards_the_result(qtbot, tmp_path, monkeypatch):
+    import json
+    import threading
+    from mml_cloud_courier.gui import connection_dialogs as mod
+    config = tmp_path / "client.json"
+    config.write_text(json.dumps({"installed": {"client_id": "x"}}))
+    monkeypatch.setenv("MMLCC_OAUTH_CLIENT", str(config))
+    monkeypatch.setattr(mod, "load_client_config", lambda source: {"ok": True})
+    release = threading.Event()
+    monkeypatch.setattr(
+        mod, "run_login",
+        lambda config, timeout_seconds=300: (release.wait(5),
+                                             {"type": "authorized_user"})[1])
+    dialog = NewConnectionDialog(HealthyClient())
+    qtbot.addWidget(dialog)
+    _to_step2(qtbot, dialog)
+    dialog.signin_button.click()
+    generation = dialog._login_generation
+    dialog.reject()                       # Escape path
+    assert dialog._login_generation == generation + 1
+    release.set()
+    qtbot.wait(100)                       # late result must be discarded
+    assert dialog._phase != "validating"
