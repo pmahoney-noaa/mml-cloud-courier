@@ -156,8 +156,10 @@ QPushButton#segmentButton {{ background: transparent; border: none; border-radiu
                              padding: 6px 12px; }}
 QPushButton#segmentButton:enabled {{ background: {t.surface}; color: {t.ink}; }}
 QPushButton#segmentButton:disabled {{ background: transparent; color: {t.disabled}; }}
-QPushButton#textButton {{ background: transparent; border: none; color: {t.muted}; }}
-QPushButton#textButton:hover {{ color: {t.ink}; }}
+QPushButton#segmentButton:checked {{ background: {t.accent}; color: {t.accent_ink}; }}
+QPushButton#textButton {{ background: transparent; border: none; color: {t.ink};
+                          font-weight: 600; }}
+QPushButton#textButton:hover {{ color: {t.accent_text}; }}
 QWidget#statusPill {{ border-radius: 12px; padding: 0px; background: {t.accent_soft};
                       border: 1px solid {t.accent_edge}; }}
 QWidget#statusPill[pillState="down"] {{ background: {t.danger_soft}; border-color: {t.danger_edge}; }}
@@ -171,6 +173,18 @@ QWidget#serviceBanner QLabel {{ background: transparent; color: {t.danger_text};
 QWidget#serviceBanner QPushButton {{ background: {t.danger}; color: #ffffff; border: none;
                                      padding: 7px 14px; border-radius: 6px; }}
 QLabel#filesHeader {{ color: {t.faint}; background: transparent; }}
+QLabel#headlineRoute {{ color: {t.faint}; background: transparent; }}
+QWidget#surfaceCard {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
+QWidget#statStrip {{ background: {t.line}; border: 1px solid {t.line}; border-radius: 9px; }}
+QWidget#statCell {{ background: {t.surface}; border: none; }}
+QWidget#surfaceCard[tone="danger"] {{ border-left: 3px solid {t.danger}; }}
+QWidget#surfaceCard[tone="warn"] {{ border-left: 3px solid {t.warn}; }}
+QWidget#surfaceCard[tone="accent"] {{ border-left: 3px solid {t.accent_2}; }}
+QLabel#sectionLabel {{ color: {t.faint}; background: transparent; letter-spacing: 1px; }}
+QLabel#tag {{ border-radius: 4px; padding: 4px 7px; font-size: 10.5px; font-weight: 500; }}
+QLabel#tag[tone="danger"] {{ background: {t.danger_soft}; color: {t.danger_text}; }}
+QLabel#tag[tone="warn"] {{ background: {t.warn_soft}; color: {t.warn_text}; }}
+QLabel#tag[tone="accent"] {{ background: {t.accent_soft}; color: {t.accent_text}; }}
 QTabWidget::pane {{ border: none; }}
 QTabBar {{ background: {t.chrome}; }}
 QTabBar::tab {{ background: transparent; color: {t.faint}; padding: 13px 15px 11px;
@@ -180,6 +194,7 @@ QTreeView, QListWidget, QTableView, QTreeWidget {{ background: {t.surface};
     alternate-background-color: {t.bg}; border: 1px solid {t.line}; border-radius: 6px; }}
 QTreeView#railView {{ background: {t.rail}; border: none; border-right: 1px solid {t.line};
                       border-radius: 0; }}
+QTreeView#railView::branch {{ width: 0px; image: none; border-image: none; }}
 QHeaderView::section {{ background: {t.surface}; color: {t.faint}; border: none;
                         border-bottom: 1px solid {t.line}; padding: 9px 8px;
                         font-size: 10.5px; }}
@@ -190,6 +205,8 @@ QLineEdit, QComboBox, QSpinBox {{ background: {t.surface}; color: {t.ink};
     border: 1px solid {t.line}; border-radius: 6px; padding: 5px 8px; }}
 QStatusBar {{ background: {t.chrome}; color: {t.muted}; }}
 QToolTip {{ background: {t.surface}; color: {t.ink}; border: 1px solid {t.line}; }}
+QWidget#firstRunStep {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
+QLabel#stepBadge {{ background: {t.accent_soft}; color: {t.accent_text}; border-radius: 10px; }}
 """
 
 

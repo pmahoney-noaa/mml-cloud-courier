@@ -12,8 +12,6 @@ from mml_cloud_courier.gui.jobs_model import (
     JOB_ID_ROLE, RAIL_GROUPS, SECOND_LINE_ROLE, STALLED_OVERRIDE, STATUS_ROLE,
 )
 
-GROUP_DOT_TOKENS = {"needs_attention": "danger", "running": "accent_2",
-                    "queued": "skip", "completed": "accent"}
 _HEADER_TEXT_TOKENS = {"needs_attention": "danger", "running": "accent_text",
                        "queued": "faint", "completed": "faint"}
 _STATUS_DOT_TOKENS = {"incomplete": "danger", "stalled": "warn", "paused": "warn",
@@ -51,8 +49,16 @@ class RailDelegate(QStyledItemDelegate):
             painter.setFont(font)
             painter.setPen(_color(_HEADER_TEXT_TOKENS[group]))
             label = f"{index.data(Qt.ItemDataRole.DisplayRole).upper()}  {index.model().itemFromIndex(index).rowCount()}"
-            painter.drawText(rect.adjusted(6, 11, -6, -6),
+            text_rect = rect.adjusted(8, 11, -6, -6)
+            painter.drawText(text_rect,
                              Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, label)
+            text_width = painter.fontMetrics().horizontalAdvance(label)
+            line_y = text_rect.top() + text_rect.height() // 2
+            line_left = text_rect.left() + text_width + 8
+            line_right = rect.right() - 8
+            if line_right > line_left:
+                painter.fillRect(QRect(line_left, line_y, line_right - line_left, 1),
+                                 _color("line"))
         else:
             if option.state & QStyle.StateFlag.State_Selected:
                 painter.fillRect(rect, _color("rail_selected"))
@@ -61,7 +67,7 @@ class RailDelegate(QStyledItemDelegate):
             dot = _dot_token(index.data(STATUS_ROLE), index.data(SECOND_LINE_ROLE))
             painter.setBrush(_color(dot))
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(rect.left() + 10, rect.top() + 12, 6, 6)
+            painter.drawEllipse(rect.left() + 8, rect.top() + 12, 6, 6)
             selected = bool(option.state & QStyle.StateFlag.State_Selected)
             painter.setPen(_color("ink" if selected else "muted"))
             name_font = painter.font()
@@ -69,7 +75,7 @@ class RailDelegate(QStyledItemDelegate):
             name_font.setWeight(QFont.Weight(500))
             painter.setFont(name_font)
             metrics = painter.fontMetrics()
-            text_rect = rect.adjusted(25, 8, -8, 0)
+            text_rect = rect.adjusted(22, 8, -8, 0)
             line1 = metrics.elidedText(index.data(Qt.ItemDataRole.DisplayRole),
                                        Qt.TextElideMode.ElideRight, text_rect.width())
             painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, line1)

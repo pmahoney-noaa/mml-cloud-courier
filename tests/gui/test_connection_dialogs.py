@@ -7,8 +7,8 @@ import json
 
 from mml_cloud_courier.gui.connection_dialogs import (
     COPY_CHOOSE_KEY, COPY_CHOOSE_SIGNIN, COPY_DELETE_ORIGINAL,
-    NewConnectionDialog, key_profile_payload, load_key_file,
-    oauth_profile_payload,
+    ConnectionsDialog, NewConnectionDialog, key_profile_payload,
+    load_key_file, oauth_profile_payload,
 )
 
 
@@ -41,6 +41,28 @@ def test_payload_builders_shape_the_api_body(tmp_path):
 class DeadClient:
     def health(self):
         raise ConnectionError("nope")
+
+
+def test_new_connection_dialog_key_button_is_primary(qtbot):
+    # Light-touch consistency pass (item H): the create action a new
+    # connection should default toward gets the shared primaryButton QSS.
+    dialog = NewConnectionDialog(DeadClient())
+    qtbot.addWidget(dialog)
+    assert dialog.key_button.objectName() == "primaryButton"
+    assert dialog.signin_button.objectName() != "primaryButton"
+
+
+def test_connections_dialog_new_button_is_primary(qtbot):
+    class ListingClient:
+        def list_profiles(self):
+            return []
+
+    dialog = ConnectionsDialog(ListingClient())
+    qtbot.addWidget(dialog)
+    assert dialog.new_button.objectName() == "primaryButton"
+    assert dialog.check_button.objectName() != "primaryButton"
+    assert dialog.remove_button.objectName() != "primaryButton"
+    assert dialog.close_button.objectName() != "primaryButton"
 
 
 def test_dialog_disables_credential_paths_until_the_service_answers(qtbot):

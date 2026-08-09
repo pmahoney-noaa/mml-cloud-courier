@@ -14,24 +14,21 @@ from collections.abc import Callable
 from datetime import datetime
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
-    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QListWidget,
-    QProgressBar,
+    QListWidgetItem,
     QPushButton,
     QTableView,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from mml_cloud_courier.gui import theme
-from mml_cloud_courier.gui.errors_model import ErrorGroup
 from mml_cloud_courier.gui.files_model import FileTableModel
 from mml_cloud_courier.gui.format import (
     STATE_LABELS,
@@ -40,27 +37,44 @@ from mml_cloud_courier.gui.format import (
     human_duration,
     human_rate,
 )
-
-_CATEGORY_ROLE = Qt.ItemDataRole.UserRole + 1
-_FILLED_ROLE = Qt.ItemDataRole.UserRole + 2
+from mml_cloud_courier.gui.progress_widgets import (
+    EVENT_ROLE,
+    INFLIGHT_ROLE,
+    STATE_ORDER,
+    EventsDelegate,
+    InflightDelegate,
+    SegmentedBar,
+    StateBarCard,
+    _StackedStateBar,
+    inflight_detail_text,
+)
 
 _RESUME_VISIBLE = frozenset({"paused", "stalled", "incomplete", "cancelled"})
 _REPORT_VISIBLE = frozenset({"complete", "paused", "stalled", "incomplete", "cancelled"})
 
 
-def group_fill_rows(page: list[str], group_count: int) -> list[str]:
-    """Rows to display for a lazily-filled error group.
+def _local_event_time(at: str) -> tuple[str, str | None]:
+    """Parse an ISO 8601 event timestamp and return (HH:MM:SS local display
+    time, YYYY-MM-DD local date). Falls back to the raw string with no date
+    when `at` isn't a parseable ISO timestamp -- malformed or legacy rows
+    must not crash the events list."""
+    try:
+        parsed = datetime.fromisoformat(at)
+    except (ValueError, TypeError):
+        return at, None
+    local = parsed.astimezone()
+    return local.strftime("%H:%M:%S"), local.strftime("%Y-%m-%d")
 
-    ``page`` is a single (already page-size-bounded) fetch of paths; the
-    trailing "...and N more" row is sized from the group's already-known
-    ``group_count`` rather than by fetching every remaining page, so
-    expanding a large group costs exactly one round trip.
-    """
-    rows = list(page)
-    remaining = group_count - len(page)
-    if remaining > 0:
-        rows.append(f"…and {remaining:,} more")
-    return rows
+
+def _date_separator_item(date: str) -> QListWidgetItem:
+    """A non-selectable row marking the start of a new local date in a
+    multi-date events log. EVENT_ROLE's first slot ("at" for a normal row)
+    carries the sentinel "date" so EventsDelegate can branch on it."""
+    display = datetime.strptime(date, "%Y-%m-%d").strftime("%b %d")
+    item = QListWidgetItem(display)
+    item.setData(EVENT_ROLE, ("date", display, ""))
+    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+    return item
 
 
 class ProgressTab(QWidget):
@@ -70,53 +84,128 @@ class ProgressTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        self.headline_label = QLabel("")
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
+        self.headline_name = QLabel("")
+        font = self.headline_name.font()
+        font.setPointSizeF(13.5)
+        font.setWeight(QFont.Weight(600))
+        self.headline_name.setFont(font)
+        self.headline_route = QLabel("")
+        self.headline_route.setObjectName("headlineRoute")
+        self.headline_route.setFont(theme.mono_font(8.5))
+        self.percent_label = QLabel("")
+        self.percent_label.setFont(theme.mono_font(19.5, 600))
+        self.percent_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom)
+
+        name_column = QVBoxLayout()
+        name_column.setSpacing(2)
+        name_column.addWidget(self.headline_name)
+        name_column.addWidget(self.headline_route)
+        headline_row = QHBoxLayout()
+        headline_row.addLayout(name_column, 1)
+        headline_row.addWidget(self.percent_label)
+
+        self.bar = SegmentedBar()
         self.counts_label = QLabel("")
         self.counts_label.setFont(theme.mono_font(9))
-        self.throughput_label = QLabel("")
-        self.throughput_label.setFont(theme.mono_font(9, 500))
+        self.rate_label = QLabel("")
+        self.rate_label.setFont(theme.mono_font(9, 500))
+        self.eta_label = QLabel("")
+        self.eta_label.setFont(theme.mono_font(9))
+        under_bar = QHBoxLayout()
+        under_bar.setSpacing(16)
+        under_bar.addWidget(self.counts_label)
+        under_bar.addStretch(1)
+        under_bar.addWidget(self.rate_label)
+        under_bar.addWidget(self.eta_label)
+
+        self.state_card = StateBarCard()
+
+        self.inflight_title = QLabel("IN PROGRESS")
+        self.inflight_title.setObjectName("sectionLabel")
+        self.inflight_title.setFont(theme.mono_font(8.0))
         self.inflight_list = QListWidget()
         self.inflight_list.setTextElideMode(Qt.TextElideMode.ElideLeft)
         self.inflight_list.setFont(theme.mono_font(8.5))
+        self.inflight_list.setItemDelegate(InflightDelegate(self.inflight_list))
+        inflight_card = QWidget()
+        inflight_card.setObjectName("surfaceCard")
+        inflight_layout = QVBoxLayout(inflight_card)
+        inflight_layout.setContentsMargins(15, 13, 15, 13)
+        inflight_layout.setSpacing(9)
+        inflight_layout.addWidget(self.inflight_title)
+        inflight_layout.addWidget(self.inflight_list, 1)
+
+        self.events_title = QLabel("EVENTS")
+        self.events_title.setObjectName("sectionLabel")
+        self.events_title.setFont(theme.mono_font(8.0))
         self.events_list = QListWidget()
         self.events_list.setTextElideMode(Qt.TextElideMode.ElideLeft)
         self.events_list.setFont(theme.mono_font(8.5))
+        self.events_list.setItemDelegate(EventsDelegate(self.events_list))
+        events_card = QWidget()
+        events_card.setObjectName("surfaceCard")
+        events_layout = QVBoxLayout(events_card)
+        events_layout.setContentsMargins(15, 13, 15, 13)
+        events_layout.setSpacing(9)
+        events_layout.addWidget(self.events_title)
+        events_layout.addWidget(self.events_list, 1)
+
+        cards_row = QHBoxLayout()
+        cards_row.addWidget(inflight_card, 115)
+        cards_row.addWidget(events_card, 100)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.headline_label)
-        layout.addWidget(self.progress_bar)
-        layout.addWidget(self.counts_label)
-        layout.addWidget(self.throughput_label)
-        layout.addWidget(QLabel("In progress:"))
-        layout.addWidget(self.inflight_list, 1)
-        layout.addWidget(QLabel("Events:"))
-        layout.addWidget(self.events_list, 1)
+        layout.setContentsMargins(18, 18, 20, 18)
+        layout.setSpacing(15)
+        layout.addLayout(headline_row)
+        layout.addWidget(self.bar)
+        layout.addLayout(under_bar)
+        layout.addWidget(self.state_card)
+        layout.addLayout(cards_row, 1)
 
         self._events: list[str] = []
+        self._event_tuples: list[tuple[str, str, str]] = []
+        self._event_dates: list[str | None] = []
         self._last_bytes: int | None = None
         self._last_time: float | None = None
         self._rate: float | None = None
+
+        theme.notifier.changed.connect(self._on_theme_repaint)   # bound: auto-disconnects
 
     def reset(self) -> None:
         """Clear per-job state (throughput EWMA, event log) before a new
         job's snapshots start arriving — otherwise a fast switch would
         blend two jobs' byte deltas into one bogus rate."""
         self._events = []
+        self._event_tuples = []
+        self._event_dates = []
         self._last_bytes = None
         self._last_time = None
         self._rate = None
-        self.headline_label.setText("")
+        self.headline_name.setText("")
+        self.headline_route.setText("")
+        self.percent_label.setText("")
         self.counts_label.setText("")
-        self.throughput_label.setText("")
-        self.progress_bar.setValue(0)
+        self.rate_label.setText("")
+        self.eta_label.setText("")
+        self.bar.set_fractions(0.0, 0.0)
+        self.state_card.set_counts({})
+        self.inflight_title.setText("IN PROGRESS")
         self.inflight_list.clear()
         self.events_list.clear()
 
     def update_snapshot(self, snap: dict) -> None:
-        status = snap.get("status", "")
-        self.headline_label.setText(STATUS_LABELS.get(status, status))
+        name = snap.get("name")
+        if name is not None:
+            self.headline_name.setText(name)
+
+        direction = snap.get("direction")
+        source_root = snap.get("source_root")
+        dest_prefix = snap.get("dest_prefix")
+        if direction is not None and source_root is not None and dest_prefix is not None:
+            self.headline_route.setText(
+                f"{direction.title()} · {source_root} → {dest_prefix}"
+            )
 
         progress = snap.get("progress") or {}
         files_total = progress.get("files_total", 0)
@@ -130,18 +219,28 @@ class ProgressTab(QWidget):
             fraction = min(1.0, files_done / files_total)
         else:
             fraction = 0.0
-        self.progress_bar.setValue(int(fraction * 100))
+        self.percent_label.setText(f"{int(fraction * 100)}%")
 
         self.counts_label.setText(
             f"{files_done:,} of {files_total:,} files — "
             f"{human_bytes(bytes_done)} of {human_bytes(bytes_total)}"
         )
 
-        self._update_throughput(bytes_done)
-        self._update_inflight(snap.get("transferring") or [])
+        self._update_throughput(bytes_done, bytes_total)
+
+        transferring = snap.get("transferring") or []
+        inflight_fraction = (
+            sum(e.get("bytes_transferred", 0) for e in transferring) / bytes_total
+            if bytes_total else 0
+        )
+        self.bar.set_fractions(fraction, inflight_fraction)
+
+        self.state_card.set_counts(progress.get("state_counts") or {})
+
+        self._update_inflight(transferring)
         self._append_events(snap.get("events") or [])
 
-    def _update_throughput(self, bytes_done: int) -> None:
+    def _update_throughput(self, bytes_done: int, bytes_total: int) -> None:
         now = time.monotonic()
         if self._last_time is not None:
             delta_t = now - self._last_time
@@ -150,37 +249,63 @@ class ProgressTab(QWidget):
                 self._rate = instant if self._rate is None else (
                     0.7 * self._rate + 0.3 * instant
                 )
-                self.throughput_label.setText(human_rate(max(self._rate, 0.0)))
+                self.rate_label.setText(human_rate(max(self._rate, 0.0)))
         self._last_bytes = bytes_done
         self._last_time = now
 
+        if self._rate and self._rate > 0 and bytes_total and bytes_done <= bytes_total:
+            self.eta_label.setText(human_duration((bytes_total - bytes_done) / self._rate))
+        else:
+            self.eta_label.setText("")
+
     def _update_inflight(self, transferring: list[dict]) -> None:
+        self.inflight_title.setText(f"IN PROGRESS — {len(transferring)} FILES")
         self.inflight_list.clear()
         for entry in transferring:
             relative_path = entry.get("relative_path", "")
-            bytes_transferred = entry.get("bytes_transferred", 0)
-            size_bytes = entry.get("size_bytes", 0)
-            text = (
-                f"{relative_path} — {human_bytes(bytes_transferred)}"
-                f" of {human_bytes(size_bytes)}"
-            )
-            slices_total = entry.get("slices_total", 0)
-            if entry.get("method") == "sliced" and slices_total > 0:
-                slices_done = entry.get("slices_done", 0)
-                current = min(slices_done + 1, slices_total)
-                text += f" (slice {current} of {slices_total}, {slices_done} done)"
-            self.inflight_list.addItem(text)
+            # Display text is an accessible fallback; InflightDelegate paints
+            # the real row from INFLIGHT_ROLE.
+            text = f"{relative_path} — {inflight_detail_text(entry)}"
+            item = QListWidgetItem(text)
+            item.setData(INFLIGHT_ROLE, entry)
+            self.inflight_list.addItem(item)
 
     def _append_events(self, new_events: list[dict]) -> None:
         if not new_events:
             return
         for event in new_events:
-            self._events.append(
-                f"{event.get('at', '')}  {event.get('kind', '')}: {event.get('detail', '')}"
-            )
+            at, kind, detail = event.get("at", ""), event.get("kind", ""), event.get("detail", "")
+            display_time, date = _local_event_time(at)
+            self._events.append(f"{display_time}  {kind}: {detail}")
+            self._event_tuples.append((display_time, kind, detail))
+            self._event_dates.append(date)
         self._events = self._events[-200:]
+        self._event_tuples = self._event_tuples[-200:]
+        self._event_dates = self._event_dates[-200:]
+        self._rebuild_events_list()
+
+    def _rebuild_events_list(self) -> None:
+        # Separators are derived here from the (already 200-capped) real
+        # events -- they are never counted against the cap themselves.
+        # A single-date log (the common case: a job that runs same-day)
+        # gets no separators at all.
+        distinct_dates = {d for d in self._event_dates if d is not None}
+        multi_date = len(distinct_dates) > 1
+        last_date: str | None = None
         self.events_list.clear()
-        self.events_list.addItems(self._events)
+        for text, tup, date in zip(self._events, self._event_tuples, self._event_dates):
+            if multi_date and date is not None and date != last_date:
+                self.events_list.addItem(_date_separator_item(date))
+                last_date = date
+            # Display text is an accessible fallback; EventsDelegate paints
+            # the real row from EVENT_ROLE.
+            item = QListWidgetItem(text)
+            item.setData(EVENT_ROLE, tup)
+            self.events_list.addItem(item)
+
+    def _on_theme_repaint(self, _t) -> None:
+        self.inflight_list.viewport().update()
+        self.events_list.viewport().update()
 
 
 class FilesTab(QWidget):
@@ -208,6 +333,9 @@ class FilesTab(QWidget):
         self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self.table.setTextElideMode(Qt.TextElideMode.ElideLeft)
         self.table.setAlternatingRowColors(True)
+        # The row-number header is dead weight on a virtualized 61,000-row
+        # table -- it was rendering as a blank first column.
+        self.table.verticalHeader().setVisible(False)
 
         self.error_label = QLabel("")
         self.error_label.setWordWrap(True)
@@ -236,6 +364,7 @@ class FilesTab(QWidget):
         header.resizeSection(1, 88)                                      # SIZE
         header.resizeSection(2, 204)   # STATE — hard requirement: "Excluded after
                                        # repeated failures" must render in full
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)   # DETAIL
 
         self.refresh()
@@ -257,6 +386,9 @@ class FilesTab(QWidget):
 
     def _update_header(self) -> None:
         loaded = self._model.rowCount() if self._model is not None else 0
+        if loaded == 0:
+            self.header_label.setText("No files yet")
+            return
         filtered = self.state_combo.currentData() is not None
         if self._total is None or filtered:
             self.header_label.setText(f"showing 1–{loaded:,}")
@@ -272,139 +404,6 @@ class FilesTab(QWidget):
             self.error_label.hide()
 
 
-class ErrorsTab(QWidget):
-    """Errors grouped by cause. Children (file paths) are lazily fetched
-    the first time a group is expanded, so opening the tab never pays for
-    paths the user never looks at."""
-
-    def __init__(self, *, on_retry, on_exclude, on_copy, on_expand=None, parent=None):
-        super().__init__(parent)
-        self._on_retry = on_retry
-        self._on_exclude = on_exclude
-        self._on_copy = on_copy
-        self._on_expand = on_expand
-        self._groups: list[ErrorGroup] = []
-
-        self.tree = QTreeWidget()
-        self.tree.setHeaderHidden(True)
-        self.tree.itemExpanded.connect(self._on_item_expanded)
-        self.tree.currentItemChanged.connect(self._on_current_changed)
-
-        # The taxonomy's suggested action for the selected group — the
-        # spec's "what to do about it" line, shown right above the buttons
-        # that act on it.
-        self.action_label = QLabel("")
-        self.action_label.setWordWrap(True)
-
-        self.retry_button = QPushButton("Retry these files")
-        self.exclude_button = QPushButton("Stop retrying these files")
-        self.copy_button = QPushButton("Copy file list")
-        self.retry_button.clicked.connect(self._retry_clicked)
-        self.exclude_button.clicked.connect(self._exclude_clicked)
-        self.copy_button.clicked.connect(self._copy_clicked)
-
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.retry_button)
-        buttons.addWidget(self.exclude_button)
-        buttons.addWidget(self.copy_button)
-        buttons.addStretch(1)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(self.tree, 1)
-        layout.addWidget(self.action_label)
-        layout.addLayout(buttons)
-
-    def load_groups(self, groups: list[ErrorGroup]) -> None:
-        self._groups = list(groups)
-        self.tree.clear()
-        self.action_label.setText("")
-        for group in self._groups:
-            item = QTreeWidgetItem([group.label])
-            item.setData(0, _CATEGORY_ROLE, group.category)
-            item.setData(0, _FILLED_ROLE, False)
-            item.setToolTip(0, group.action)
-            item.addChild(QTreeWidgetItem(["Loading…"]))   # placeholder for the arrow
-            self.tree.addTopLevelItem(item)
-        if self._groups:
-            # Auto-select the first group: single-cause jobs (the common
-            # case) show their guidance without a click, and the action
-            # buttons have a target immediately.
-            self.tree.setCurrentItem(self.tree.topLevelItem(0))
-
-    def _on_current_changed(self, current, _previous) -> None:
-        item = current
-        while item is not None and item.parent() is not None:
-            item = item.parent()
-        text = ""
-        if item is not None:
-            category = item.data(0, _CATEGORY_ROLE)
-            for group in self._groups:
-                if group.category == category:
-                    text = group.action
-                    break
-        self.action_label.setText(text)
-
-    # -- test/UI hooks ------------------------------------------------
-
-    def group_count(self) -> int:
-        return len(self._groups)
-
-    def group_label(self, i: int) -> str:
-        return self._groups[i].label
-
-    def selected_category(self) -> str | None:
-        item = self.tree.currentItem()
-        if item is None:
-            return None
-        if item.parent() is not None:
-            item = item.parent()
-        return item.data(0, _CATEGORY_ROLE)
-
-    # -- lazy fill ------------------------------------------------------
-
-    def _group_count(self, category: str) -> int:
-        for group in self._groups:
-            if group.category == category:
-                return group.count
-        return 0
-
-    def _on_item_expanded(self, item: QTreeWidgetItem) -> None:
-        if item.parent() is not None or item.data(0, _FILLED_ROLE):
-            return
-        item.setData(0, _FILLED_ROLE, True)
-        category = item.data(0, _CATEGORY_ROLE)
-        try:
-            page = self._on_expand(category) if self._on_expand is not None else []
-            rows = group_fill_rows(page, self._group_count(category))
-        except Exception as exc:
-            # Leave the group re-expandable (clear _FILLED_ROLE) so the user
-            # can retry instead of being stuck at "Loading..." forever.
-            item.setData(0, _FILLED_ROLE, False)
-            item.takeChildren()
-            item.addChild(QTreeWidgetItem([f"Failed to load: {exc}"]))
-            return
-        item.takeChildren()
-        for row in rows:
-            item.addChild(QTreeWidgetItem([row]))
-
-    # -- buttons ----------------------------------------------------------
-
-    def _retry_clicked(self) -> None:
-        category = self.selected_category()
-        if category is not None:
-            self._on_retry(category)
-
-    def _exclude_clicked(self) -> None:
-        category = self.selected_category()
-        if category is not None:
-            self._on_exclude(category)
-
-    def _copy_clicked(self) -> None:
-        category = self.selected_category()
-        if category is not None:
-            self._on_copy(category)
-
-
 class SummaryTab(QWidget):
     """The verdict, the state breakdown, and the two follow-up actions
     that only make sense once a job has stopped moving on its own."""
@@ -414,16 +413,71 @@ class SummaryTab(QWidget):
         self._on_open_report = on_open_report
         self._on_resume = on_resume
         self._last_job: dict | None = None
+        # Cached like _last_job: causes arrive separately (from
+        # MainWindow._render_errors, after the errors groups load) and must
+        # survive a theme replay's update_job(self._last_job) re-render.
+        self._causes_total: int | None = None
+        self._causes_needs_you: int | None = None
 
         self.verdict_label = QLabel("")
-        self.verdict_label.setWordWrap(True)
+        verdict_font = self.verdict_label.font()
+        verdict_font.setPointSizeF(16.5)
+        verdict_font.setWeight(QFont.Weight(600))
+        self.verdict_label.setFont(verdict_font)
+        self.verdict_tag = QLabel("Needs attention")
+        self.verdict_tag.setObjectName("tag")
+        self.verdict_tag.setProperty("tone", "danger")
+        self.verdict_tag.hide()
+        verdict_row = QHBoxLayout()
+        verdict_row.addWidget(self.verdict_label)
+        verdict_row.addWidget(self.verdict_tag)
+        verdict_row.addStretch(1)
 
-        self._counts_form = QFormLayout()
-        counts_widget = QWidget()
-        counts_widget.setLayout(self._counts_form)
+        self.sentence_label = QLabel("")
+        self.sentence_label.setWordWrap(True)
 
-        self.totals_label = QLabel("")
-        self.duration_label = QLabel("")
+        self.stat_values: dict[str, QLabel] = {}
+        strip = QWidget()
+        strip.setObjectName("statStrip")
+        strip_layout = QHBoxLayout(strip)
+        strip_layout.setSpacing(1)
+        strip_layout.setContentsMargins(1, 1, 1, 1)
+        for key, label_text in (("files", "FILES"), ("transferred", "TRANSFERRED"),
+                                ("duration", "DURATION"),
+                                ("did_not_transfer", "DID NOT TRANSFER")):
+            cell = QWidget()
+            cell.setObjectName("statCell")
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(13, 10, 13, 10)
+            title = QLabel(label_text)
+            title.setObjectName("sectionLabel")
+            title.setFont(theme.mono_font(8.0))
+            value = QLabel("")
+            value.setFont(theme.mono_font(14, 600))
+            self.stat_values[key] = value
+            cell_layout.addWidget(title)
+            cell_layout.addWidget(value)
+            strip_layout.addWidget(cell, 1)
+
+        self.state_rows_layout = QVBoxLayout()
+        self.state_rows_layout.setSpacing(6)
+        final_state_title = QLabel("FINAL STATE OF EVERY FILE")
+        final_state_title.setObjectName("sectionLabel")
+        final_state_title.setFont(theme.mono_font(8.0))
+        final_state_card = QWidget()
+        final_state_card.setObjectName("surfaceCard")
+        final_state_layout = QVBoxLayout(final_state_card)
+        final_state_layout.setContentsMargins(15, 13, 15, 13)
+        final_state_layout.setSpacing(9)
+        final_state_layout.addWidget(final_state_title)
+        final_state_layout.addLayout(self.state_rows_layout)
+
+        self.footer_label = QLabel(
+            "Excluded files stay recorded in the ledger. The job keeps the"
+            " Incomplete verdict until they transfer or you stop retrying them."
+        )
+        self.footer_label.setWordWrap(True)
+        self.footer_label.hide()
 
         self.report_button = QPushButton("Open report")
         self.resume_button = QPushButton("Resume remaining")
@@ -432,18 +486,18 @@ class SummaryTab(QWidget):
         self.report_button.hide()
         self.resume_button.hide()
 
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.report_button)
-        buttons.addWidget(self.resume_button)
-        buttons.addStretch(1)
+        footer_row = QHBoxLayout()
+        footer_row.addWidget(self.footer_label, 1)
+        footer_row.addWidget(self.report_button)
+        footer_row.addWidget(self.resume_button)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.verdict_label)
-        layout.addWidget(counts_widget)
-        layout.addWidget(self.totals_label)
-        layout.addWidget(self.duration_label)
-        layout.addLayout(buttons)
+        layout.addLayout(verdict_row)
+        layout.addWidget(self.sentence_label)
+        layout.addWidget(strip)
+        layout.addWidget(final_state_card)
         layout.addStretch(1)
+        layout.addLayout(footer_row)
 
         theme.notifier.changed.connect(self._on_theme_changed)
 
@@ -452,20 +506,77 @@ class SummaryTab(QWidget):
         status = job.get("status", "")
         self.verdict_label.setText(STATUS_LABELS.get(status, status))
         self.verdict_label.setStyleSheet(_verdict_style(status))
+        self.verdict_tag.setVisible(status == "incomplete")
 
-        while self._counts_form.rowCount():
-            self._counts_form.removeRow(0)
         progress = job.get("progress") or {}
-        for state, count in (progress.get("state_counts") or {}).items():
-            self._counts_form.addRow(STATE_LABELS.get(state, state), QLabel(f"{count:,}"))
-
         files_total = progress.get("files_total", 0)
-        bytes_total = progress.get("bytes_total", 0)
-        self.totals_label.setText(f"{files_total:,} files, {human_bytes(bytes_total)} total")
-        self.duration_label.setText(_duration_text(job.get("started_at"), job.get("finished_at")))
+        bytes_done = progress.get("bytes_done", 0)
+        state_counts = progress.get("state_counts") or {}
+        did_not_transfer = state_counts.get("failed", 0) + state_counts.get("quarantined", 0)
+
+        verified = state_counts.get("verified", 0)
+        sentence = f"{verified:,} of {files_total:,} files arrived and verified."
+        if did_not_transfer > 0:
+            sentence += f" {did_not_transfer:,} did not"
+            if self._causes_total is not None and self._causes_needs_you is not None:
+                cause_word = "cause" if self._causes_total == 1 else "causes"
+                sentence += (f", from {self._causes_total} {cause_word}"
+                            f" — {self._causes_needs_you} still need you.")
+        self.sentence_label.setText(sentence)
+
+        self.stat_values["files"].setText(f"{files_total:,}")
+        self.stat_values["transferred"].setText(human_bytes(bytes_done))
+        self.stat_values["duration"].setText(
+            _duration_value(job.get("started_at"), job.get("finished_at"))
+        )
+        self.stat_values["did_not_transfer"].setText(f"{did_not_transfer:,}")
+        self.stat_values["did_not_transfer"].setStyleSheet(
+            f"color: {theme.current().danger};"
+        )
+
+        while self.state_rows_layout.count():
+            item = self.state_rows_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        states = list(STATE_ORDER) + [s for s in state_counts if s not in STATE_ORDER]
+        for state in states:
+            count = state_counts.get(state, 0)
+            if count <= 0:
+                continue
+            row_widget = QWidget()
+            row_layout = QHBoxLayout(row_widget)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(10)
+            label = QLabel(STATE_LABELS.get(state, state))
+            label.setMinimumWidth(200)
+            label.setStyleSheet(f"color: {theme.current().muted};")
+            bar = _StackedStateBar()
+            bar.setFixedHeight(7)
+            bar.set_counts({state: count}, total=files_total)
+            count_label = QLabel(f"{count:,}")
+            count_label.setFont(theme.mono_font(9, 500))
+            count_label.setMinimumWidth(64)
+            count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            row_layout.addWidget(label)
+            row_layout.addWidget(bar, 1)
+            row_layout.addWidget(count_label)
+            self.state_rows_layout.addWidget(row_widget)
+
+        self.footer_label.setVisible(state_counts.get("quarantined", 0) > 0)
 
         self.report_button.setVisible(status in _REPORT_VISIBLE)
         self.resume_button.setVisible(status in _RESUME_VISIBLE)
+
+    def set_causes(self, total: int | None, needs_you: int | None) -> None:
+        """Cause counts for the sentence's trailing clause, pushed
+        separately from job data by MainWindow._render_errors once the
+        errors groups for the current job are known. (None, None) drops
+        the clause -- used on a job switch, before the new job's causes
+        (if any) have loaded, so a previous job's counts never leak in."""
+        self._causes_total = total
+        self._causes_needs_you = needs_you
+        if self._last_job is not None:
+            self.update_job(self._last_job)
 
     def _on_theme_changed(self, _t) -> None:
         if self._last_job is not None:
@@ -483,10 +594,8 @@ def _verdict_style(status: str) -> str:
     return f"padding: 6px; color: {t.muted};"
 
 
-def _duration_text(started: str | None, finished: str | None) -> str:
+def _duration_value(started: str | None, finished: str | None) -> str:
     if started and finished:
         delta = (datetime.fromisoformat(finished) - datetime.fromisoformat(started)).total_seconds()
-        return f"Started {started} — duration {human_duration(delta)}"
-    if started:
-        return f"Started {started}"
+        return human_duration(delta)
     return ""

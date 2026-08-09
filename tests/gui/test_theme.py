@@ -110,8 +110,32 @@ def test_mono_font_prefers_cascadia():
 def test_qss_mentions_every_bound_object_name():
     text = theme.qss(theme.LIGHT)
     for name in ("primaryButton", "segmentWell", "textButton",
-                 "statusPill", "pillDot", "serviceBanner", "filesHeader"):
+                 "statusPill", "pillDot", "serviceBanner", "filesHeader",
+                 "headlineRoute"):
         assert name in text
+
+
+def test_qss_text_button_is_bold_and_ink_colored():
+    # Connections/Settings toolbar buttons need more visual weight than a
+    # faint muted-text link — base color is `ink` at 600 weight, and hover
+    # moves to `accent_text` rather than repeating the base color.
+    text = theme.qss(theme.LIGHT)
+    start = text.index("QPushButton#textButton {")
+    end = text.index("}", start)
+    block = text[start:end]
+    assert "font-weight: 600" in block
+    assert theme.LIGHT.ink in block
+    hover_start = text.index("QPushButton#textButton:hover {")
+    hover_end = text.index("}", hover_start)
+    hover_block = text[hover_start:hover_end]
+    assert theme.LIGHT.accent_text in hover_block
+
+
+def test_qss_segment_button_has_checked_rule():
+    # The direction well's Upload/Download buttons are checkable — without
+    # a :checked rule both render as identical surface chips (both always
+    # enabled), so the only cue to which is selected would be label text.
+    assert "segmentButton:checked" in theme.qss(theme.LIGHT)
 
 
 def test_qcolor_hex_round_trip():

@@ -61,6 +61,37 @@ def test_sync_rail_is_idempotent_and_moves_jobs(qapp):
     assert model.item(RAIL_GROUPS.index("running")).rowCount() == 0
 
 
+def test_sync_rail_returns_true_on_first_and_changed_calls(qapp):
+    model = build_rail_model()
+    assert sync_rail(model, [_job(1, "running")]) is True
+    # a status change (different group) is a change
+    assert sync_rail(model, [_job(1, "complete")]) is True
+
+
+def test_sync_rail_returns_false_and_leaves_items_untouched_on_identical_input(qapp):
+    model = build_rail_model()
+    jobs = [_job(1, "running"), _job(2, "incomplete")]
+    assert sync_rail(model, jobs) is True
+    running_child = model.item(RAIL_GROUPS.index("running")).child(0)
+
+    assert sync_rail(model, jobs) is False
+    # not just equal-looking data -- the identical item object, proving no
+    # removeRows/appendRow churn happened on the no-op path.
+    assert model.item(RAIL_GROUPS.index("running")).child(0) is running_child
+    assert rail_job_ids(model) == [2, 1]
+
+
+def test_sync_rail_returns_true_when_only_service_up_flips(qapp):
+    # A stall/recovery changes every running/scanning row's second line
+    # (STALLED_OVERRIDE) without touching any job field -- service_up must
+    # be part of the signature or this would wrongly look unchanged.
+    model = build_rail_model()
+    jobs = [_job(1, "running")]
+    sync_rail(model, jobs, service_up=True)
+    assert sync_rail(model, jobs, service_up=False) is True
+    assert sync_rail(model, jobs, service_up=False) is False   # now stable
+
+
 def test_rail_row_lines_split_name_and_status():
     from mml_cloud_courier.gui.jobs_model import rail_row_lines
     job = {"id": 121, "name": "IceSeal_Survey_2026_Leg3", "status": "running"}

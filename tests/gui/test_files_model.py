@@ -90,6 +90,58 @@ def test_error_recovery_on_refresh(qapp):
     assert model.last_error is None
 
 
+def test_state_column_has_no_decoration_swatch(qapp):
+    # Wave 2, item 2: the swatch is gone -- state is color-coded via text
+    # only now.
+    model = FileTableModel(RecordingFetcher(_rows(1, state="verified")))
+    model.set_filter()
+    assert model.data(model.index(0, 2), Qt.ItemDataRole.DecorationRole) is None
+
+
+def test_state_column_foreground_is_accent_text_for_verified(qapp):
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    model = FileTableModel(RecordingFetcher(_rows(1, state="verified")))
+    model.set_filter()
+    color = model.data(model.index(0, 2), Qt.ItemDataRole.ForegroundRole)
+    assert color.name() == theme._qcolor(theme.LIGHT.accent_text).name()
+    theme.apply_theme(qapp, theme.LIGHT)   # leave global state clean
+
+
+def test_state_column_foreground_is_danger_text_for_failure_states(qapp):
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    model = FileTableModel(RecordingFetcher(_rows(1, state="quarantined")))
+    model.set_filter()
+    color = model.data(model.index(0, 2), Qt.ItemDataRole.ForegroundRole)
+    assert color.name() == theme._qcolor(theme.LIGHT.danger_text).name()
+
+    model = FileTableModel(RecordingFetcher(_rows(1, state="failed")))
+    model.set_filter()
+    color = model.data(model.index(0, 2), Qt.ItemDataRole.ForegroundRole)
+    assert color.name() == theme._qcolor(theme.LIGHT.danger_text).name()
+
+
+def test_state_column_foreground_falls_back_to_muted_for_unknown_state(qapp):
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    model = FileTableModel(RecordingFetcher(_rows(1, state="bogus_state")))
+    model.set_filter()
+    color = model.data(model.index(0, 2), Qt.ItemDataRole.ForegroundRole)
+    assert color.name() == theme._qcolor(theme.LIGHT.muted).name()
+
+
+def test_files_tab_hides_row_number_header(qtbot):
+    from mml_cloud_courier.gui.job_tabs import FilesTab
+
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    assert not tab.table.verticalHeader().isVisible()
+
+
 def test_path_column_tooltip_is_full_path():
     from PySide6.QtCore import Qt
     model = FileTableModel(lambda **kw: [])

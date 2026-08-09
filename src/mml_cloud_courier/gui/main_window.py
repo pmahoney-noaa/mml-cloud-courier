@@ -8,6 +8,8 @@ refreshes what it touched.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
@@ -18,12 +20,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTabWidget,
     QTreeView,
     QVBoxLayout,
     QWidget,
 )
 
+import mml_cloud_courier
 from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.connection_dialogs import ConnectionsDialog
 from mml_cloud_courier.gui.errors_model import (
@@ -31,7 +35,9 @@ from mml_cloud_courier.gui.errors_model import (
     fetch_group_page,
     fetch_group_paths,
 )
-from mml_cloud_courier.gui.job_tabs import ErrorsTab, FilesTab, ProgressTab, SummaryTab
+from mml_cloud_courier.gui.errors_view import ErrorsTab, needs_you_count
+from mml_cloud_courier.gui.first_run import FirstRunScreen
+from mml_cloud_courier.gui.job_tabs import FilesTab, ProgressTab, SummaryTab
 from mml_cloud_courier.gui.jobs_model import (
     JOB_ID_ROLE,
     RAIL_GROUPS,
@@ -111,7 +117,10 @@ class MainWindow(QMainWindow):
     # -- normal UI --------------------------------------------------------
 
     def _build_full_ui(self) -> None:
+        # _update_action_states (called from _build_toolbar) reads
+        # _no_connections, so it must exist before _build_toolbar() runs.
         self._no_connections = False
+        self.setAcceptDrops(True)
         self.banner = QWidget()
         self.banner.setObjectName("serviceBanner")
         banner_layout = QHBoxLayout(self.banner)
@@ -131,12 +140,21 @@ class MainWindow(QMainWindow):
         self.rail_view.setHeaderHidden(True)
         self.rail_view.setItemDelegate(RailDelegate(self.rail_view))
         self.rail_view.setFixedWidth(262)
+        # The branch column/indentation was the residual left offset the
+        # rule-to-the-right-edge/left-alignment pass (wave 1, items B/C)
+        # couldn't reach -- it's QTreeView chrome, not delegate paint space.
+        # Flattening it means expand/collapse arrows are gone, so clicks on
+        # a group header must toggle expansion themselves (below); the
+        # nonzero count next to each header is the remaining affordance.
+        self.rail_view.setRootIsDecorated(False)
+        self.rail_view.setIndentation(0)
         self.rail_view.expandAll()
         completed_index = self.rail_model.index(RAIL_GROUPS.index("completed"), 0)
         self.rail_view.collapse(completed_index)   # once, at startup only
         self.rail_view.selectionModel().currentChanged.connect(
             self._on_rail_current_changed
         )
+        self.rail_view.clicked.connect(self._on_rail_clicked)
         # theme.notifier is a module-level singleton that outlives this window,
         # so a bound-and-tracked slot (disconnected in shutdown()) is used
         # instead of an anonymous lambda -- Qt won't auto-drop the connection
@@ -170,11 +188,19 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
+        self._first_run = FirstRunScreen(
+            on_add_connection=self._open_connections,
+            on_open_guide=self._open_setup_guide,
+        )
+        self._content_stack = QStackedWidget()
+        self._content_stack.addWidget(splitter)
+        self._content_stack.addWidget(self._first_run)
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.banner)
-        layout.addWidget(splitter)
+        layout.addWidget(self._content_stack)
         self.setCentralWidget(central)
 
         self._build_toolbar()
@@ -240,12 +266,26 @@ class MainWindow(QMainWindow):
     def _update_action_states(self) -> None:
         status = self._selected_status
         up = self._service_up
-        self.new_transfer_button.setEnabled(up)
+        self.new_transfer_button.setEnabled(up and not self._no_connections)
         self.pause_button.setEnabled(up and status in _PAUSABLE)
         self.resume_button.setEnabled(up and status in _RESUMABLE)
         self.cancel_button.setEnabled(up and status in _CANCELLABLE)
 
+    def _update_first_run(self) -> None:
+        show_first_run = self._no_connections and not self._last_jobs
+        self._content_stack.setCurrentWidget(
+            self._first_run if show_first_run else self._content_stack.widget(0)
+        )
+
     # -- rail: selection, sync, reselect -----------------------------
+
+    def _on_rail_clicked(self, index) -> None:
+        # No branch arrows (flattened indentation): a click on a group
+        # header toggles it directly. Job rows keep going through
+        # currentChanged/selection as before -- this only fires for the
+        # no-JOB_ID_ROLE header rows.
+        if index.data(JOB_ID_ROLE) is None:
+            self.rail_view.setExpanded(index, not self.rail_view.isExpanded(index))
 
     def _on_rail_current_changed(self, current, _previous) -> None:
         job_id = current.data(JOB_ID_ROLE)
@@ -259,6 +299,7 @@ class MainWindow(QMainWindow):
 
         self.progress_tab.reset()
         self.errors_tab.load_groups([])
+        self.summary_tab.set_causes(None, None)   # drop the previous job's causes
         self.files_tab.attach(lambda **kw: self.client.files(job_id, **kw))
         self.watcher.start(self.client, job_id)
 
@@ -276,6 +317,57 @@ class MainWindow(QMainWindow):
                     return self.rail_model.indexFromItem(child)
         return None
 
+    def _sync_rail_preserving_expansion(self, jobs: list[dict], *, service_up: bool) -> None:
+        """sync_rail, then restore each group's expand state and only
+        touch the visible selection if a rebuild actually happened.
+
+        QTreeView.setCurrentIndex auto-expands the selection's ancestors
+        to make it visible -- with every job living in Completed, that
+        silently reopened a Completed the user had just collapsed on the
+        very next poll tick, even though nothing about the jobs changed.
+        sync_rail returning False (no-op: same signature as last time)
+        is what lets a real collapse stick; when it DOES rebuild, the
+        expand states captured before the rebuild are reapplied after.
+
+        Two different intents then compete for the same reselect, and
+        they must NOT be treated the same:
+        - `_selected_job_id` (passive): a poll tick just re-affirming the
+          job the user already has open. Re-shown only if its group is
+          still expanded once expansion is restored -- honoring a
+          deliberate collapse of the group holding the selection.
+          `_selected_job_id` keeps tracking the job either way; only the
+          rail's visual current-row is skipped, not the tabs, which stay
+          driven by `_selected_job_id` independently of rail_view's
+          current index.
+        - `_pending_select` (active): the job the user just explicitly
+          submitted via the wizard. That must win over a collapsed group
+          rather than silently vanish -- the group is force-expanded and
+          the job force-selected, same as if the user had clicked it.
+        """
+        expanded_before = {
+            group: self.rail_view.isExpanded(self.rail_model.index(i, 0))
+            for i, group in enumerate(RAIL_GROUPS)
+        }
+        rebuilt = sync_rail(self.rail_model, jobs, service_up=service_up)
+        if not rebuilt:
+            return
+        for i, group in enumerate(RAIL_GROUPS):
+            self.rail_view.setExpanded(self.rail_model.index(i, 0), expanded_before[group])
+
+        pending = self._pending_select
+        target = pending if pending is not None else self._selected_job_id
+        if target is None:
+            return
+        index = self._find_rail_index(target)
+        if index is None:
+            return
+        if pending is not None:
+            self.rail_view.expand(index.parent())
+            self.rail_view.setCurrentIndex(index)
+            self._pending_select = None
+        elif self.rail_view.isExpanded(index.parent()):
+            self.rail_view.setCurrentIndex(index)
+
     def _on_jobs(self, jobs: list[dict]) -> None:
         self._last_jobs = jobs
         self._service_up = True
@@ -285,16 +377,8 @@ class MainWindow(QMainWindow):
         if self._tray is not None:
             self._tray.notify_transitions(self._last_statuses, jobs)
         self._last_statuses = {job["id"]: job["status"] for job in jobs}
-        sync_rail(self.rail_model, jobs, service_up=self._service_up)
-        target = self._pending_select or self._selected_job_id
-        if target is None:
-            return
-        index = self._find_rail_index(target)
-        if index is None:
-            return
-        self.rail_view.setCurrentIndex(index)
-        if self._pending_select is not None:
-            self._pending_select = None
+        self._sync_rail_preserving_expansion(jobs, service_up=self._service_up)
+        self._update_first_run()
 
     def _on_down(self, _message: str) -> None:
         was_up = self._service_up
@@ -308,16 +392,14 @@ class MainWindow(QMainWindow):
         # transition; a repeat failed tick would otherwise clear the user's
         # selection on every miss.
         if was_up:
-            sync_rail(self.rail_model, self._last_jobs, service_up=False)
-            if self._selected_job_id is not None:
-                index = self._find_rail_index(self._selected_job_id)
-                if index is not None:
-                    self.rail_view.setCurrentIndex(index)
+            self._sync_rail_preserving_expansion(self._last_jobs, service_up=False)
 
     def _on_profiles(self, profiles: list) -> None:
         self._no_connections = not profiles
         if self._service_up:
             self.pill.set_state("noconn" if self._no_connections else "ok")
+        self._update_action_states()
+        self._update_first_run()
 
     def _on_start_service(self) -> None:
         if start_service_elevated():
@@ -333,6 +415,31 @@ class MainWindow(QMainWindow):
         if self._tray is not None and self._tray.handle_close(event):
             return
         super().closeEvent(event)
+
+    # -- drop-a-folder-to-start-a-transfer -----------------------------
+
+    def dragEnterEvent(self, event) -> None:
+        # A drop must never open a dead-end wizard: mirrors the same gate
+        # that dims the New transfer button.
+        if not self._service_up or self._no_connections:
+            event.ignore()
+            return
+        urls = event.mimeData().urls()
+        if len(urls) != 1 or not urls[0].isLocalFile():
+            event.ignore()
+            return
+        if not Path(urls[0].toLocalFile()).is_dir():
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:
+        # toLocalFile() yields "/"-separated paths even on Windows; round
+        # -trip through Path so prefill_source lands in native form, same
+        # as anything typed into the source field by hand.
+        path = str(Path(event.mimeData().urls()[0].toLocalFile()))
+        self._open_new_transfer(prefill_source=path)
+        event.acceptProposedAction()
 
     # -- test/UI hooks ------------------------------------------------
 
@@ -370,6 +477,7 @@ class MainWindow(QMainWindow):
         self.progress_tab.update_snapshot(snap)
         self.summary_tab.update_job(job)
         self.files_tab.set_total(job.get("planned_files"))
+        self.errors_tab.set_files_total((job.get("progress") or {}).get("files_total"))
 
     def _render_summary_only(self, job: dict) -> None:
         self._selected_status = job.get("status", self._selected_status)
@@ -377,7 +485,12 @@ class MainWindow(QMainWindow):
         self.summary_tab.update_job(job)
 
     def _render_errors(self, raw: list[dict]) -> None:
-        self.errors_tab.load_groups(build_error_groups(raw))
+        groups = build_error_groups(raw)
+        self.errors_tab.load_groups(groups)
+        if groups:
+            self.summary_tab.set_causes(len(groups), needs_you_count(groups))
+        else:
+            self.summary_tab.set_causes(None, None)
 
     def _refresh_selected_job(self) -> None:
         job_id = self._selected_job_id
@@ -424,8 +537,10 @@ class MainWindow(QMainWindow):
 
     # -- toolbar actions --------------------------------------------------
 
-    def _open_new_transfer(self) -> None:
+    def _open_new_transfer(self, *, prefill_source: str | None = None) -> None:
         wizard = NewTransferWizard(self.client, self)
+        if prefill_source:
+            wizard.set_source(prefill_source)
         wizard.jobSubmitted.connect(self._on_job_submitted)
         wizard.show()
 
@@ -439,6 +554,17 @@ class MainWindow(QMainWindow):
 
     def _open_settings(self) -> None:
         SettingsDialog(self.client, self).exec()
+
+    def _open_setup_guide(self) -> None:
+        guide_path = (
+            Path(mml_cloud_courier.__file__).resolve().parents[2] / "docs" / "gui.md"
+        )
+        if guide_path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(guide_path)))
+        else:
+            QDesktopServices.openUrl(QUrl(
+                "https://github.com/pmahoney-noaa/mml-cloud-courier/blob/master/docs/gui.md"
+            ))
 
     def _run_job_action(self, method) -> None:
         job_id = self._selected_job_id
@@ -467,12 +593,13 @@ class MainWindow(QMainWindow):
     # -- errors tab callbacks -----------------------------------------
 
     def _on_expand_error_group(self, category: str) -> list[str]:
-        # Deliberately bounded to a single page: this runs synchronously on the
-        # Qt thread from the tree-expand slot, so an unbounded multi-page walk
-        # (fetch_group_paths' cap=20000, up to 40 sequential GETs) would jam the
-        # UI. One localhost page is the documented FilesTab trade-off; the
-        # "...and N more" trailer is sized from the group's already-known count
-        # instead (see ErrorsTab._on_item_expanded).
+        # Deliberately bounded to a single page: ErrorsTab.load_groups calls
+        # this once per always-expanded group, synchronously on the Qt
+        # thread, so an unbounded multi-page walk (fetch_group_paths'
+        # cap=20000, up to 40 sequential GETs) would jam the UI. One
+        # localhost page is the documented FilesTab trade-off; the
+        # "...and N more" trailer is sized from the group's already-known
+        # count instead (see errors_view.group_fill_rows).
         job_id = self._selected_job_id
         if job_id is None:
             return []

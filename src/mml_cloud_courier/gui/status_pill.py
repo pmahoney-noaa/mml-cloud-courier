@@ -2,6 +2,7 @@
 always answers whether closing the window is safe."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
 
 PILL_TEXT = {
@@ -15,6 +16,10 @@ class StatusPill(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("statusPill")
+        # Custom QWidget subclasses don't paint QSS backgrounds/borders
+        # unless this attribute is set -- without it the pill is invisible
+        # (transparent) and just shows whatever is behind it.
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.dot = QFrame()
         self.dot.setObjectName("pillDot")
         self.dot.setFixedSize(6, 6)

@@ -11,7 +11,9 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
+from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.format import STATE_LABELS, human_bytes
+from mml_cloud_courier.gui.progress_widgets import STATE_TEXT_TOKENS
 
 PAGE = 500
 
@@ -83,6 +85,10 @@ class FileTableModel(QAbstractTableModel):
             return self._rows[index.row()]["relative_path"]
         if role == Qt.ItemDataRole.TextAlignmentRole and index.column() == 1:
             return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if index.column() == 2 and role == Qt.ItemDataRole.ForegroundRole:
+            state = self._rows[index.row()]["state"]
+            token = STATE_TEXT_TOKENS.get(state, "muted")
+            return theme._qcolor(getattr(theme.current(), token))
         if role != Qt.ItemDataRole.DisplayRole:
             return None
         row = self._rows[index.row()]

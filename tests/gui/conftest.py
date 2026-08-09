@@ -28,3 +28,22 @@ def gui_host(tmp_path, monkeypatch):
     host.wait_ready()
     yield host, config, read_token(config.token_path)
     host.stop()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_wizard_qsettings(tmp_path, monkeypatch):
+    """wizard.py persists the last-used connection through the same
+    QSettings("MML", "Cloud Courier") org/app as theme.py's setting. Every
+    theme.py test that touches its persisted value opts into a tmp-file
+    QSettings per-test; wizard.py's constructor *reads* last_connection on
+    every construction and _submit_done *writes* it on every successful
+    submit, so leaving it opt-in here would mean most wizard tests quietly
+    read from and write to the real Windows registry
+    (HKCU\\Software\\MML\\Cloud Courier). Applying the same isolation
+    autouse, suite-wide for tests/gui, closes that gap; it's a no-op for
+    tests that never touch wizard.py's settings."""
+    from PySide6.QtCore import QSettings
+    from mml_cloud_courier.gui import wizard as wizard_module
+    monkeypatch.setattr(
+        wizard_module, "_qsettings",
+        lambda: QSettings(str(tmp_path / "wizard-qsettings.ini"), QSettings.Format.IniFormat))

@@ -52,6 +52,15 @@ def test_main_window_renders_a_seeded_job(qtbot, gui_host):
     assert "denied" in label.lower()
     assert "1 file" in label
 
+    # MainWindow._render_errors must push the cause counts into the
+    # Summary tab's sentence (set_causes), not just the Errors tab.
+    qtbot.waitUntil(lambda: "cause" in window.summary_tab.sentence_label.text(),
+                    timeout=10_000)
+    assert window.summary_tab.sentence_label.text() == (
+        "0 of 2 files arrived and verified. 1 did not,"
+        " from 1 cause — 1 still need you."
+    )
+
     window.shutdown()
 
 
@@ -107,6 +116,19 @@ def test_on_down_preserves_selection_across_repeated_ticks(qtbot, gui_host):
 
 
 @pytest.mark.gui
+def test_first_run_swap_and_new_transfer_dimming(window):
+    window._no_connections = True
+    window._on_jobs([])                       # no jobs + no connections
+    assert window._content_stack.currentWidget() is window._first_run
+    assert not window.new_transfer_button.isEnabled()
+    assert window.pill.state == "noconn"
+    window._no_connections = False
+    window._on_jobs([{"id": 1, "name": "j", "status": "complete"}])
+    assert window._content_stack.currentWidget() is not window._first_run
+    assert window.new_transfer_button.isEnabled()
+
+
+@pytest.mark.gui
 def test_rail_shows_stalled_override_when_down(qapp):
     # unused; build_rail_model draws QPixmap icons and needs a live QApplication
     from mml_cloud_courier.gui.jobs_model import SECOND_LINE_ROLE, build_rail_model, sync_rail
@@ -117,3 +139,177 @@ def test_rail_shows_stalled_override_when_down(qapp):
     assert running_group.child(0).data(SECOND_LINE_ROLE) == "Stalled — service stopped"
     sync_rail(model, jobs, service_up=True)
     assert model.item(1).child(0).data(SECOND_LINE_ROLE) != "Stalled — service stopped"
+
+
+@pytest.mark.gui
+def test_rail_has_flattened_indentation(window):
+    # Wave 2 item 3: the branch column/indentation was the residual left
+    # offset wave 1's rule/left-alignment pass couldn't reach.
+    assert window.rail_view.indentation() == 0
+    assert window.rail_view.rootIsDecorated() is False
+
+
+@pytest.mark.gui
+def test_rail_click_on_header_toggles_and_job_click_does_not_collapse(window):
+    # No branch arrows once flattened: a header click must toggle expansion
+    # itself, and a job-row click must never collapse anything while still
+    # driving selection through the untouched currentChanged path.
+    # "running" (group index 1) is expanded by the startup expandAll() --
+    # unlike "completed" (index 3), which starts collapsed on purpose.
+    window._on_jobs([{"id": 1, "name": "j", "status": "running"}])
+    header_index = window.rail_model.index(1, 0)   # RAIL_GROUPS[1] == "running"
+    assert window.rail_view.isExpanded(header_index)
+
+    window._on_rail_clicked(header_index)
+    assert not window.rail_view.isExpanded(header_index)
+    window._on_rail_clicked(header_index)
+    assert window.rail_view.isExpanded(header_index)
+
+    job_index = window._find_rail_index(1)
+    assert job_index is not None
+    window.rail_view.setCurrentIndex(job_index)
+    window._on_rail_clicked(job_index)
+    assert window.rail_view.isExpanded(header_index)   # unaffected by the job click
+    assert window.selected_job_id == 1
+
+
+@pytest.mark.gui
+def test_collapsed_completed_group_stays_collapsed_across_identical_polls(window):
+    # The reported bug: every poll tick rebuilt the rail and re-selected
+    # the remembered job, and QTreeView.setCurrentIndex auto-expands the
+    # selection's ancestors -- reopening a Completed the user had just
+    # collapsed, since every live job lives there.
+    from mml_cloud_courier.gui.jobs_model import RAIL_GROUPS, STATUS_ROLE
+
+    jobs = [{"id": 1, "name": "j", "status": "complete"}]
+    window._on_jobs(jobs)
+    completed_index = window.rail_model.index(RAIL_GROUPS.index("completed"), 0)
+
+    job_index = window._find_rail_index(1)
+    window.rail_view.setCurrentIndex(job_index)
+    assert window.selected_job_id == 1
+    window.rail_view.collapse(completed_index)
+    assert not window.rail_view.isExpanded(completed_index)
+
+    # Two more identical poll ticks -- the actual failure mode.
+    window._on_jobs(jobs)
+    window._on_jobs(jobs)
+    assert not window.rail_view.isExpanded(completed_index)
+    assert window.selected_job_id == 1
+
+    # A real change (status flips, same group) must still rebuild the
+    # rows -- but the collapse the user chose is honored afterward.
+    changed_jobs = [{"id": 1, "name": "j", "status": "cancelled"}]
+    window._on_jobs(changed_jobs)
+    rebuilt_index = window._find_rail_index(1)
+    assert rebuilt_index.data(STATUS_ROLE) == "cancelled"   # proves the rebuild happened
+    assert not window.rail_view.isExpanded(completed_index)   # collapse preserved
+    assert window.selected_job_id == 1
+
+
+@pytest.mark.gui
+def test_pending_select_forces_open_a_collapsed_group(window):
+    # _pending_select (a just-submitted job -- an explicit user action)
+    # must win over a passively collapsed group, unlike the passive
+    # _selected_job_id re-affirm path above, which honors the collapse:
+    # "show me what I just explicitly created" beats "don't fight a
+    # passive collapse during polling."
+    from mml_cloud_courier.gui.jobs_model import RAIL_GROUPS
+
+    jobs = [{"id": 1, "name": "j", "status": "complete"}]
+    window._on_jobs(jobs)
+    completed_index = window.rail_model.index(RAIL_GROUPS.index("completed"), 0)
+    window.rail_view.collapse(completed_index)
+    assert not window.rail_view.isExpanded(completed_index)
+
+    window._pending_select = 2
+    new_jobs = [{"id": 1, "name": "j", "status": "complete"},
+               {"id": 2, "name": "new", "status": "complete"}]   # lands in Completed too
+    window._on_jobs(new_jobs)   # signature changed (new job) -> a rebuild happens
+
+    assert window.rail_view.isExpanded(completed_index)   # forced open
+    assert window.selected_job_id == 2
+    assert window._pending_select is None
+
+
+@pytest.mark.gui
+def test_drop_event_opens_prefilled_wizard(window, tmp_path, monkeypatch):
+    opened = {}
+    accepted = {"called": False}
+    monkeypatch.setattr(window, "_open_new_transfer",
+                        lambda prefill_source=None: opened.setdefault("src", prefill_source))
+    from PySide6.QtCore import QMimeData, QUrl
+    from PySide6.QtGui import QDropEvent
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(tmp_path))])
+    event = type("E", (), {
+        "mimeData": lambda self=None: mime,
+        "acceptProposedAction": lambda self=None: accepted.__setitem__("called", True),
+    })()
+    window.dropEvent(event)
+    assert opened["src"] == str(tmp_path)
+    # A drop that successfully opens the wizard must tell Qt/the OS the
+    # drop was handled -- otherwise the source shows the "rejected" cursor
+    # and, on some platforms, animates the dragged item snapping back.
+    assert accepted["called"]
+
+
+class _DragStub:
+    """Duck-typed QDragEnterEvent: dragEnterEvent only ever calls
+    mimeData(), acceptProposedAction(), or ignore() on it, so a real
+    QDragEnterEvent (whose constructor wants a QPoint/actions/buttons/
+    modifiers quadruplet nobody here cares about) buys nothing over a
+    stub that records which of accept/ignore actually fired."""
+
+    def __init__(self, mime):
+        self._mime = mime
+        self.accepted = False
+        self.ignored = False
+
+    def mimeData(self):
+        return self._mime
+
+    def acceptProposedAction(self):
+        self.accepted = True
+
+    def ignore(self):
+        self.ignored = True
+
+
+def _single_dir_mime(tmp_path):
+    from PySide6.QtCore import QMimeData, QUrl
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(tmp_path))])
+    return mime
+
+
+@pytest.mark.gui
+def test_drag_enter_ignored_when_service_down(window, tmp_path):
+    window._service_up = False
+    window._no_connections = False
+    event = _DragStub(_single_dir_mime(tmp_path))
+    window.dragEnterEvent(event)
+    assert event.ignored
+    assert not event.accepted
+
+
+@pytest.mark.gui
+def test_drag_enter_ignored_when_no_connections(window, tmp_path):
+    # A drop must never open a dead-end wizard -- mirrors the dimmed
+    # New transfer button's own gate.
+    window._service_up = True
+    window._no_connections = True
+    event = _DragStub(_single_dir_mime(tmp_path))
+    window.dragEnterEvent(event)
+    assert event.ignored
+    assert not event.accepted
+
+
+@pytest.mark.gui
+def test_drag_enter_accepted_when_up_with_connections(window, tmp_path):
+    window._service_up = True
+    window._no_connections = False
+    event = _DragStub(_single_dir_mime(tmp_path))
+    window.dragEnterEvent(event)
+    assert event.accepted
+    assert not event.ignored
