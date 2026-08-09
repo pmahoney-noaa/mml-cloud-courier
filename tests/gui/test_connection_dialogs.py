@@ -60,8 +60,6 @@ def test_connections_dialog_new_button_is_primary(qtbot):
     dialog = ConnectionsDialog(ListingClient())
     qtbot.addWidget(dialog)
     assert dialog.new_button.objectName() == "primaryButton"
-    assert dialog.check_button.objectName() != "primaryButton"
-    assert dialog.remove_button.objectName() != "primaryButton"
     assert dialog.close_button.objectName() != "primaryButton"
 
 

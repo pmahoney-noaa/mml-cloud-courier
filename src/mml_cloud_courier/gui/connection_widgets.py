@@ -6,9 +6,15 @@ bound-method connection, which Qt drops automatically when the widget dies."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QPainter, QPen
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.format import human_ago, iso_age_days
@@ -353,3 +359,161 @@ class ProbeList(QWidget):
         for circle, detail in zip(self._circles, self._details):
             circle.set_state("passed")
             detail.setText("")
+
+
+class ConnectionCard(QWidget):
+    """One profile as a status card. Client-agnostic: the dialog owns I/O and
+    calls the state methods; the card only renders and emits intent."""
+
+    check_clicked = Signal()
+    remove_confirmed = Signal()
+    show_jobs_clicked = Signal()
+
+    def __init__(self, profile: dict, parent=None):
+        super().__init__(parent)
+        self.profile = profile
+        self.setObjectName("connCard")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+        label, tone = AUTH_PRESENTATION.get(
+            profile.get("auth_type", ""),
+            (str(profile.get("auth_type", "")).upper(), "track"))
+        self.name_label = QLabel(profile["name"])
+        self.name_label.setObjectName("connName")
+        self.pill = Pill(label, tone=tone)
+        target = f"gs://{profile['bucket']}/{profile.get('default_prefix') or ''}"
+        self.target_label = QLabel(target.rstrip("/"))
+        self.target_label.setObjectName("connMono")
+        text, line_tone = last_check_line(profile)
+        self.check_line = QLabel(text)
+        self.check_line.setObjectName(
+            "connWarnLine" if line_tone == "warn" else "connMuted")
+        self.check_line.setWordWrap(True)
+
+        self.check_button = QPushButton("Check now")
+        self.remove_button = QPushButton("Remove")
+        for button in (self.check_button, self.remove_button):
+            button.setAutoDefault(False)
+        self.check_button.clicked.connect(self.check_clicked.emit)
+        self.remove_button.clicked.connect(self._show_confirm)
+
+        info = QVBoxLayout()
+        info.setSpacing(5)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(9)
+        name_row.addWidget(self.name_label)
+        name_row.addWidget(self.pill)
+        name_row.addStretch(1)
+        info.addLayout(name_row)
+        info.addWidget(self.target_label)
+        info.addWidget(self.check_line)
+
+        buttons = QVBoxLayout()
+        buttons.setSpacing(7)
+        buttons.addWidget(self.check_button)
+        buttons.addWidget(self.remove_button)
+        buttons.addStretch(1)
+
+        content = QWidget()
+        content_layout = QHBoxLayout(content)
+        content_layout.setContentsMargins(15, 13, 15, 13)
+        content_layout.setSpacing(11)
+        content_layout.addLayout(info, 1)
+        content_layout.addLayout(buttons)
+
+        # inline confirm / refusal region — never a QMessageBox over a dialog
+        self.region = QWidget()
+        self.region.setObjectName("connDangerRegion")
+        self.region.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        region_layout = QVBoxLayout(self.region)
+        region_layout.setContentsMargins(15, 13, 15, 13)
+        region_layout.setSpacing(9)
+        head_row = QHBoxLayout()
+        head_row.setSpacing(9)
+        head_row.addWidget(Dot(tone="danger"),
+                           alignment=Qt.AlignmentFlag.AlignTop)
+        self.region_text = QLabel("")
+        self.region_text.setObjectName("connDangerLine")
+        self.region_text.setWordWrap(True)
+        head_row.addWidget(self.region_text, 1)
+        region_layout.addLayout(head_row)
+        self.region_body = QLabel("")
+        self.region_body.setObjectName("connDangerLine")
+        self.region_body.setWordWrap(True)
+        region_layout.addWidget(self.region_body)
+        region_buttons = QHBoxLayout()
+        region_buttons.setSpacing(9)
+        self.confirm_button = QPushButton("Remove")
+        self.confirm_button.setObjectName("dangerButton")
+        self.show_jobs_button = QPushButton("")
+        self.show_jobs_button.setObjectName("dangerButton")
+        self.keep_button = QPushButton("Keep it")
+        self.keep_button.setObjectName("dangerOutline")
+        for button in (self.confirm_button, self.show_jobs_button,
+                       self.keep_button):
+            button.setAutoDefault(False)
+        self.confirm_button.clicked.connect(self.remove_confirmed.emit)
+        self.show_jobs_button.clicked.connect(self.show_jobs_clicked.emit)
+        self.keep_button.clicked.connect(self.reset_region)
+        region_buttons.addWidget(self.confirm_button)
+        region_buttons.addWidget(self.show_jobs_button)
+        region_buttons.addWidget(self.keep_button)
+        region_buttons.addStretch(1)
+        region_layout.addLayout(region_buttons)
+        self.region.hide()
+
+        column = QVBoxLayout(self)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(content)
+        column.addWidget(self.region)
+
+    def _show_confirm(self) -> None:
+        self.region_text.setText(
+            f"Remove '{self.profile['name']}'? Its saved credential is deleted"
+            " with it. This cannot be undone.")
+        self.region_body.setText("")
+        self.region_body.hide()
+        self.confirm_button.show()
+        self.show_jobs_button.hide()
+        self.region.show()
+
+    def show_refusal(self, n: int) -> None:
+        self.region_text.setText(
+            f"This connection is used by {n} jobs and cannot be deleted while"
+            " they exist.")
+        self.region_body.setText(
+            "Their reports and bucket paths are read back through it. Delete or"
+            " archive those jobs first, or leave this connection in place and"
+            " stop using it for new transfers.")
+        self.region_body.show()
+        self.confirm_button.hide()
+        self.show_jobs_button.setText(f"Show those {n} jobs")
+        self.show_jobs_button.show()
+        self.region.show()
+
+    def reset_region(self) -> None:
+        self.region.hide()
+
+    def set_checking(self) -> None:
+        self.check_button.setEnabled(False)
+        self.remove_button.setEnabled(False)
+        self.check_line.setObjectName("connMuted")
+        self.check_line.setText("Checking…")
+        repolish(self.check_line)
+
+    def _restore_buttons(self) -> None:
+        self.check_button.setEnabled(True)
+        self.remove_button.setEnabled(True)
+
+    def show_check_summary(self, text: str) -> None:
+        self._restore_buttons()
+        self.check_line.setObjectName("connMuted")
+        self.check_line.setText(f"Checked just now — {text}")
+        repolish(self.check_line)
+
+    def show_error_line(self, text: str) -> None:
+        self._restore_buttons()
+        self.check_line.setObjectName("connDangerLine")
+        self.check_line.setText(text)
+        repolish(self.check_line)
