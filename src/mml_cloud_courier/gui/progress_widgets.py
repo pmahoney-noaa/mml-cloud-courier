@@ -61,10 +61,19 @@ class SegmentedBar(QWidget):
 
 STATE_ORDER = ("verified", "transferred", "transferring", "pending",
                "skipped", "changed", "failed", "quarantined")
+# Bar-fill swatch/segment colors -- these include trough-ish tones ("track",
+# "skip") that read fine as a small filled rectangle but are far too low
+# contrast to use as body text.
 STATE_TOKENS = {"verified": "accent", "transferred": "accent_2",
                 "transferring": "accent_3", "pending": "track",
                 "skipped": "skip", "changed": "warn",
                 "failed": "danger", "quarantined": "danger"}
+# Text-appropriate colors for the same states (Files tab STATE column):
+# always a "_text"/"muted" foreground token, never a trough/fill tone.
+STATE_TEXT_TOKENS = {"verified": "accent_text", "transferred": "accent_2",
+                     "transferring": "accent_2", "pending": "muted",
+                     "skipped": "muted", "changed": "warn_text",
+                     "failed": "danger_text", "quarantined": "danger_text"}
 
 
 class _StackedStateBar(QWidget):

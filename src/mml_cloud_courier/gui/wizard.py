@@ -186,14 +186,15 @@ class NewTransferWizard(QDialog):
 
         self._direction_group.buttonToggled.connect(self._on_direction_toggled)
 
-        # -- connection row: combo + Refresh + New connection… -----------
-        # Stacked-row layout: this and the next three sections were
-        # formerly two side-by-side columns (source | connection+prefix);
-        # each is now its own full-width row, in reading order
-        # connection -> destination prefix -> source folder -> job name.
+        # -- connection: label, then combo alone (full width), then
+        # buttons underneath -----------------------------------------------
+        # A combo sharing one row with two buttons left too little width
+        # to read a profile's name/bucket/prefix -- the combo now gets the
+        # dialog's full width on its own row.
+        self.connection_label = QLabel("Connection:")
         self.profile_combo = QComboBox()
         self.refresh_button = QPushButton("Refresh")
-        self.new_button = QPushButton("New connection…")
+        self.new_button = QPushButton("New connection")
         self.refresh_button.setAutoDefault(False)
         self.new_button.setAutoDefault(False)
         self.refresh_button.clicked.connect(self._refresh)
@@ -205,11 +206,14 @@ class NewTransferWizard(QDialog):
         # auto-select in _loaded must never override it again.
         self.profile_combo.activated.connect(self._on_profile_activated)
 
-        connection_row = QHBoxLayout()
-        connection_row.addWidget(self.profile_combo, 1)
-        connection_row.addWidget(self.refresh_button)
-        connection_row.addWidget(self.new_button)
-        layout.addLayout(connection_row)
+        connection_buttons_row = QHBoxLayout()
+        connection_buttons_row.addWidget(self.refresh_button)
+        connection_buttons_row.addWidget(self.new_button)
+        connection_buttons_row.addStretch(1)
+
+        layout.addWidget(self.connection_label)
+        layout.addWidget(self.profile_combo)
+        layout.addLayout(connection_buttons_row)
 
         # -- destination prefix (in the bucket) ---------------------------
         self.prefix_label = QLabel()
@@ -221,7 +225,7 @@ class NewTransferWizard(QDialog):
         # -- source folder ------------------------------------------------
         self.source_label = QLabel()
         self.source_edit = QLineEdit()
-        self.source_browse = QPushButton("Browse…")
+        self.source_browse = QPushButton("Browse")
         self.source_browse.setAutoDefault(False)
         self.source_browse.clicked.connect(self._browse_source)
         self.mapped_label = QLabel("")

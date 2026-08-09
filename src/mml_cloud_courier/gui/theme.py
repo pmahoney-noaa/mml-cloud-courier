@@ -194,6 +194,7 @@ QTreeView, QListWidget, QTableView, QTreeWidget {{ background: {t.surface};
     alternate-background-color: {t.bg}; border: 1px solid {t.line}; border-radius: 6px; }}
 QTreeView#railView {{ background: {t.rail}; border: none; border-right: 1px solid {t.line};
                       border-radius: 0; }}
+QTreeView#railView::branch {{ width: 0px; image: none; border-image: none; }}
 QHeaderView::section {{ background: {t.surface}; color: {t.faint}; border: none;
                         border-bottom: 1px solid {t.line}; padding: 9px 8px;
                         font-size: 10.5px; }}

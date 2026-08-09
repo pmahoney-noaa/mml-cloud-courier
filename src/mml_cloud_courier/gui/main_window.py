@@ -140,12 +140,21 @@ class MainWindow(QMainWindow):
         self.rail_view.setHeaderHidden(True)
         self.rail_view.setItemDelegate(RailDelegate(self.rail_view))
         self.rail_view.setFixedWidth(262)
+        # The branch column/indentation was the residual left offset the
+        # rule-to-the-right-edge/left-alignment pass (wave 1, items B/C)
+        # couldn't reach -- it's QTreeView chrome, not delegate paint space.
+        # Flattening it means expand/collapse arrows are gone, so clicks on
+        # a group header must toggle expansion themselves (below); the
+        # nonzero count next to each header is the remaining affordance.
+        self.rail_view.setRootIsDecorated(False)
+        self.rail_view.setIndentation(0)
         self.rail_view.expandAll()
         completed_index = self.rail_model.index(RAIL_GROUPS.index("completed"), 0)
         self.rail_view.collapse(completed_index)   # once, at startup only
         self.rail_view.selectionModel().currentChanged.connect(
             self._on_rail_current_changed
         )
+        self.rail_view.clicked.connect(self._on_rail_clicked)
         # theme.notifier is a module-level singleton that outlives this window,
         # so a bound-and-tracked slot (disconnected in shutdown()) is used
         # instead of an anonymous lambda -- Qt won't auto-drop the connection
@@ -269,6 +278,14 @@ class MainWindow(QMainWindow):
         )
 
     # -- rail: selection, sync, reselect -----------------------------
+
+    def _on_rail_clicked(self, index) -> None:
+        # No branch arrows (flattened indentation): a click on a group
+        # header toggles it directly. Job rows keep going through
+        # currentChanged/selection as before -- this only fires for the
+        # no-JOB_ID_ROLE header rows.
+        if index.data(JOB_ID_ROLE) is None:
+            self.rail_view.setExpanded(index, not self.rail_view.isExpanded(index))
 
     def _on_rail_current_changed(self, current, _previous) -> None:
         job_id = current.data(JOB_ID_ROLE)

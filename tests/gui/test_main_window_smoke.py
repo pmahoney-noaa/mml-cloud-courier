@@ -142,6 +142,38 @@ def test_rail_shows_stalled_override_when_down(qapp):
 
 
 @pytest.mark.gui
+def test_rail_has_flattened_indentation(window):
+    # Wave 2 item 3: the branch column/indentation was the residual left
+    # offset wave 1's rule/left-alignment pass couldn't reach.
+    assert window.rail_view.indentation() == 0
+    assert window.rail_view.rootIsDecorated() is False
+
+
+@pytest.mark.gui
+def test_rail_click_on_header_toggles_and_job_click_does_not_collapse(window):
+    # No branch arrows once flattened: a header click must toggle expansion
+    # itself, and a job-row click must never collapse anything while still
+    # driving selection through the untouched currentChanged path.
+    # "running" (group index 1) is expanded by the startup expandAll() --
+    # unlike "completed" (index 3), which starts collapsed on purpose.
+    window._on_jobs([{"id": 1, "name": "j", "status": "running"}])
+    header_index = window.rail_model.index(1, 0)   # RAIL_GROUPS[1] == "running"
+    assert window.rail_view.isExpanded(header_index)
+
+    window._on_rail_clicked(header_index)
+    assert not window.rail_view.isExpanded(header_index)
+    window._on_rail_clicked(header_index)
+    assert window.rail_view.isExpanded(header_index)
+
+    job_index = window._find_rail_index(1)
+    assert job_index is not None
+    window.rail_view.setCurrentIndex(job_index)
+    window._on_rail_clicked(job_index)
+    assert window.rail_view.isExpanded(header_index)   # unaffected by the job click
+    assert window.selected_job_id == 1
+
+
+@pytest.mark.gui
 def test_drop_event_opens_prefilled_wizard(window, tmp_path, monkeypatch):
     opened = {}
     accepted = {"called": False}

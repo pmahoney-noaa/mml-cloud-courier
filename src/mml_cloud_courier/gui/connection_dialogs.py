@@ -119,7 +119,7 @@ class NewConnectionDialog(QDialog):
 
         key_label = QLabel(COPY_CHOOSE_KEY)
         key_label.setWordWrap(True)
-        self.key_button = QPushButton("Choose a key file…")
+        self.key_button = QPushButton("Choose a key file")
         self.key_button.setWhatsThis(COPY_CHOOSE_KEY)
         self.key_button.clicked.connect(self._choose_key)
         # The key path is the one COPY_CHOOSE_KEY itself calls out as
@@ -129,7 +129,7 @@ class NewConnectionDialog(QDialog):
 
         signin_label = QLabel(COPY_CHOOSE_SIGNIN)
         signin_label.setWordWrap(True)
-        self.signin_button = QPushButton("Sign in with Google…")
+        self.signin_button = QPushButton("Sign in with Google")
         self.signin_button.setWhatsThis(COPY_CHOOSE_SIGNIN)
         self.signin_button.clicked.connect(self._choose_signin)
 
@@ -258,9 +258,9 @@ class ConnectionsDialog(QDialog):
         self._profiles: list[dict] = []
 
         self.list_widget = QListWidget()
-        self.new_button = QPushButton("New…")
+        self.new_button = QPushButton("New")
         # The one clear primary action in this dialog: everything else
-        # (Check/Remove) acts on a selection, New… is the only action that
+        # (Check/Remove) acts on a selection, New is the only action that
         # doesn't need one.
         self.new_button.setObjectName("primaryButton")
         self.check_button = QPushButton("Check")
