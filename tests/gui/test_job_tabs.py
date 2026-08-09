@@ -230,6 +230,71 @@ def test_progress_eta_appears_with_rate(qtbot, monkeypatch):
     assert tab.eta_label.text() != ""    # (1000-100)/100 = 9s remaining
 
 
+# -- inflight/events role wiring ------------------------------------------
+
+
+def test_inflight_role_round_trips_through_update_snapshot(qtbot):
+    from mml_cloud_courier.gui.progress_widgets import INFLIGHT_ROLE
+
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    entry = {"relative_path": "a/b.tif", "bytes_transferred": 100, "size_bytes": 1000,
+             "method": "sliced", "slices_total": 8, "slices_done": 4}
+    tab.update_snapshot({
+        "progress": {"files_total": 1, "files_done": 0, "bytes_total": 1000, "bytes_done": 100},
+        "transferring": [entry],
+    })
+    assert tab.inflight_list.count() == 1
+    item = tab.inflight_list.item(0)
+    assert item.data(INFLIGHT_ROLE) == entry
+    assert item.text() != ""   # accessible fallback text kept alongside the role data
+
+
+def test_inflight_title_shows_live_count_and_resets(qtbot):
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    assert tab.inflight_title.text() == "IN PROGRESS"
+
+    entries = [{"relative_path": f"f{i}.bin", "bytes_transferred": 1, "size_bytes": 2,
+                "method": "single_shot", "slices_total": 0} for i in range(3)]
+    tab.update_snapshot({
+        "progress": {"files_total": 3, "files_done": 0, "bytes_total": 6, "bytes_done": 3},
+        "transferring": entries,
+    })
+    assert tab.inflight_title.text() == "IN PROGRESS — 3 FILES"   # U+2014 em-dash
+
+    tab.reset()
+    assert tab.inflight_title.text() == "IN PROGRESS"
+
+
+def test_event_role_round_trips_through_append_events(qtbot):
+    from mml_cloud_courier.gui.progress_widgets import EVENT_ROLE
+
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    tab._append_events([{"at": "12:00:01", "kind": "verified", "detail": "a/b.tif ok"}])
+    assert tab.events_list.count() == 1
+    item = tab.events_list.item(0)
+    assert item.data(EVENT_ROLE) == ("12:00:01", "verified", "a/b.tif ok")
+    assert item.text() != ""   # accessible fallback text kept alongside the role data
+
+
+def test_events_cap_holds_at_200_for_display_text_and_role_data(qtbot):
+    from mml_cloud_courier.gui.progress_widgets import EVENT_ROLE
+
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    events = [{"at": f"t{i}", "kind": "run_started", "detail": ""} for i in range(250)]
+    tab._append_events(events)
+    assert len(tab._events) == 200
+    assert len(tab._event_tuples) == 200
+    assert tab.events_list.count() == 200
+    # oldest 50 dropped: the surviving window starts at t50, for both the
+    # display-text cap and the parallel role-data cap.
+    assert tab._event_tuples[0] == ("t50", "run_started", "")
+    assert tab.events_list.item(0).data(EVENT_ROLE) == ("t50", "run_started", "")
+
+
 # -- _verdict_style token usage -----------------------------------------------
 
 

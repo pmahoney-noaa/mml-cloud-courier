@@ -206,9 +206,10 @@ class InflightDelegate(QStyledItemDelegate):
         detail = inflight_detail_text(entry)
         detail_width = metrics.horizontalAdvance(detail)
         painter.setPen(token_color("ink"))
+        path_width = max(0, rect.width() - detail_width - 12)
         path_text = metrics.elidedText(entry.get("relative_path", ""),
                                        Qt.TextElideMode.ElideLeft,
-                                       rect.width() - detail_width - 12)
+                                       path_width)
         painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, path_text)
         painter.setPen(token_color("faint"))
         painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop, detail)
@@ -242,8 +243,9 @@ class EventsDelegate(QStyledItemDelegate):
         painter.drawText(kind_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          metrics.elidedText(kind, Qt.TextElideMode.ElideRight, self.KIND_COLUMN))
         painter.setPen(token_color("muted"))
+        detail_width = max(0, rect.right() - kind_rect.right() - 8)
         detail_rect = QRect(kind_rect.right() + 8, rect.top(),
-                            rect.right() - kind_rect.right() - 8, rect.height())
+                            detail_width, rect.height())
         painter.drawText(detail_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
                          metrics.elidedText(detail, Qt.TextElideMode.ElideRight, detail_rect.width()))
         painter.restore()

@@ -57,3 +57,84 @@ def test_inflight_detail_text():
     single = {"relative_path": "c.bin", "bytes_transferred": 5, "size_bytes": 10,
               "method": "single_shot", "slices_total": 0}
     assert inflight_detail_text(single) == "5 B of 10 B"
+
+
+# -- delegate paint widths never go negative on a narrow window --------------
+#
+# On a narrow window, the fixed-cost text (byte detail / ISO timestamp) can
+# be wider than the whole row: rect.width() - detail_width - 12 (Inflight)
+# and rect.right() - kind_rect.right() - 8 (Events) then go negative. Qt's
+# elidedText tolerates a negative width by returning "", but relying on that
+# rather than clamping is exactly the kind of thing that breaks silently on
+# a Qt/binding version bump — so both computed widths are clamped to
+# max(0, ...) before being handed to elidedText/QRect. These tests spy on
+# QFontMetrics.elidedText to prove the width argument it receives is never
+# negative, on rects narrow enough that it otherwise would be.
+
+
+def test_inflight_delegate_never_passes_negative_elide_width(qapp, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QFontMetrics, QPainter, QPixmap
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    from mml_cloud_courier.gui.progress_widgets import INFLIGHT_ROLE, InflightDelegate
+
+    seen_widths = []
+    original = QFontMetrics.elidedText
+
+    def spy(self, text, mode, width, *args):
+        seen_widths.append(width)
+        return original(self, text, mode, width, *args)
+
+    monkeypatch.setattr(QFontMetrics, "elidedText", spy)
+
+    class _Index:
+        def data(self, role):
+            if role == INFLIGHT_ROLE:
+                return {"relative_path": "a/very/long/nested/path/to/some/file.tif",
+                        "bytes_transferred": 500_000_000, "size_bytes": 800_000_000,
+                        "method": "sliced", "slices_total": 8, "slices_done": 4}
+            return None
+
+    pixmap = QPixmap(200, 60)
+    painter = QPainter(pixmap)
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 20, 40)   # far narrower than the byte/slice detail text alone
+    InflightDelegate().paint(painter, option, _Index())
+    painter.end()
+
+    assert seen_widths, "elidedText was never called"
+    assert all(w >= 0 for w in seen_widths)
+
+
+def test_events_delegate_never_passes_negative_elide_width(qapp, monkeypatch):
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QFontMetrics, QPainter, QPixmap
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    from mml_cloud_courier.gui.progress_widgets import EVENT_ROLE, EventsDelegate
+
+    seen_widths = []
+    original = QFontMetrics.elidedText
+
+    def spy(self, text, mode, width, *args):
+        seen_widths.append(width)
+        return original(self, text, mode, width, *args)
+
+    monkeypatch.setattr(QFontMetrics, "elidedText", spy)
+
+    class _Index:
+        def data(self, role):
+            if role == EVENT_ROLE:
+                return ("2026-08-08T12:00:00.123456", "verified", "some detail text here")
+            return None
+
+    pixmap = QPixmap(200, 30)
+    painter = QPainter(pixmap)
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 40, 22)   # the ISO timestamp alone eats most of this
+    EventsDelegate().paint(painter, option, _Index())
+    painter.end()
+
+    assert seen_widths, "elidedText was never called"
+    assert all(w >= 0 for w in seen_widths)
