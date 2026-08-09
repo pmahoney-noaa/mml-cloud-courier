@@ -225,6 +225,7 @@ class FilesTab(QWidget):
 
     def attach(self, fetcher: Callable[..., list[dict]]) -> None:
         """Bind a new per-job fetcher and load its first page."""
+        self._total = None   # previous job's total must not bleed into this one
         self._model = FileTableModel(fetcher)
         self.table.setModel(self._model)
         self._model.rowsInserted.connect(self._update_header)

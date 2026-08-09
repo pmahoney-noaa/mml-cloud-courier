@@ -164,6 +164,23 @@ def test_files_header_counts(qtbot):
     assert tab.table.horizontalHeader().sectionSize(2) == 204
 
 
+def test_files_header_total_resets_on_attach(qtbot):
+    """attach() (a job switch) must not carry the previous job's total into
+    the header before the new job's set_total() round trip arrives — the
+    same stale-state failure class ProgressTab.reset() already guards
+    against for throughput/events."""
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    fetcher = lambda **kw: ([{"relative_path": "a", "size_bytes": 1, "state": "verified"}]
+                            if kw.get("offset", 0) == 0 else [])
+    tab.attach(fetcher)
+    tab.set_total(14208)
+    assert "14,208" in tab.header_label.text()
+    tab.attach(fetcher)          # job switch, new total not yet arrived
+    assert "14,208" not in tab.header_label.text()
+    assert tab.header_label.text() == "showing 1–1"
+
+
 def test_files_table_elides_left(qtbot):
     from PySide6.QtCore import Qt
     tab = FilesTab()
