@@ -50,8 +50,11 @@ def build_rail_model() -> QStandardItemModel:
     return model
 
 
-def _job_item(job: dict) -> QStandardItem:
-    label = STATUS_LABELS.get(job["status"], job["status"])
+def _job_item(job: dict, service_up: bool = True) -> QStandardItem:
+    if not service_up and job["status"] in ("running", "scanning"):
+        label = "Stalled — service stopped"
+    else:
+        label = STATUS_LABELS.get(job["status"], job["status"])
     text = f"#{job['id']} {job['name']} — {label}"
     if job["status"] == "pending" and job.get("scheduled_start_at"):
         text += f" — starts {human_schedule(job['scheduled_start_at'])}"
@@ -62,7 +65,7 @@ def _job_item(job: dict) -> QStandardItem:
     return item
 
 
-def sync_rail(model: QStandardItemModel, jobs: list[dict]) -> None:
+def sync_rail(model: QStandardItemModel, jobs: list[dict], service_up: bool = True) -> None:
     buckets: dict[str, list[dict]] = {group: [] for group in RAIL_GROUPS}
     for job in jobs:
         buckets[group_for_status(job["status"])].append(job)
@@ -70,7 +73,7 @@ def sync_rail(model: QStandardItemModel, jobs: list[dict]) -> None:
         parent = model.item(index)
         parent.removeRows(0, parent.rowCount())
         for job in sorted(buckets[group], key=lambda j: j["id"], reverse=True):
-            parent.appendRow(_job_item(job))
+            parent.appendRow(_job_item(job, service_up))
 
 
 def rail_job_ids(model: QStandardItemModel) -> list[int]:

@@ -70,6 +70,7 @@ class MainWindow(QMainWindow):
         self._selected_status: str | None = None
         self._pending_select: int | None = None
         self._last_statuses: dict[int, str] = {}
+        self._last_jobs: list[dict] = []
         self.poller: JobsPoller | None = None
         self.watcher: JobWatcher | None = None
         self.rail_model = None
@@ -107,15 +108,9 @@ class MainWindow(QMainWindow):
     # -- normal UI --------------------------------------------------------
 
     def _build_full_ui(self) -> None:
+        self._no_connections = False
         self.banner = QWidget()
-        # Pin BOTH colors: a background alone inherits the palette's text
-        # color, which is white under Windows dark mode — white on pink.
-        # Scoped so the Start button keeps its native theme colors.
         self.banner.setObjectName("serviceBanner")
-        self.banner.setStyleSheet(
-            "#serviceBanner { background-color: #f2dede; }"
-            " #serviceBanner QLabel { color: #a94442; }"
-        )
         banner_layout = QHBoxLayout(self.banner)
         banner_layout.setContentsMargins(6, 6, 6, 6)
         self.banner_label = QLabel(BANNER_TEXT)
@@ -183,6 +178,8 @@ class MainWindow(QMainWindow):
         self.poller.jobs.connect(self._on_jobs)
         self.poller.down.connect(self._on_down)
         self.poller.start(self.client, interval=self._poll_interval)
+
+        call_async(self.client.list_profiles, parent=self, on_done=self._on_profiles)
 
     def _build_toolbar(self) -> None:
         toolbar = self.addToolBar("Main")
@@ -267,11 +264,15 @@ class MainWindow(QMainWindow):
         return None
 
     def _on_jobs(self, jobs: list[dict]) -> None:
+        self._last_jobs = jobs
+        self._service_up = True
         self.banner.hide()
+        self.pill.set_state("noconn" if self._no_connections else "ok")
+        self._update_action_states()
         if self._tray is not None:
             self._tray.notify_transitions(self._last_statuses, jobs)
         self._last_statuses = {job["id"]: job["status"] for job in jobs}
-        sync_rail(self.rail_model, jobs)
+        sync_rail(self.rail_model, jobs, service_up=self._service_up)
         target = self._pending_select or self._selected_job_id
         if target is None:
             return
@@ -283,7 +284,16 @@ class MainWindow(QMainWindow):
             self._pending_select = None
 
     def _on_down(self, _message: str) -> None:
+        self._service_up = False
+        self.pill.set_state("down")
+        self._update_action_states()
         self.banner.show()
+        sync_rail(self.rail_model, self._last_jobs, service_up=False)
+
+    def _on_profiles(self, profiles: list) -> None:
+        self._no_connections = not profiles
+        if self._service_up:
+            self.pill.set_state("noconn" if self._no_connections else "ok")
 
     def _on_start_service(self) -> None:
         if start_service_elevated():
@@ -395,6 +405,7 @@ class MainWindow(QMainWindow):
 
     def _open_connections(self) -> None:
         ConnectionsDialog(self.client, self).exec()
+        call_async(self.client.list_profiles, parent=self, on_done=self._on_profiles)
 
     def _open_settings(self) -> None:
         SettingsDialog(self.client, self).exec()

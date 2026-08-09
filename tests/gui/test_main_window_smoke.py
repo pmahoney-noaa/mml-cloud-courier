@@ -53,3 +53,42 @@ def test_main_window_renders_a_seeded_job(qtbot, gui_host):
     assert "1 file" in label
 
     window.shutdown()
+
+
+@pytest.fixture
+def window(qtbot, gui_host):
+    win = MainWindow(discover_session(), poll_interval=0.2)
+    qtbot.addWidget(win)
+    yield win
+    win.shutdown()
+
+
+@pytest.mark.gui
+def test_service_down_disables_chrome_and_flips_pill(window):
+    window._on_down("boom")
+    assert window.pill.state == "down"
+    assert not window.new_transfer_button.isEnabled()
+    assert not window.pause_button.isEnabled()
+    assert not window.resume_button.isEnabled()
+    assert not window.cancel_button.isEnabled()
+    assert window.banner.isVisibleTo(window)
+    window._on_jobs([])
+    assert window.pill.state in ("ok", "noconn")
+    assert window.new_transfer_button.isEnabled()
+
+
+@pytest.mark.gui
+def test_banner_carries_no_inline_hex(window):
+    assert window.banner.styleSheet() == ""
+
+
+@pytest.mark.gui
+def test_rail_shows_stalled_override_when_down():
+    from mml_cloud_courier.gui.jobs_model import build_rail_model, sync_rail
+    model = build_rail_model()
+    jobs = [{"id": 7, "name": "leg3", "status": "running"}]
+    sync_rail(model, jobs, service_up=False)
+    running_group = model.item(1)          # RAIL_GROUPS order: needs_attention, running, ...
+    assert "Stalled — service stopped" in running_group.child(0).text()
+    sync_rail(model, jobs, service_up=True)
+    assert "Stalled — service stopped" not in model.item(1).child(0).text()
