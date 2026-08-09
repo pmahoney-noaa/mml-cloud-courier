@@ -14,6 +14,14 @@ class HealthyClient:
     def health(self):
         return {"status": "ok"}
 
+    def create_profile(self, payload):
+        # Never resolves: tests using the bare HealthyClient only assert the
+        # transient "validating" state (payload staged, page switched) and
+        # never wait past it, so this only needs to not return/raise before
+        # they check.
+        import threading
+        threading.Event().wait()
+
 
 class DeadClient:
     def health(self):
@@ -257,3 +265,168 @@ def test_signin_failure_returns_to_step2_with_message(qtbot, tmp_path, monkeypat
     assert "refresh token" in dialog.signin_error_label.text()
     assert dialog._phase == "idle"
     assert dialog._stack.currentWidget() is dialog.page_credential
+
+
+class CreateClient(HealthyClient):
+    """create_profile blocks until released, then returns/raises."""
+
+    def __init__(self):
+        import threading
+        self.release = threading.Event()
+        self.result: dict | Exception = {}
+        self.payloads: list[dict] = []
+
+    def create_profile(self, payload):
+        self.payloads.append(payload)
+        self.release.wait(5)
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def _choose_good_key(qtbot, dialog, tmp_path, monkeypatch,
+                     name="MML imagery", bucket="bkt", prefix="2026"):
+    import json
+    good = tmp_path / "key.json"
+    good.write_text(json.dumps({"type": "service_account", "project_id": "p"}))
+    from PySide6.QtWidgets import QFileDialog
+    monkeypatch.setattr(QFileDialog, "getOpenFileName",
+                        staticmethod(lambda *a, **k: (str(good), "")))
+    _to_step2(qtbot, dialog, name=name, bucket=bucket, prefix=prefix)
+    dialog.key_button.click()
+    return str(good)
+
+
+def test_validating_page_paces_probes_and_shows_target(qtbot, tmp_path, monkeypatch):
+    client = CreateClient()
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    _choose_good_key(qtbot, dialog, tmp_path, monkeypatch)
+    assert dialog._stack.currentWidget() is dialog.page_validating
+    assert dialog.step_rail.current == 3
+    assert dialog.probe_list.states()[0] == "running"
+    assert "gs://bkt/2026" in dialog.validating_target.text()
+    client.result = {"id": 9, "name": "MML imagery", "summary": "s"}
+    client.release.set()
+    qtbot.waitUntil(lambda: dialog._phase == "verified", timeout=5000)
+
+
+def test_verified_key_creation_shows_notice_and_path(qtbot, tmp_path, monkeypatch):
+    from mml_cloud_courier.gui.connection_dialogs import COPY_DELETE_ORIGINAL
+    client = CreateClient()
+    client.result = {
+        "id": 9, "name": "MML imagery",
+        "summary": "This credential can list, read, write, compose and"
+                   " delete to gs://bkt/2026.",
+    }
+    client.release.set()          # create returns immediately
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    created = []
+    dialog.created.connect(created.append)
+    key_path = _choose_good_key(qtbot, dialog, tmp_path, monkeypatch)
+    qtbot.waitUntil(lambda: dialog._phase == "verified", timeout=5000)
+    assert dialog.verified_title.text() == "MML imagery is ready to use"
+    assert "can list, read, write" in dialog.verified_summary.text()
+    assert dialog.verified_notice.isVisibleTo(dialog)
+    assert COPY_DELETE_ORIGINAL in dialog.verified_notice_text.text()
+    assert dialog.verified_key_path.text() == key_path
+    assert dialog.back_button.text() == "Add another"
+    assert dialog.done_button.isVisibleTo(dialog)
+    assert created and created[0]["id"] == 9
+
+
+def test_verified_oauth_creation_hides_the_delete_notice(qtbot, tmp_path, monkeypatch):
+    import json
+    from mml_cloud_courier.gui import connection_dialogs as mod
+    client = CreateClient()
+    client.result = {"id": 3, "name": "PAM", "summary": "s"}
+    client.release.set()
+    config = tmp_path / "client.json"
+    config.write_text(json.dumps({"installed": {}}))
+    monkeypatch.setenv("MMLCC_OAUTH_CLIENT", str(config))
+    monkeypatch.setattr(mod, "load_client_config", lambda source: {})
+    monkeypatch.setattr(mod, "run_login",
+                        lambda config, timeout_seconds=300: {"type": "authorized_user"})
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    _to_step2(qtbot, dialog, name="PAM", bucket="b")
+    dialog.signin_button.click()
+    qtbot.waitUntil(lambda: dialog._phase == "verified", timeout=5000)
+    assert not dialog.verified_notice.isVisibleTo(dialog)
+
+
+def test_preflight_400_shows_failure_with_chips_and_recovery(qtbot, tmp_path, monkeypatch):
+    from mml_cloud_courier.cli.service_client import ServiceError
+    client = CreateClient()
+    client.result = ServiceError(
+        400, "This credential cannot access gs://bkt/2026 at all.")
+    client.release.set()
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    _choose_good_key(qtbot, dialog, tmp_path, monkeypatch)
+    qtbot.waitUntil(lambda: dialog._phase == "failed", timeout=5000)
+    assert "cannot access gs://bkt/2026" in dialog.failed_summary.text()
+    assert dialog.failed_chips_host.isVisibleTo(dialog)
+    assert dialog.retry_button.isVisibleTo(dialog)
+    # Try another credential returns to step 2 with fields intact
+    dialog.retry_button.click()
+    assert dialog._step == 2
+    assert dialog.name_edit.text() == "MML imagery"
+
+
+def test_before_bucket_rejection_hides_chips(qtbot, tmp_path, monkeypatch):
+    from mml_cloud_courier.cli.service_client import ServiceError
+    client = CreateClient()
+    client.result = ServiceError(
+        400, "credential rejected before reaching the bucket: bad key")
+    client.release.set()
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    _choose_good_key(qtbot, dialog, tmp_path, monkeypatch)
+    qtbot.waitUntil(lambda: dialog._phase == "failed", timeout=5000)
+    assert not dialog.failed_chips_host.isVisibleTo(dialog)
+    assert "before reaching the bucket" in dialog.failed_summary.text()
+
+
+def test_duplicate_name_routes_to_step1_name_field(qtbot, tmp_path, monkeypatch):
+    from mml_cloud_courier.cli.service_client import ServiceError
+    client = CreateClient()
+    client.result = ServiceError(409, "a profile named 'MML imagery' already exists")
+    client.release.set()
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    _choose_good_key(qtbot, dialog, tmp_path, monkeypatch)
+    qtbot.waitUntil(lambda: dialog._step == 1, timeout=5000)
+    assert dialog.name_error.isVisibleTo(dialog)
+    assert "already exists" in dialog.name_error.text()
+    assert dialog.name_edit.text() == "MML imagery"     # fields survive
+
+
+def test_add_another_resets_to_pristine_step1(qtbot, tmp_path, monkeypatch):
+    client = CreateClient()
+    client.result = {"id": 9, "name": "MML imagery", "summary": "s"}
+    client.release.set()
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    _choose_good_key(qtbot, dialog, tmp_path, monkeypatch)
+    qtbot.waitUntil(lambda: dialog._phase == "verified", timeout=5000)
+    dialog.back_button.click()          # "Add another"
+    assert dialog._step == 1
+    assert dialog.name_edit.text() == ""
+    assert dialog.bucket_edit.text() == ""
+    assert dialog._phase == "idle"
+
+
+def test_check_the_bucket_name_returns_to_step1_bucket_focused(qtbot, tmp_path, monkeypatch):
+    from mml_cloud_courier.cli.service_client import ServiceError
+    client = CreateClient()
+    client.result = ServiceError(
+        400, "This credential cannot access gs://bkt/2026 at all.")
+    client.release.set()
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    _choose_good_key(qtbot, dialog, tmp_path, monkeypatch)
+    qtbot.waitUntil(lambda: dialog._phase == "failed", timeout=5000)
+    dialog.check_bucket_button.click()
+    assert dialog._step == 1

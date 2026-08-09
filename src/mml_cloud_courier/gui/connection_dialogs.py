@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 from mml_cloud_courier.auth.oauth_flow import load_client_config, run_login
 from mml_cloud_courier.gui.connection_widgets import (
     ConnectionCard, Dot, Pill, ProbeList, RingSpinner, SectionLabel,
-    StepRail, repolish,
+    StepRail, _BigCircle, repolish,
 )
 from mml_cloud_courier.gui.format import split_service_error
 from mml_cloud_courier.gui.workers import call_async
@@ -141,6 +141,11 @@ class NewConnectionDialog(QDialog):
         self._stack.addWidget(self.page_credential)
         self.page_signin = self._build_page_signin()
         self._stack.addWidget(self.page_signin)
+        self.page_validating = self._build_page_validating()
+        self.page_verified = self._build_page_verified()
+        self.page_failed = self._build_page_failed()
+        for page in (self.page_validating, self.page_verified, self.page_failed):
+            self._stack.addWidget(page)
 
         footer = QWidget()
         footer.setObjectName("connFooter")
@@ -157,10 +162,20 @@ class NewConnectionDialog(QDialog):
         self.next_button = QPushButton("Next: credential")
         self.next_button.setObjectName("primaryButton")
         self.next_button.clicked.connect(lambda: self._go_to_step(2))
+        self.done_button = QPushButton("Done")
+        self.done_button.setObjectName("primaryButton")
+        self.done_button.clicked.connect(self.accept)
+        self.retry_button = QPushButton("Try another credential")
+        self.retry_button.setObjectName("primaryButton")
+        self.retry_button.clicked.connect(lambda: self._go_to_step(2))
+        self.done_button.hide()
+        self.retry_button.hide()
         footer_layout.addWidget(self.back_button)
         footer_layout.addStretch(1)
         footer_layout.addWidget(self.cancel_button)
         footer_layout.addWidget(self.next_button)
+        footer_layout.addWidget(self.done_button)
+        footer_layout.addWidget(self.retry_button)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -436,6 +451,162 @@ class NewConnectionDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    def _build_page_validating(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(11)
+        title = QLabel("Testing this credential against the bucket")
+        title.setObjectName("connCardHeading")
+        layout.addWidget(title)
+        explainer = QLabel(
+            "The service writes a small object, composes it, reads it back"
+            " and deletes it. An upload needs all five; finding a gap now"
+            " beats finding it overnight.")
+        explainer.setObjectName("connIntro")
+        explainer.setWordWrap(True)
+        layout.addWidget(explainer)
+        self.probe_list = ProbeList()
+        layout.addWidget(self.probe_list)
+        self.validating_target = QLabel("")
+        self.validating_target.setObjectName("connFaintMono")
+        layout.addWidget(self.validating_target)
+        layout.addStretch(1)
+        return page
+
+    def _build_page_verified(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(11)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(11)
+        self._verified_circle = _BigCircle(kind="check")
+        title_row.addWidget(self._verified_circle)
+        self.verified_title = QLabel("")
+        self.verified_title.setObjectName("connTitle")
+        title_row.addWidget(self.verified_title, 1)
+        layout.addLayout(title_row)
+        found_card = QWidget()
+        found_card.setObjectName("connCard")
+        found_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        found_layout = QVBoxLayout(found_card)
+        found_layout.setContentsMargins(17, 15, 17, 15)
+        found_layout.setSpacing(9)
+        found_layout.addWidget(SectionLabel("What the service found"))
+        self.verified_summary = QLabel("")
+        self.verified_summary.setObjectName("connBody")
+        self.verified_summary.setWordWrap(True)
+        found_layout.addWidget(self.verified_summary)
+        chips_row = QHBoxLayout()
+        chips_row.setSpacing(7)
+        for capability in ("list", "read", "write", "compose", "delete"):
+            chip = QLabel(capability)
+            chip.setObjectName("connChip")
+            chips_row.addWidget(chip)
+        chips_row.addStretch(1)
+        found_layout.addLayout(chips_row)
+        layout.addWidget(found_card)
+        self.verified_notice = QWidget()
+        self.verified_notice.setObjectName("connNotice")
+        self.verified_notice.setProperty("tone", "accent")
+        self.verified_notice.setAttribute(
+            Qt.WidgetAttribute.WA_StyledBackground, True)
+        notice_layout = QHBoxLayout(self.verified_notice)
+        notice_layout.setContentsMargins(15, 13, 15, 13)
+        notice_layout.setSpacing(9)
+        notice_layout.addWidget(Dot(tone="accent"),
+                                alignment=Qt.AlignmentFlag.AlignTop)
+        self.verified_notice_text = QLabel(COPY_DELETE_ORIGINAL)
+        self.verified_notice_text.setObjectName("connNoticeText")
+        self.verified_notice_text.setProperty("tone", "accent")
+        self.verified_notice_text.setWordWrap(True)
+        notice_layout.addWidget(self.verified_notice_text, 1)
+        layout.addWidget(self.verified_notice)
+        self.verified_key_path = QLabel("")
+        self.verified_key_path.setObjectName("connFaintMono")
+        self.verified_key_path.setWordWrap(True)
+        layout.addWidget(self.verified_key_path)
+        layout.addStretch(1)
+        return page
+
+    def _build_page_failed(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(11)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(11)
+        title_row.addWidget(_BigCircle(kind="bang"))
+        failed_title = QLabel("This credential cannot reach that bucket")
+        failed_title.setObjectName("connTitle")
+        title_row.addWidget(failed_title, 1)
+        layout.addLayout(title_row)
+        found_card = QWidget()
+        found_card.setObjectName("connCard")
+        found_card.setProperty("edge", "danger")
+        found_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        found_layout = QVBoxLayout(found_card)
+        found_layout.setContentsMargins(17, 15, 17, 15)
+        found_layout.setSpacing(9)
+        found_layout.addWidget(SectionLabel("What the service found"))
+        self.failed_summary = QLabel("")
+        self.failed_summary.setObjectName("connBody")
+        self.failed_summary.setWordWrap(True)
+        found_layout.addWidget(self.failed_summary)
+        self.failed_chips_host = QWidget()
+        chips_row = QHBoxLayout(self.failed_chips_host)
+        chips_row.setContentsMargins(0, 0, 0, 0)
+        chips_row.setSpacing(7)
+        for capability in ("list", "read", "write", "compose", "delete"):
+            chip = QLabel(f"✕ {capability}")
+            chip.setObjectName("connChip")
+            chip.setProperty("tone", "danger")
+            chips_row.addWidget(chip)
+        chips_row.addStretch(1)
+        found_layout.addWidget(self.failed_chips_host)
+        layout.addWidget(found_card)
+        recovery_card = QWidget()
+        recovery_card.setObjectName("connCard")
+        recovery_card.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        recovery_layout = QVBoxLayout(recovery_card)
+        recovery_layout.setContentsMargins(17, 15, 17, 15)
+        recovery_layout.setSpacing(9)
+        recovery_a = QLabel(
+            "The key is valid, but it has no access to this bucket. Either"
+            " the bucket name is wrong, or nobody has granted this service"
+            " account object access to it. Nothing was saved.")
+        recovery_b = QLabel(
+            "Send your administrator the line above and ask for object access"
+            " to this one bucket, nothing more.")
+        for label in (recovery_a, recovery_b):
+            label.setObjectName("connBody")
+            label.setWordWrap(True)
+            recovery_layout.addWidget(label)
+        recovery_buttons = QHBoxLayout()
+        recovery_buttons.setSpacing(9)
+        self.copy_summary_button = QPushButton("Copy this summary")
+        self.copy_summary_button.clicked.connect(self._copy_summary)
+        self.check_bucket_button = QPushButton("Check the bucket name")
+        self.check_bucket_button.clicked.connect(self._check_bucket_name)
+        for button in (self.copy_summary_button, self.check_bucket_button):
+            button.setAutoDefault(False)
+        recovery_buttons.addWidget(self.copy_summary_button)
+        recovery_buttons.addWidget(self.check_bucket_button)
+        recovery_buttons.addStretch(1)
+        recovery_layout.addLayout(recovery_buttons)
+        layout.addWidget(recovery_card)
+        layout.addStretch(1)
+        return page
+
+    def _copy_summary(self) -> None:
+        from PySide6.QtGui import QGuiApplication
+        QGuiApplication.clipboard().setText(self.failed_summary.text())
+
+    def _check_bucket_name(self) -> None:
+        self._go_to_step(1)
+        self.bucket_edit.setFocus()
+
     def _fields(self) -> dict:
         return {
             "name": self.name_edit.text().strip(),
@@ -460,6 +631,8 @@ class NewConnectionDialog(QDialog):
             self.back_button.setText("Back")
             self.next_button.show()
             self.next_button.setDefault(True)
+            self.done_button.hide()
+            self.retry_button.hide()
             self._update_next()
             self.name_edit.setFocus()
         elif step == 2:
@@ -469,6 +642,8 @@ class NewConnectionDialog(QDialog):
             self.back_button.setEnabled(True)
             self.back_button.setText("Back")
             self.next_button.hide()      # step 2 has no footer primary
+            self.done_button.hide()
+            self.retry_button.hide()
             self.either_way_label.setText(
                 "Either way, the service tests the credential against"
                 f" {self._target_path()} before it saves anything.")
@@ -604,11 +779,85 @@ class NewConnectionDialog(QDialog):
         self.signin_error_label.setText(message)
         self.signin_error_label.show()
 
-    # -- create (real flow lands in Task 6) -------------------------------
+    # -- the one create call: pending / 200 / 400 -------------------------
 
     def _start_create(self, payload: dict) -> None:
         self._pending_payload = payload
         self._phase = "validating"
+        self._step = 3
+        self.step_rail.set_current(3)
+        self._stack.setCurrentWidget(self.page_validating)
+        self.validating_target.setText(self._target_path())
+        self.back_button.setEnabled(False)
+        self.next_button.hide()
+        self.done_button.hide()
+        self.retry_button.hide()
+        self.probe_list.start()
+        call_async(lambda: self.client.create_profile(payload), parent=self,
+                   on_done=self._profile_created, on_failed=self._flow_failed)
+
+    def _profile_created(self, result) -> None:
+        self.probe_list.finish_all()
+        self._phase = "verified"
+        self.verified_title.setText(f"{result.get('name', '')} is ready to use")
+        self.verified_summary.setText(result.get("summary", ""))
+        is_key = self._key_path is not None
+        self.verified_notice.setVisible(is_key)
+        self.verified_key_path.setVisible(is_key)
+        self.verified_key_path.setText(self._key_path or "")
+        self._stack.setCurrentWidget(self.page_verified)
+        self.back_button.setEnabled(True)
+        self.back_button.setText("Add another")
+        try:
+            self.back_button.clicked.disconnect(self._on_back)
+        except RuntimeError:
+            pass
+        self.back_button.clicked.connect(self._add_another)
+        self.done_button.show()
+        self.done_button.setDefault(True)
+        self.created.emit(result)
+
+    def _add_another(self) -> None:
+        try:
+            self.back_button.clicked.disconnect(self._add_another)
+        except RuntimeError:
+            pass
+        self.back_button.clicked.connect(self._on_back)
+        self._credential = None
+        self._key_path = None
+        self._phase = "idle"
+        self.probe_list.reset()
+        for edit in (self.name_edit, self.bucket_edit, self.prefix_edit,
+                     self.project_edit):
+            edit.clear()
+        self.key_button.setText("Choose a key file…")
+        self.key_error_block.hide()
+        self.done_button.hide()
+        self._go_to_step(1)
+
+    def _flow_failed(self, message: str) -> None:
+        self.probe_list.stop()
+        code, detail = split_service_error(message)
+        if code == 409 and "already exists" in detail:
+            self._phase = "idle"
+            self._go_to_step(1)
+            self.name_error.setText(detail)
+            self.name_error.show()
+            self.name_edit.setFocus()
+            return
+        self._phase = "failed"
+        self._step = 3
+        self.step_rail.set_current(3)
+        self.failed_summary.setText(detail)
+        before_bucket = detail.startswith(
+            "credential rejected before reaching the bucket")
+        self.failed_chips_host.setVisible(code == 400 and not before_bucket)
+        self._stack.setCurrentWidget(self.page_failed)
+        self.back_button.setEnabled(False)
+        self.next_button.hide()
+        self.done_button.hide()
+        self.retry_button.show()
+        self.retry_button.setDefault(True)
 
     def reject(self) -> None:
         # Escape during sign-in must abandon the pending run_login: there is

@@ -361,6 +361,35 @@ class ProbeList(QWidget):
             detail.setText("")
 
 
+class _BigCircle(QWidget):
+    """24px filled circle: accent+check for verified, danger+'!' for failed."""
+
+    def __init__(self, kind: str = "check", parent=None):
+        super().__init__(parent)
+        self.kind = kind
+        self.setFixedSize(24, 24)
+        theme.notifier.changed.connect(self._on_theme_changed)
+
+    def _on_theme_changed(self, _t) -> None:
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        t = theme.current()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        tone = t.accent if self.kind == "check" else t.danger
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(theme._qcolor(tone))
+        painter.drawEllipse(0, 0, 24, 24)
+        painter.setPen(QPen(theme._qcolor(t.accent_ink), 2))
+        if self.kind == "check":
+            painter.drawLine(6, 12, 10, 16)
+            painter.drawLine(10, 16, 18, 8)
+        else:
+            painter.drawLine(12, 6, 12, 14)
+            painter.drawLine(12, 17, 12, 19)
+
+
 class ConnectionCard(QWidget):
     """One profile as a status card. Client-agnostic: the dialog owns I/O and
     calls the state methods; the card only renders and emits intent."""
