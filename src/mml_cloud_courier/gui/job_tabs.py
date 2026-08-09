@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QTableView,
     QTreeWidget,
@@ -40,7 +41,15 @@ from mml_cloud_courier.gui.format import (
     human_duration,
     human_rate,
 )
-from mml_cloud_courier.gui.progress_widgets import SegmentedBar, StateBarCard
+from mml_cloud_courier.gui.progress_widgets import (
+    EVENT_ROLE,
+    INFLIGHT_ROLE,
+    EventsDelegate,
+    InflightDelegate,
+    SegmentedBar,
+    StateBarCard,
+    inflight_detail_text,
+)
 
 _CATEGORY_ROLE = Qt.ItemDataRole.UserRole + 1
 _FILLED_ROLE = Qt.ItemDataRole.UserRole + 2
@@ -107,12 +116,40 @@ class ProgressTab(QWidget):
         self.state_card = StateBarCard()
 
         self.headline_label = self.headline_name   # back-compat alias; remove in Task 9
+
+        self.inflight_title = QLabel("IN PROGRESS")
+        self.inflight_title.setObjectName("sectionLabel")
+        self.inflight_title.setFont(theme.mono_font(8.0))
         self.inflight_list = QListWidget()
         self.inflight_list.setTextElideMode(Qt.TextElideMode.ElideLeft)
         self.inflight_list.setFont(theme.mono_font(8.5))
+        self.inflight_list.setItemDelegate(InflightDelegate(self.inflight_list))
+        inflight_card = QWidget()
+        inflight_card.setObjectName("surfaceCard")
+        inflight_layout = QVBoxLayout(inflight_card)
+        inflight_layout.setContentsMargins(15, 13, 15, 13)
+        inflight_layout.setSpacing(9)
+        inflight_layout.addWidget(self.inflight_title)
+        inflight_layout.addWidget(self.inflight_list, 1)
+
+        self.events_title = QLabel("EVENTS")
+        self.events_title.setObjectName("sectionLabel")
+        self.events_title.setFont(theme.mono_font(8.0))
         self.events_list = QListWidget()
         self.events_list.setTextElideMode(Qt.TextElideMode.ElideLeft)
         self.events_list.setFont(theme.mono_font(8.5))
+        self.events_list.setItemDelegate(EventsDelegate(self.events_list))
+        events_card = QWidget()
+        events_card.setObjectName("surfaceCard")
+        events_layout = QVBoxLayout(events_card)
+        events_layout.setContentsMargins(15, 13, 15, 13)
+        events_layout.setSpacing(9)
+        events_layout.addWidget(self.events_title)
+        events_layout.addWidget(self.events_list, 1)
+
+        cards_row = QHBoxLayout()
+        cards_row.addWidget(inflight_card, 115)
+        cards_row.addWidget(events_card, 100)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 20, 18)
@@ -121,21 +158,22 @@ class ProgressTab(QWidget):
         layout.addWidget(self.bar)
         layout.addLayout(under_bar)
         layout.addWidget(self.state_card)
-        layout.addWidget(QLabel("In progress:"))
-        layout.addWidget(self.inflight_list, 1)
-        layout.addWidget(QLabel("Events:"))
-        layout.addWidget(self.events_list, 1)
+        layout.addLayout(cards_row, 1)
 
         self._events: list[str] = []
+        self._event_tuples: list[tuple[str, str, str]] = []
         self._last_bytes: int | None = None
         self._last_time: float | None = None
         self._rate: float | None = None
+
+        theme.notifier.changed.connect(self._on_theme_repaint)   # bound: auto-disconnects
 
     def reset(self) -> None:
         """Clear per-job state (throughput EWMA, event log) before a new
         job's snapshots start arriving — otherwise a fast switch would
         blend two jobs' byte deltas into one bogus rate."""
         self._events = []
+        self._event_tuples = []
         self._last_bytes = None
         self._last_time = None
         self._rate = None
@@ -147,6 +185,7 @@ class ProgressTab(QWidget):
         self.eta_label.setText("")
         self.bar.set_fractions(0.0, 0.0)
         self.state_card.set_counts({})
+        self.inflight_title.setText("IN PROGRESS")
         self.inflight_list.clear()
         self.events_list.clear()
 
@@ -215,32 +254,37 @@ class ProgressTab(QWidget):
             self.eta_label.setText("")
 
     def _update_inflight(self, transferring: list[dict]) -> None:
+        self.inflight_title.setText(f"IN PROGRESS — {len(transferring)} FILES")
         self.inflight_list.clear()
         for entry in transferring:
             relative_path = entry.get("relative_path", "")
-            bytes_transferred = entry.get("bytes_transferred", 0)
-            size_bytes = entry.get("size_bytes", 0)
-            text = (
-                f"{relative_path} — {human_bytes(bytes_transferred)}"
-                f" of {human_bytes(size_bytes)}"
-            )
-            slices_total = entry.get("slices_total", 0)
-            if entry.get("method") == "sliced" and slices_total > 0:
-                slices_done = entry.get("slices_done", 0)
-                current = min(slices_done + 1, slices_total)
-                text += f" (slice {current} of {slices_total}, {slices_done} done)"
-            self.inflight_list.addItem(text)
+            # Display text is an accessible fallback; InflightDelegate paints
+            # the real row from INFLIGHT_ROLE.
+            text = f"{relative_path} — {inflight_detail_text(entry)}"
+            item = QListWidgetItem(text)
+            item.setData(INFLIGHT_ROLE, entry)
+            self.inflight_list.addItem(item)
 
     def _append_events(self, new_events: list[dict]) -> None:
         if not new_events:
             return
         for event in new_events:
-            self._events.append(
-                f"{event.get('at', '')}  {event.get('kind', '')}: {event.get('detail', '')}"
-            )
+            at, kind, detail = event.get("at", ""), event.get("kind", ""), event.get("detail", "")
+            self._events.append(f"{at}  {kind}: {detail}")
+            self._event_tuples.append((at, kind, detail))
         self._events = self._events[-200:]
+        self._event_tuples = self._event_tuples[-200:]
         self.events_list.clear()
-        self.events_list.addItems(self._events)
+        for text, tup in zip(self._events, self._event_tuples):
+            # Display text is an accessible fallback; EventsDelegate paints
+            # the real row from EVENT_ROLE.
+            item = QListWidgetItem(text)
+            item.setData(EVENT_ROLE, tup)
+            self.events_list.addItem(item)
+
+    def _on_theme_repaint(self, _t) -> None:
+        self.inflight_list.viewport().update()
+        self.events_list.viewport().update()
 
 
 class FilesTab(QWidget):

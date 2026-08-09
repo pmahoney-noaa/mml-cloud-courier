@@ -2,12 +2,19 @@
 theme.current() at paint time — nothing here caches a hex value."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QRect, QSize
 from PySide6.QtGui import QColor, QPainter, QPainterPath
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QStyledItemDelegate,
+    QVBoxLayout,
+    QWidget,
+)
 
 from mml_cloud_courier.gui import theme
-from mml_cloud_courier.gui.format import STATE_LABELS
+from mml_cloud_courier.gui.format import STATE_LABELS, human_bytes
 
 
 def token_color(token: str) -> QColor:
@@ -162,3 +169,81 @@ class StateBarCard(QWidget):
             holder.setLayout(cell)
             self._legend_layout.addWidget(holder)
         self._legend_layout.addStretch(1)
+
+
+INFLIGHT_ROLE = Qt.ItemDataRole.UserRole + 1
+EVENT_ROLE = Qt.ItemDataRole.UserRole + 1
+
+_EVENT_KIND_TOKENS = {"verified": "accent_text", "failed": "danger", "retry": "warn"}
+
+
+def event_kind_token(kind: str) -> str:
+    return _EVENT_KIND_TOKENS.get(kind, "muted")
+
+
+def inflight_detail_text(entry: dict) -> str:
+    text = (f"{human_bytes(entry.get('bytes_transferred', 0))} of "
+            f"{human_bytes(entry.get('size_bytes', 0))}")
+    slices_total = entry.get("slices_total", 0)
+    if entry.get("method") == "sliced" and slices_total > 0:
+        slices_done = entry.get("slices_done", 0)
+        current = min(slices_done + 1, slices_total)
+        text += f" · slice {current} of {slices_total}, {slices_done} done"
+    return text
+
+
+class InflightDelegate(QStyledItemDelegate):
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(option.rect.width(), 40)
+
+    def paint(self, painter, option, index) -> None:
+        entry = index.data(INFLIGHT_ROLE) or {}
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = option.rect.adjusted(8, 6, -8, -6)
+        painter.setFont(theme.mono_font(8.5))
+        metrics = painter.fontMetrics()
+        detail = inflight_detail_text(entry)
+        detail_width = metrics.horizontalAdvance(detail)
+        painter.setPen(token_color("ink"))
+        path_text = metrics.elidedText(entry.get("relative_path", ""),
+                                       Qt.TextElideMode.ElideLeft,
+                                       rect.width() - detail_width - 12)
+        painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop, path_text)
+        painter.setPen(token_color("faint"))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop, detail)
+        size = entry.get("size_bytes", 0)
+        fraction = (entry.get("bytes_transferred", 0) / size) if size else 0.0
+        bar = QRect(rect.left(), rect.bottom() - 4, rect.width(), 4)
+        painter.fillRect(bar, token_color("track"))
+        painter.fillRect(QRect(bar.left(), bar.top(),
+                               round(bar.width() * min(1.0, fraction)), 4),
+                         token_color("accent_2"))
+        painter.restore()
+
+
+class EventsDelegate(QStyledItemDelegate):
+    KIND_COLUMN = 52
+
+    def sizeHint(self, option, index) -> QSize:
+        return QSize(option.rect.width(), 22)
+
+    def paint(self, painter, option, index) -> None:
+        at, kind, detail = index.data(EVENT_ROLE) or ("", "", "")
+        painter.save()
+        rect = option.rect.adjusted(8, 3, -8, -3)
+        painter.setFont(theme.mono_font(8.0))
+        metrics = painter.fontMetrics()
+        time_width = metrics.horizontalAdvance(at) + 10
+        painter.setPen(token_color("faint"))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, at)
+        painter.setPen(token_color(event_kind_token(kind)))
+        kind_rect = QRect(rect.left() + time_width, rect.top(), self.KIND_COLUMN, rect.height())
+        painter.drawText(kind_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         metrics.elidedText(kind, Qt.TextElideMode.ElideRight, self.KIND_COLUMN))
+        painter.setPen(token_color("muted"))
+        detail_rect = QRect(kind_rect.right() + 8, rect.top(),
+                            rect.right() - kind_rect.right() - 8, rect.height())
+        painter.drawText(detail_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                         metrics.elidedText(detail, Qt.TextElideMode.ElideRight, detail_rect.width()))
+        painter.restore()

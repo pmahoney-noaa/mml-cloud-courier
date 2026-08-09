@@ -39,3 +39,21 @@ def test_state_order_matches_lifecycle():
                           "skipped", "changed", "failed", "quarantined")
     assert set(STATE_TOKENS) == set(STATE_ORDER)
     assert STATE_TOKENS["failed"] == "danger" and STATE_TOKENS["skipped"] == "skip"
+
+
+def test_event_kind_token_mapping():
+    from mml_cloud_courier.gui.progress_widgets import event_kind_token
+    assert event_kind_token("verified") == "accent_text"
+    assert event_kind_token("failed") == "danger"
+    assert event_kind_token("retry") == "warn"
+    assert event_kind_token("run_started") == "muted"
+
+
+def test_inflight_detail_text():
+    from mml_cloud_courier.gui.progress_widgets import inflight_detail_text
+    entry = {"relative_path": "a/b.tif", "bytes_transferred": 100, "size_bytes": 1000,
+             "method": "sliced", "slices_total": 8, "slices_done": 4}
+    assert inflight_detail_text(entry) == "100 B of 1.0 KB · slice 5 of 8, 4 done"
+    single = {"relative_path": "c.bin", "bytes_transferred": 5, "size_bytes": 10,
+              "method": "single_shot", "slices_total": 0}
+    assert inflight_detail_text(single) == "5 B of 10 B"
