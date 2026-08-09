@@ -347,6 +347,8 @@ class MainWindow(QMainWindow):
         if self._theme_changed_slot is not None:
             theme.notifier.changed.disconnect(self._theme_changed_slot)
             self._theme_changed_slot = None
+        if self._tray is not None:
+            self._tray.shutdown()
 
     # -- job rendering --------------------------------------------------
 

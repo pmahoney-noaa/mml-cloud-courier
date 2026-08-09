@@ -193,3 +193,57 @@ def test_inflight_and_events_lists_elide_left(qtbot):
     tab = ProgressTab()
     qtbot.addWidget(tab)
     assert tab.inflight_list.textElideMode() == Qt.TextElideMode.ElideLeft
+
+
+# -- _verdict_style token usage -----------------------------------------------
+
+
+def test_verdict_style_cancelled_uses_muted_not_danger(qapp):
+    from mml_cloud_courier.gui.job_tabs import _verdict_style
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    style = _verdict_style("cancelled")
+    assert theme.LIGHT.muted in style
+    assert theme.LIGHT.danger_text not in style
+
+
+def test_verdict_style_incomplete_uses_danger(qapp):
+    from mml_cloud_courier.gui.job_tabs import _verdict_style
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    style = _verdict_style("incomplete")
+    assert theme.LIGHT.danger_text in style
+
+
+def test_verdict_style_running_uses_muted(qapp):
+    from mml_cloud_courier.gui.job_tabs import _verdict_style
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    style = _verdict_style("running")
+    assert theme.LIGHT.muted in style
+
+
+def test_summary_tab_refreshes_verdict_on_theme_change(qapp, qtbot):
+    from mml_cloud_courier.gui import theme
+
+    theme.apply_theme(qapp, theme.LIGHT)
+    tab = _summary_tab(qtbot)
+    job = {"status": "complete", "progress": {}, "started_at": None, "finished_at": None}
+    tab.update_job(job)
+
+    # Capture initial stylesheet
+    initial_style = tab.verdict_label.styleSheet()
+    assert theme.LIGHT.accent_soft in initial_style
+
+    # Switch to dark theme
+    theme.apply_theme(qapp, theme.DARK)
+
+    # Verdict label should be re-rendered with dark theme tokens
+    new_style = tab.verdict_label.styleSheet()
+    assert theme.DARK.accent_soft in new_style
+
+    # Clean up: restore LIGHT theme
+    theme.apply_theme(qapp, theme.LIGHT)

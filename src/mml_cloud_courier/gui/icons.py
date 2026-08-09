@@ -11,7 +11,8 @@ from mml_cloud_courier.gui import theme
 _GROUP_TOKENS = {"needs_attention": "danger", "running": "accent_2",
                  "queued": "skip", "completed": "accent"}
 
-
+# Every token used in this module (danger, accent_2, skip, accent) is a plain
+# hex string in BOTH Theme constants, so no rgba parsing is needed here.
 def _token_color(token: str) -> str:
     return getattr(theme.current(), token)
 

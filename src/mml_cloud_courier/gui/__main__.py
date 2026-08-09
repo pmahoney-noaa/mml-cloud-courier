@@ -39,6 +39,7 @@ def main() -> int:
     window = MainWindow(discover_session())
     theme.apply_dark_titlebar(window, theme.current().dark)
     theme.notifier.changed.connect(lambda t: theme.apply_dark_titlebar(window, t.dark))
+    theme.notifier.changed.connect(lambda _t: app.setWindowIcon(app_icon()))
     window.show()
     code = app.exec()
     window.shutdown()

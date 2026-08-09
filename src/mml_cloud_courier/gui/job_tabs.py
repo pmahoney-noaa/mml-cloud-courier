@@ -413,6 +413,7 @@ class SummaryTab(QWidget):
         super().__init__(parent)
         self._on_open_report = on_open_report
         self._on_resume = on_resume
+        self._last_job: dict | None = None
 
         self.verdict_label = QLabel("")
         self.verdict_label.setWordWrap(True)
@@ -444,7 +445,10 @@ class SummaryTab(QWidget):
         layout.addLayout(buttons)
         layout.addStretch(1)
 
+        theme.notifier.changed.connect(self._on_theme_changed)
+
     def update_job(self, job: dict) -> None:
+        self._last_job = job
         status = job.get("status", "")
         self.verdict_label.setText(STATUS_LABELS.get(status, status))
         self.verdict_label.setStyleSheet(_verdict_style(status))
@@ -463,17 +467,20 @@ class SummaryTab(QWidget):
         self.report_button.setVisible(status in _REPORT_VISIBLE)
         self.resume_button.setVisible(status in _RESUME_VISIBLE)
 
+    def _on_theme_changed(self, _t) -> None:
+        if self._last_job is not None:
+            self.update_job(self._last_job)
+
 
 def _verdict_style(status: str) -> str:
     # Text color pinned alongside each background: under Windows dark mode
     # the palette text is white, unreadable on these pastel fills.
+    t = theme.current()
     if status == "complete":
-        t = theme.current()
         return f"background-color: {t.accent_soft}; color: {t.accent_text}; padding: 6px;"
-    if status in ("incomplete", "cancelled"):
-        t = theme.current()
+    if status == "incomplete":
         return f"background-color: {t.danger_soft}; color: {t.danger_text}; padding: 6px;"
-    return "padding: 6px;"
+    return f"padding: 6px; color: {t.muted};"
 
 
 def _duration_text(started: str | None, finished: str | None) -> str:
