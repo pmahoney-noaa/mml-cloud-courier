@@ -281,3 +281,16 @@ def test_remember_connection_roundtrip(tmp_path, monkeypatch):
     assert wizard_module.last_connection_name() is None
     wizard_module.remember_connection("NOAA-CCEP")
     assert wizard_module.last_connection_name() == "NOAA-CCEP"
+
+
+def test_helper_text_explains_prefix_and_job_name(qtbot, wizard):
+    # A/B decision: one screen keeps Option B's per-step explanations as
+    # helper text (spec §7) — exact strings, not paraphrases.
+    assert wizard.prefix_helper.text() == (
+        "A connection is a bucket and the credential the service uses."
+        " The prefix is the folder inside it.")
+    assert wizard.name_helper.text() == (
+        "Anything already in the bucket and unchanged is skipped, so"
+        " nothing is sent twice.")
+    assert wizard.prefix_helper.objectName() == "helperText"
+    assert wizard.name_helper.objectName() == "helperText"
