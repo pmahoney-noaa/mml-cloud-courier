@@ -207,6 +207,61 @@ QStatusBar {{ background: {t.chrome}; color: {t.muted}; }}
 QToolTip {{ background: {t.surface}; color: {t.ink}; border: 1px solid {t.line}; }}
 QWidget#firstRunStep {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
 QLabel#stepBadge {{ background: {t.accent_soft}; color: {t.accent_text}; border-radius: 10px; }}
+QWidget#connHeader {{ background: {t.chrome}; border-bottom: 1px solid {t.line}; }}
+QWidget#connFooter {{ background: {t.chrome}; border-top: 1px solid {t.line}; }}
+QLabel#connTitle {{ font-size: 17px; font-weight: 600; background: transparent; }}
+QLabel#connIntro {{ color: {t.muted}; font-size: 13px; background: transparent; }}
+QWidget#connCard {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 9px; }}
+QWidget#connCard[accent="true"] {{ border-color: {t.accent_edge}; }}
+QWidget#connCard[edge="danger"] {{ border-color: {t.danger_edge}; }}
+QLabel#connPill {{ border-radius: 4px; padding: 4px 7px; }}
+QLabel#connPill[tone="accent"] {{ background: {t.accent_soft}; color: {t.accent_text}; }}
+QLabel#connPill[tone="warn"] {{ background: {t.warn_soft}; color: {t.warn_text}; }}
+QLabel#connPill[tone="track"] {{ background: {t.track}; color: {t.muted}; }}
+QLabel#connPill[tone="danger"] {{ background: {t.danger_soft}; color: {t.danger_text}; }}
+QLabel#connPill[tone="disabled"] {{ background: {t.track}; color: {t.faint}; }}
+QLabel#connName {{ font-size: 14px; font-weight: 600; background: transparent; }}
+QLabel#connCardHeading {{ font-size: 14px; font-weight: 600; background: transparent; }}
+QLabel#connBody {{ font-size: 13px; background: transparent; }}
+QLabel#connMono {{ color: {t.muted}; background: transparent;
+                   font-family: "Cascadia Mono","Consolas"; font-size: 11.5px; }}
+QLabel#connFaintMono {{ color: {t.faint}; background: transparent;
+                        font-family: "Cascadia Mono","Consolas"; font-size: 11.5px; }}
+QLabel#connMuted {{ color: {t.muted}; font-size: 11.5px; background: transparent; }}
+QLabel#connWarnLine {{ color: {t.warn_text}; font-size: 11.5px; background: transparent; }}
+QLabel#connDangerLine {{ color: {t.danger_text}; font-size: 11.5px; background: transparent; }}
+QLabel#connDangerMono {{ color: {t.danger_text}; background: transparent;
+                         font-family: "Cascadia Mono","Consolas"; font-size: 11.5px; }}
+QLabel#helperText {{ color: {t.faint}; font-size: 11.5px; background: transparent; }}
+QWidget#connDangerRegion {{ background: {t.danger_soft}; border-top: 1px solid {t.danger_edge};
+                            border-bottom-left-radius: 9px; border-bottom-right-radius: 9px; }}
+QWidget#connNotice[tone="danger"] {{ background: {t.danger_soft};
+    border: 1px solid {t.danger_edge}; border-radius: 9px; }}
+QWidget#connNotice[tone="accent"] {{ background: {t.accent_soft};
+    border: 1px solid {t.accent_edge}; border-radius: 9px; }}
+QWidget#connNotice QLabel {{ background: transparent; }}
+QLabel#connNoticeText[tone="danger"] {{ color: {t.danger_text}; font-size: 13px; }}
+QLabel#connNoticeText[tone="accent"] {{ color: {t.accent_text}; font-size: 13px; }}
+QPushButton#dangerButton {{ background: {t.danger}; color: #ffffff; border: none;
+                            padding: 7px 13px; font-weight: 600; border-radius: 6px; }}
+QPushButton#dangerOutline {{ background: transparent; color: {t.danger_text};
+                             border: 1px solid {t.danger_edge}; border-radius: 6px; }}
+QLabel#connChip {{ background: {t.accent_soft}; color: {t.accent_text}; border-radius: 4px;
+    padding: 4px 7px; font-family: "Cascadia Mono","Consolas"; font-size: 11.5px; }}
+QLabel#connChip[tone="danger"] {{ background: {t.danger_soft}; color: {t.danger_text}; }}
+QWidget#connCard[state="disabled"] QLabel#connCardHeading {{ color: {t.faint}; }}
+QWidget#connCard[state="disabled"] QLabel#connBody {{ color: {t.disabled}; }}
+QWidget#connCard[state="disabled"] QLabel#helperText {{ color: {t.disabled}; }}
+QWidget#connFilterBar {{ background: {t.accent_soft}; border-bottom: 1px solid {t.accent_edge}; }}
+QWidget#connFilterBar QLabel {{ background: transparent; color: {t.accent_text};
+                                font-size: 12.5px; }}
+QScrollArea#connScroll {{ border: none; background: transparent; }}
+QScrollArea#connScroll > QWidget > QWidget {{ background: transparent; }}
+QWidget#connField {{ background: {t.surface}; border: 1px solid {t.line}; border-radius: 6px; }}
+QWidget#connField[focus="true"] {{ border-color: {t.accent_edge}; }}
+QWidget#connField QLineEdit {{ border: none; background: transparent; padding: 0; }}
+QLabel#connFieldPrefix {{ color: {t.faint}; background: transparent;
+                          font-family: "Cascadia Mono","Consolas"; }}
 """
 
 
