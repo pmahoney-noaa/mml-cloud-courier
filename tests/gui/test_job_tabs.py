@@ -4,7 +4,13 @@ pytest.importorskip("PySide6")
 pytest.importorskip("pytestqt")
 
 from mml_cloud_courier.gui.errors_model import ErrorGroup
-from mml_cloud_courier.gui.job_tabs import ErrorsTab, SummaryTab, group_fill_rows
+from mml_cloud_courier.gui.job_tabs import (
+    ErrorsTab,
+    FilesTab,
+    ProgressTab,
+    SummaryTab,
+    group_fill_rows,
+)
 
 
 def _summary_tab(qtbot) -> SummaryTab:
@@ -139,3 +145,34 @@ def test_summary_tab_report_button_shows_for_a_complete_job(qtbot):
     tab.update_job({"status": "running"})
     assert tab.report_button.isHidden()
     assert tab.resume_button.isHidden()
+
+
+# -- FilesTab header / elision / columns ----------------------------------
+
+
+def test_files_header_counts(qtbot):
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    tab.attach(lambda **kw: [
+        {"relative_path": f"f{i}", "size_bytes": 1, "state": "verified"}
+        for i in range(3)
+    ] if kw.get("offset", 0) == 0 else [])
+    tab.set_total(14208)
+    assert tab.header_label.text() == "14,208 files · showing 1–3"
+    tab.state_combo.setCurrentIndex(1)          # any state filter
+    assert tab.header_label.text() == "showing 1–3"
+    assert tab.table.horizontalHeader().sectionSize(2) == 204
+
+
+def test_files_table_elides_left(qtbot):
+    from PySide6.QtCore import Qt
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    assert tab.table.textElideMode() == Qt.TextElideMode.ElideLeft
+
+
+def test_inflight_and_events_lists_elide_left(qtbot):
+    from PySide6.QtCore import Qt
+    tab = ProgressTab()
+    qtbot.addWidget(tab)
+    assert tab.inflight_list.textElideMode() == Qt.TextElideMode.ElideLeft

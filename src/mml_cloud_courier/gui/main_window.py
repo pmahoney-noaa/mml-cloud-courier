@@ -356,6 +356,7 @@ class MainWindow(QMainWindow):
         snap = {**job, "transferring": job.get("transferring", [])}
         self.progress_tab.update_snapshot(snap)
         self.summary_tab.update_job(job)
+        self.files_tab.set_total(job.get("planned_files"))
 
     def _render_summary_only(self, job: dict) -> None:
         self._selected_status = job.get("status", self._selected_status)

@@ -88,3 +88,13 @@ def test_error_recovery_on_refresh(qapp):
     model.refresh()  # second call succeeds
     assert model.rowCount() == 2
     assert model.last_error is None
+
+
+def test_path_column_tooltip_is_full_path():
+    from PySide6.QtCore import Qt
+    model = FileTableModel(lambda **kw: [])
+    model._rows = [{"relative_path": "leg3/imagery/IMG_1147.tif",
+                    "size_bytes": 5, "state": "verified"}]
+    index = model.index(0, 0)
+    assert model.data(index, Qt.ItemDataRole.ToolTipRole) == "leg3/imagery/IMG_1147.tif"
+    assert model.data(model.index(0, 1), Qt.ItemDataRole.ToolTipRole) is None

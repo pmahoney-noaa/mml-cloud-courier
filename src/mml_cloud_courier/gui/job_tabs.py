@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QListWidget,
     QProgressBar,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.errors_model import ErrorGroup
 from mml_cloud_courier.gui.files_model import FileTableModel
 from mml_cloud_courier.gui.format import (
@@ -72,9 +74,15 @@ class ProgressTab(QWidget):
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.counts_label = QLabel("")
+        self.counts_label.setFont(theme.mono_font(9))
         self.throughput_label = QLabel("")
+        self.throughput_label.setFont(theme.mono_font(9, 500))
         self.inflight_list = QListWidget()
+        self.inflight_list.setTextElideMode(Qt.TextElideMode.ElideLeft)
+        self.inflight_list.setFont(theme.mono_font(8.5))
         self.events_list = QListWidget()
+        self.events_list.setTextElideMode(Qt.TextElideMode.ElideLeft)
+        self.events_list.setFont(theme.mono_font(8.5))
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.headline_label)
@@ -186,28 +194,54 @@ class FilesTab(QWidget):
         for state, label in STATE_LABELS.items():
             self.state_combo.addItem(label, state)
 
+        self.header_label = QLabel("")
+        self.header_label.setObjectName("filesHeader")
+        self.header_label.setFont(theme.mono_font(8.5))
+
+        header_row = QHBoxLayout()
+        header_row.addWidget(self.state_combo)
+        header_row.addStretch(1)
+        header_row.addWidget(self.header_label)
+
         self.table = QTableView()
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+        self.table.setTextElideMode(Qt.TextElideMode.ElideLeft)
+        self.table.setAlternatingRowColors(True)
 
         self.error_label = QLabel("")
         self.error_label.setWordWrap(True)
         self.error_label.hide()
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.state_combo)
+        layout.addLayout(header_row)
         layout.addWidget(self.table, 1)
         layout.addWidget(self.error_label)
 
         self.state_combo.currentIndexChanged.connect(self._on_filter_changed)
 
         self._model: FileTableModel | None = None
+        self._total: int | None = None
 
     def attach(self, fetcher: Callable[..., list[dict]]) -> None:
         """Bind a new per-job fetcher and load its first page."""
         self._model = FileTableModel(fetcher)
         self.table.setModel(self._model)
+        self._model.rowsInserted.connect(self._update_header)
+        self._model.modelReset.connect(self._update_header)
+
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)   # PATH
+        header.resizeSection(1, 88)                                      # SIZE
+        header.resizeSection(2, 204)   # STATE — hard requirement: "Excluded after
+                                       # repeated failures" must render in full
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)   # DETAIL
+
         self.refresh()
+
+    def set_total(self, total: int | None) -> None:
+        self._total = total
+        self._update_header()
 
     def refresh(self) -> None:
         if self._model is None:
@@ -215,9 +249,18 @@ class FilesTab(QWidget):
         state = self.state_combo.currentData()
         self._model.set_filter(state=state)
         self._show_error()
+        self._update_header()
 
     def _on_filter_changed(self, _index: int) -> None:
         self.refresh()
+
+    def _update_header(self) -> None:
+        loaded = self._model.rowCount() if self._model is not None else 0
+        filtered = self.state_combo.currentData() is not None
+        if self._total is None or filtered:
+            self.header_label.setText(f"showing 1–{loaded:,}")
+        else:
+            self.header_label.setText(f"{self._total:,} files · showing 1–{loaded:,}")
 
     def _show_error(self) -> None:
         error = self._model.last_error if self._model is not None else None
