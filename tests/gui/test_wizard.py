@@ -127,6 +127,13 @@ def test_one_screen_has_no_pages(qtbot, wizard):
     assert not isinstance(wizard, QWizard)
 
 
+def test_dialog_is_2x_its_natural_stacked_row_width(wizard):
+    # Measured offscreen sizeHint of the stacked-row layout is ~218px, not
+    # the ~400px this was sized against -- 440 is that measurement doubled
+    # and rounded to a sensible number, per the user's "2x wider" request.
+    assert wizard.minimumWidth() == 440
+
+
 def test_validation_messages_in_order(qtbot, wizard, tmp_path):
     wizard.profile_combo.setCurrentIndex(-1)
     wizard.accept_and_submit()
