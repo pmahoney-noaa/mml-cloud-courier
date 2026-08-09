@@ -95,8 +95,6 @@ class ProgressTab(QWidget):
 
         self.state_card = StateBarCard()
 
-        self.headline_label = self.headline_name   # back-compat alias; remove in Task 9
-
         self.inflight_title = QLabel("IN PROGRESS")
         self.inflight_title.setObjectName("sectionLabel")
         self.inflight_title.setFont(theme.mono_font(8.0))
@@ -320,6 +318,7 @@ class FilesTab(QWidget):
         header.resizeSection(1, 88)                                      # SIZE
         header.resizeSection(2, 204)   # STATE — hard requirement: "Excluded after
                                        # repeated failures" must render in full
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)   # DETAIL
 
         self.refresh()
@@ -341,6 +340,9 @@ class FilesTab(QWidget):
 
     def _update_header(self) -> None:
         loaded = self._model.rowCount() if self._model is not None else 0
+        if loaded == 0:
+            self.header_label.setText("No files yet")
+            return
         filtered = self.state_combo.currentData() is not None
         if self._total is None or filtered:
             self.header_label.setText(f"showing 1–{loaded:,}")

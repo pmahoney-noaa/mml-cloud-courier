@@ -310,3 +310,21 @@ def test_summary_tab_refreshes_verdict_on_theme_change(qapp, qtbot):
 
     # Clean up: restore LIGHT theme
     theme.apply_theme(qapp, theme.LIGHT)
+
+
+def test_files_header_empty_state(qtbot):
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    tab.attach(lambda **kw: [])
+    tab.set_total(0)
+    assert tab.header_label.text() == "No files yet"
+
+
+def test_files_state_column_fixed(qtbot):
+    from PySide6.QtWidgets import QHeaderView
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    tab.attach(lambda **kw: [])
+    header = tab.table.horizontalHeader()
+    assert header.sectionResizeMode(2) == QHeaderView.ResizeMode.Fixed
+    assert header.sectionSize(2) == 204

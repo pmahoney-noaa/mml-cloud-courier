@@ -3,6 +3,8 @@
 Launch: `mmlcc-gui` (or `python -m mml_cloud_courier.gui`). Requires the
 `gui` extra (`pip install -e ".[gui]"`; dev installs already include it).
 
+Drop a folder anywhere on the window to start a transfer to your last-used connection — the one-screen dialog opens pre-filled.
+
 The GUI is a thin client of the Windows service. It keeps no transfer
 state: closing it (which minimizes to the tray) or logging off does not
 affect running jobs; reopening re-renders everything from the service.

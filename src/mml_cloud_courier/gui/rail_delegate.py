@@ -12,8 +12,6 @@ from mml_cloud_courier.gui.jobs_model import (
     JOB_ID_ROLE, RAIL_GROUPS, SECOND_LINE_ROLE, STALLED_OVERRIDE, STATUS_ROLE,
 )
 
-GROUP_DOT_TOKENS = {"needs_attention": "danger", "running": "accent_2",
-                    "queued": "skip", "completed": "accent"}
 _HEADER_TEXT_TOKENS = {"needs_attention": "danger", "running": "accent_text",
                        "queued": "faint", "completed": "faint"}
 _STATUS_DOT_TOKENS = {"incomplete": "danger", "stalled": "warn", "paused": "warn",
