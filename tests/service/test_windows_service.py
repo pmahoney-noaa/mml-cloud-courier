@@ -34,3 +34,41 @@ def test_service_is_hosted_by_the_venv_python_not_pythonservice():
     assert cls._exe_name_.lower().endswith("python.exe")
     module_path = str(Path(windows_service.__file__).resolve())
     assert cls._exe_args_ == f'"{module_path}"'
+
+
+def test_exe_args_are_none_when_frozen(monkeypatch):
+    """Packaged (PyInstaller), the exe IS the service host: ImagePath must
+    be the bare exe, no arguments — pywin32 omits them when None."""
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(windows_service.sys, "frozen", True, raising=False)
+    assert windows_service._service_exe_args() is None
+
+
+def test_exe_args_point_at_the_module_when_not_frozen(monkeypatch):
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.delattr(windows_service.sys, "frozen", raising=False)
+    args = windows_service._service_exe_args()
+    assert args.startswith('"') and args.endswith('windows_service.py"')
+
+
+def test_scm_launch_means_no_arguments(monkeypatch):
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(windows_service.sys, "argv", ["mmlcc-service.exe"])
+    assert windows_service._scm_launch()
+    monkeypatch.setattr(
+        windows_service.sys, "argv", ["mmlcc-service.exe", "install"]
+    )
+    assert not windows_service._scm_launch()
+
+
+def test_run_routes_command_lines_to_main(monkeypatch):
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(windows_service.sys, "argv", ["mmlcc-service", "--x"])
+    calls = []
+    monkeypatch.setattr(windows_service, "main", lambda: calls.append(1) or 0)
+    assert windows_service.run() == 0
+    assert calls

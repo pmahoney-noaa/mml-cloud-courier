@@ -15,6 +15,9 @@ The venv launcher has neither problem: it resolves the base interpreter
 by absolute path from pyvenv.cfg and produces the same sys.path as every
 test run. When the SCM starts ``python.exe windows_service.py`` with no
 arguments, the ``__main__`` block enters the service control dispatcher.
+Packaged builds host the service the same way in the PyInstaller exe
+itself: ImagePath is the bare ``mmlcc-service.exe`` (no arguments), and
+``run()`` dispatches on argument count.
 """
 
 from __future__ import annotations
@@ -26,6 +29,21 @@ from pathlib import Path
 
 SERVICE_NAME = "MMLCloudCourier"
 DISPLAY_NAME = "MML Cloud Courier Service"
+
+
+def _service_exe_args() -> str | None:
+    """ImagePath arguments. Venv-hosted, the SCM launches
+    `python.exe <this file>`; packaged (PyInstaller onedir), the exe IS
+    the host and takes no arguments — pywin32 omits them when None."""
+    if getattr(sys, "frozen", False):
+        return None
+    return f'"{Path(__file__).resolve()}"'
+
+
+def _scm_launch() -> bool:
+    """True when launched by the SCM: the registered ImagePath carries no
+    arguments beyond the program itself (both hosting modes)."""
+    return len(sys.argv) == 1
 
 
 def _build_service_class():
@@ -44,7 +62,7 @@ def _build_service_class():
             "Verified, resumable file transfers to Google Cloud Storage."
         )
         _exe_name_ = sys.executable
-        _exe_args_ = f'"{Path(__file__).resolve()}"'
+        _exe_args_ = _service_exe_args()
 
         def __init__(self, args):
             super().__init__(args)
@@ -93,14 +111,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-if __name__ == "__main__":
-    if len(sys.argv) == 1:
-        # Launched by the SCM (registered ImagePath, no arguments): hand
-        # this process over to the service control dispatcher.
+def run() -> int:
+    """Entry for both hosts: an SCM launch enters the service control
+    dispatcher; anything else is the install|start|stop|remove|update
+    command line. packaging/entry_service.py (the packaged exe) calls
+    this; the venv __main__ block below is the same flow."""
+    if _scm_launch():
         import servicemanager
 
         servicemanager.Initialize()
         servicemanager.PrepareToHostSingle(_build_service_class())
         servicemanager.StartServiceCtrlDispatcher()
-    else:
-        raise SystemExit(main())
+        return 0
+    return main()
+
+
+if __name__ == "__main__":
+    raise SystemExit(run())
