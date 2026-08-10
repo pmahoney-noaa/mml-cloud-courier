@@ -478,6 +478,11 @@ def create_app(
         conn, repo = _open()
         try:
             job = _job_or_404(repo, job_id)
+            if job["archived_at"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"job {job_id} is archived; unarchive it before resuming",
+                )
             if job["status"] not in resumable:
                 raise HTTPException(
                     status_code=409, detail=f"cannot resume a {job['status']} job"

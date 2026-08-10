@@ -65,6 +65,8 @@ def test_event_kind_token_mapping():
     assert event_kind_token("job_stalled") == "warn"               # stall-ish
     assert event_kind_token("files_retried") == "warn"             # retry-ish
     assert event_kind_token("cancelled_by_user") == "muted"        # no clean bucket
+    assert event_kind_token("archived_by_user") == "muted"         # no clean bucket
+    assert event_kind_token("unarchived_by_user") == "muted"       # no clean bucket
     assert event_kind_token("something_unheard_of") == "muted"     # fallback
 
 

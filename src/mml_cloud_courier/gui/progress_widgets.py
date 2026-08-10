@@ -222,6 +222,7 @@ _EVENT_KIND_TOKENS = {
     "scan_finished": "accent_2", "audit_finished": "accent_2",
     # anything else -- neutral user actions with no clean bucket
     "cancelled_by_user": "muted", "files_excluded": "muted",
+    "archived_by_user": "muted", "unarchived_by_user": "muted",
 }
 
 

@@ -571,7 +571,8 @@ class SummaryTab(QWidget):
         self.footer_label.setVisible(state_counts.get("quarantined", 0) > 0)
 
         self.report_button.setVisible(status in _REPORT_VISIBLE)
-        self.resume_button.setVisible(status in _RESUME_VISIBLE)
+        self.resume_button.setVisible(
+            status in _RESUME_VISIBLE and not job.get("archived_at"))
         self.archive_button.setVisible(
             status in _ARCHIVE_VISIBLE and not job.get("archived_at"))
 

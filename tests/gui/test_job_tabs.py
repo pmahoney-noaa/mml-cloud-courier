@@ -447,3 +447,18 @@ def test_summary_archive_button_visibility_and_callback(qtbot):
     tab.update_job({"id": 1, "status": "complete", "progress": {},
                     "archived_at": "2026-08-09T00:00:00+00:00"})
     assert not tab.archive_button.isVisibleTo(tab)
+
+
+def test_summary_resume_button_hidden_for_archived_jobs(qtbot):
+    tab = SummaryTab(on_open_report=lambda: None, on_resume=lambda: None,
+                     on_archive=lambda: None)
+    qtbot.addWidget(tab)
+
+    tab.update_job({"id": 1, "status": "cancelled", "progress": {},
+                    "archived_at": "2026-08-09T00:00:00+00:00"})
+    assert not tab.archive_button.isVisibleTo(tab)
+    assert not tab.resume_button.isVisibleTo(tab)
+
+    tab.update_job({"id": 1, "status": "cancelled", "progress": {}})
+    assert tab.archive_button.isVisibleTo(tab)
+    assert tab.resume_button.isVisibleTo(tab)

@@ -380,3 +380,15 @@ def test_archive_lifecycle(api, tmp_path):
     # 404s
     assert client.post("/jobs/999/archive").status_code == 404
     assert client.post("/jobs/999/unarchive").status_code == 404
+
+
+def test_resume_refuses_archived_jobs(api, tmp_path):
+    client, _, _ = api
+    job_id = _submit(client, tmp_path)
+    assert client.post(f"/jobs/{job_id}/cancel").status_code == 200
+    assert client.post(f"/jobs/{job_id}/archive").status_code == 200
+    response = client.post(f"/jobs/{job_id}/resume")
+    assert response.status_code == 409
+    assert "unarchive it before resuming" in response.json()["detail"]
+    assert client.post(f"/jobs/{job_id}/unarchive").status_code == 200
+    assert client.post(f"/jobs/{job_id}/resume").json()["status"] == "pending"
