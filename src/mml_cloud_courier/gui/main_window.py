@@ -668,6 +668,7 @@ class MainWindow(QMainWindow):
 
     def _on_watcher_snapshot(self, snap: dict) -> None:
         self.progress_tab.update_snapshot(snap)
+        self.files_tab.maybe_auto_refresh(snap.get("progress"))
         if snap.get("events"):
             job_id = self._selected_job_id
             if job_id is not None:
@@ -688,6 +689,7 @@ class MainWindow(QMainWindow):
         if final is None:
             return
         self._render_job(final)
+        self.files_tab.maybe_auto_refresh(final.get("progress"))
         self._poke_rail()
 
     # -- toolbar actions --------------------------------------------------

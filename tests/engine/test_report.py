@@ -179,3 +179,32 @@ def test_failure_groups_are_capped_at_fifty_with_overflow_line(tmp_path):
     assert "network (60)" in html
     assert html.count("<li>") == 50
     assert "… and 10 more." in html
+
+
+def test_html_report_lists_every_file_with_checksums(finished_job, tmp_path):
+    db, job_id = finished_job
+    paths = write_report(db, job_id, tmp_path / "report")
+    html_text = paths.report_html.read_text(encoding="utf-8")
+    assert "Files (5)" in html_text
+    assert "file0.tif" in html_text and "file4.tif" in html_text
+    assert crc32c_to_base64(11) in html_text          # verified file's crc
+    assert "ab" * 32 in html_text                     # the one sha256
+    assert "in use by EDITOR.EXE" in html_text        # detail column
+    assert "1.0 KB" in html_text                      # human-readable size
+    # self-containment invariant must survive the new table
+    assert "http://" not in html_text and "https://" not in html_text
+
+
+def test_html_files_table_caps_and_points_at_manifest(finished_job, tmp_path, monkeypatch):
+    import mml_cloud_courier.engine.report as report_module
+    monkeypatch.setattr(report_module, "_MAX_FILES_SHOWN", 3)
+    db, job_id = finished_job
+    paths = write_report(db, job_id, tmp_path / "report")
+    html_text = paths.report_html.read_text(encoding="utf-8")
+    # Extract just the Files table section to test capping logic
+    files_section = html_text[html_text.find("<h2>Files"):html_text.find("</html>")]
+    assert "Files (5)" in html_text
+    assert "file2.tif" in files_section
+    assert "file3.tif" not in files_section and "file4.tif" not in files_section
+    assert "and 2 more" in files_section
+    assert "manifest.csv" in html_text

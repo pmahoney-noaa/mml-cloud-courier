@@ -29,6 +29,23 @@ _CSV_COLUMNS = [
 
 _MAX_FAILURES_SHOWN = 50
 
+_MAX_FILES_SHOWN = 5000
+
+_BYTE_UNITS = ("B", "KB", "MB", "GB", "TB", "PB")
+
+
+def _human_bytes(n: int | float) -> str:
+    """Mirror of gui/format.py human_bytes — the engine must not import gui
+    (it pulls in Qt): decimal SI units, one decimal below 100."""
+    value = float(n)
+    for unit in _BYTE_UNITS:
+        if value < 1000 or unit == _BYTE_UNITS[-1]:
+            if unit == "B":
+                return f"{int(value)} B"
+            text = f"{value:.1f}" if value < 100 else f"{value:.0f}"
+            return f"{text} {unit}"
+        value /= 1000
+
 
 @dataclass(frozen=True, slots=True)
 class ReportPaths:
@@ -148,14 +165,14 @@ def write_report(
     os.replace(csv_tmp, csv_path)
 
     html_path = out / "report.html"
-    _atomic_write_text(html_path, _render_html(summary, failures, scan_error_events))
+    _atomic_write_text(html_path, _render_html(summary, failures, scan_error_events, rows))
 
     return ReportPaths(
         summary_json=summary_path, manifest_csv=csv_path, report_html=html_path
     )
 
 
-def _render_html(summary: dict, failures, scan_error_events=()) -> str:
+def _render_html(summary: dict, failures, scan_error_events=(), rows=()) -> str:
     ok = summary["verdict"] == "COMPLETE"
     banner_color = "#166534" if ok else "#991b1b"
     banner_bg = "#dcfce7" if ok else "#fee2e2"
@@ -182,19 +199,19 @@ def _render_html(summary: dict, failures, scan_error_events=()) -> str:
     by_category: dict[str, list] = {}
     for row in failures:
         by_category.setdefault(row["error_category"], []).append(row)
-    for category, rows in sorted(by_category.items()):
-        shown = rows[:_MAX_FAILURES_SHOWN]
+    for category, failure_rows in sorted(by_category.items()):
+        shown = failure_rows[:_MAX_FAILURES_SHOWN]
         items = "".join(
             f"<li><code>{esc(r['relative_path'])}</code> — {esc(r['error_message'])}</li>"
             for r in shown
         )
         more = (
-            f"<p>… and {len(rows) - len(shown)} more.</p>"
-            if len(rows) > len(shown)
+            f"<p>… and {len(failure_rows) - len(shown)} more.</p>"
+            if len(failure_rows) > len(shown)
             else ""
         )
         failure_sections.append(
-            f"<h3>{esc(category)} ({len(rows)})</h3><ul>{items}</ul>{more}"
+            f"<h3>{esc(category)} ({len(failure_rows)})</h3><ul>{items}</ul>{more}"
         )
     failures_html = (
         "".join(failure_sections) if failure_sections else "<p>No failures.</p>"
@@ -213,6 +230,32 @@ def _render_html(summary: dict, failures, scan_error_events=()) -> str:
             f"<h2>Scan errors ({len(scan_error_events)})</h2><ul>{items}</ul>{more}"
         )
 
+    shown_rows = list(rows[:_MAX_FILES_SHOWN])
+    file_cells = "".join(
+        "<tr>"
+        f"<td><code>{esc(r['relative_path'])}</code></td>"
+        f"<td class=\"num\">{esc(_human_bytes(r['size_bytes']))}</td>"
+        f"<td>{esc(r['state'])}</td>"
+        f"<td>{esc(r['error_message'] or '')}</td>"
+        f"<td><code>{esc(_b64_or_empty(r['remote_crc32c']))}</code></td>"
+        f"<td class=\"sha\"><code>{esc(r['sha256'] or '')}</code></td>"
+        "</tr>"
+        for r in shown_rows
+    )
+    files_more = (
+        f"<p>… and {len(rows) - len(shown_rows)} more — the complete list is"
+        " in manifest.csv beside this report.</p>"
+        if len(rows) > len(shown_rows)
+        else ""
+    )
+    files_html = (
+        f"<h2>Files ({len(rows)})</h2>"
+        "<table class=\"files\"><thead><tr>"
+        "<th>Path</th><th>Size</th><th>State</th><th>Detail</th>"
+        "<th>CRC32C</th><th>SHA-256</th>"
+        "</tr></thead><tbody>" + file_cells + "</tbody></table>" + files_more
+    )
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -225,6 +268,10 @@ table {{ border-collapse: collapse; margin: 1.5rem 0; }}
 th {{ text-align: left; padding: .3rem 1rem .3rem 0; vertical-align: top; }}
 td {{ padding: .3rem 0; }}
 code {{ background: #f1f5f9; padding: .1rem .3rem; border-radius: 3px; }}
+table.files {{ width: 100%; font-size: .85rem; }}
+table.files th, table.files td {{ border-bottom: 1px solid #e2e8f0; padding: .25rem .5rem; text-align: left; vertical-align: top; }}
+table.files td.num {{ white-space: nowrap; }}
+table.files td.sha code {{ word-break: break-all; }}
 </style>
 </head>
 <body>
@@ -233,6 +280,7 @@ code {{ background: #f1f5f9; padding: .1rem .3rem; border-radius: 3px; }}
 {scan_errors_html}
 <h2>Failures</h2>
 {failures_html}
+{files_html}
 </body>
 </html>
 """
