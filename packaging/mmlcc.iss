@@ -214,7 +214,12 @@ begin
         actions (the exe's install verb does all three). }
       Exec(PackagedImagePath(), 'install', '', SW_HIDE,
         ewWaitUntilTerminated, R);
-      NeededRegistration := True;
+      NeededRegistration := (R = 0);
+      if R <> 0 then
+        MsgBox('The MML Cloud Courier service failed to register '
+          + '(exit code ' + IntToStr(R) + ').' + #13#10 + #13#10
+          + 'From an elevated command prompt, run:' + #13#10
+          + '"' + PackagedImagePath() + '" install', mbError, MB_OK);
     end
     else if not ImagePathIsCurrent() then
     begin
@@ -222,9 +227,19 @@ begin
         preserved (Task 4 research finding). }
       Exec(PackagedImagePath(), 'update', '', SW_HIDE,
         ewWaitUntilTerminated, R);
-      NeededRegistration := True;
+      NeededRegistration := (R = 0);
+      if R <> 0 then
+        MsgBox('The MML Cloud Courier service failed to update its '
+          + 'registration (exit code ' + IntToStr(R) + ').' + #13#10 + #13#10
+          + 'From an elevated command prompt, run:' + #13#10
+          + '"' + PackagedImagePath() + '" update', mbError, MB_OK);
     end;
-    EnsureGuiUserSid(InstallingUserSid());
+    { Upgrade contract: no re-registration, no ACL changes when the
+      service already exists with a current ImagePath (NeededRegistration
+      stays False from initialization above); only run when a
+      registration was actually attempted AND succeeded. }
+    if NeededRegistration then
+      EnsureGuiUserSid(InstallingUserSid());
     Exec(ExpandConstant('{sys}\sc.exe'), 'start ' + ServiceName, '',
       SW_HIDE, ewWaitUntilTerminated, R);
   end;
