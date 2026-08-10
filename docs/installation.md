@@ -8,13 +8,18 @@ end.
 ## Install
 
 Run `mml-cloud-courier-setup-<version>.exe` elevated (right-click, "Run
-as administrator"), **logged in as the user who will run the GUI**. The
-installer reads the elevating user's SID and grants it read access to
-the service's API token, via a file the service consults on every token
-creation (`%ProgramData%\MML Cloud Courier\gui-users.sids`). If you run
-the installer as a different account than the one who will use the GUI,
-that GUI user won't be able to reach the service until you add their
-SID by hand — see "Multiple GUI users" below.
+as administrator"), **logged in as the user who will run the GUI**. On
+a run that registers the service — a first install, or an upgrade that
+has to re-register because the service's `ImagePath` no longer matches
+(see "Service account" below) — the installer reads the elevating
+user's SID and grants it read access to the service's API token, via a
+file the service consults on every token creation
+(`%ProgramData%\MML Cloud Courier\gui-users.sids`). If you run that
+install as a different account than the one who will use the GUI, that
+GUI user won't be able to reach the service until you add their SID by
+hand — see "Multiple GUI users" below. An ordinary upgrade does not
+register the service at all, so it does not grant anyone access this
+way; see "Upgrade" below.
 
 Windows SmartScreen may warn that the installer or the app is from an
 unrecognized publisher. The binaries are not code-signed. For this
@@ -31,6 +36,11 @@ below).
 A first-time install registers the Windows service to run as
 **LocalSystem**, auto-starting. That's the packaged default, and it's
 paired with a service-account key for Google Cloud Storage access.
+Whenever the installer performs that kind of registration — a true
+first install, or an upgrade that had to re-register because the
+service's `ImagePath` no longer matched — it shows a reminder dialog
+pointing at `services.msc` → Log On, in case this machine needs a named
+account instead of LocalSystem.
 
 If this machine instead needs a named service account — for example to
 use a user's Application Default Credentials (ADC) rather than a
@@ -66,6 +76,12 @@ way as a first install. The installer stops the running service,
 replaces the installed files, and starts the service again. As
 described above, no re-registration happens on a normal upgrade, so the
 service account and its permissions are left alone.
+
+Because no re-registration happens, an ordinary upgrade also leaves
+`gui-users.sids` and the token's ACL alone — it does not add whoever
+ran the upgrade as a GUI user, even if that's a different admin than
+the one who installed originally. If a new person needs GUI access,
+add their SID as described in "Multiple GUI users" below.
 
 Data is untouched by an upgrade: `jobs.db`, saved settings, and stored
 credentials (the DPAPI-protected credential blobs) all live under
