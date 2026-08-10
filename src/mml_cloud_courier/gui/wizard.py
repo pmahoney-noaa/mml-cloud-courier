@@ -222,6 +222,13 @@ class NewTransferWizard(QDialog):
         layout.addWidget(self.prefix_label)
         layout.addWidget(self.prefix_edit)
 
+        self.prefix_helper = QLabel(
+            "A connection is a bucket and the credential the service uses."
+            " The prefix is the folder inside it.")
+        self.prefix_helper.setObjectName("helperText")
+        self.prefix_helper.setWordWrap(True)
+        layout.addWidget(self.prefix_helper)
+
         # -- source folder ------------------------------------------------
         self.source_label = QLabel()
         self.source_edit = QLineEdit()
@@ -255,6 +262,13 @@ class NewTransferWizard(QDialog):
         form = QFormLayout()
         form.addRow("Job name:", self.name_edit)
         layout.addLayout(form)
+
+        self.name_helper = QLabel(
+            "Anything already in the bucket and unchanged is skipped, so"
+            " nothing is sent twice.")
+        self.name_helper.setObjectName("helperText")
+        self.name_helper.setWordWrap(True)
+        layout.addWidget(self.name_helper)
 
         # -- more options disclosure --------------------------------------
         self.start_later_checkbox = QCheckBox("Start later")
@@ -369,6 +383,11 @@ class NewTransferWizard(QDialog):
         dialog = NewConnectionDialog(self.client, self)
         dialog.created.connect(lambda _result: self._refresh())
         dialog.exec()
+        # A cancelled dialog can still have a create that landed server-side
+        # (no create-cancel in the fixed API; the stepper's generation guard
+        # only discards the late GUI result) — refresh unconditionally so a
+        # profile that saved anyway still surfaces.
+        self._refresh()
 
     def _on_profile_changed(self, index: int) -> None:
         if 0 <= index < len(self._profiles):

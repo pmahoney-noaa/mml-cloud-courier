@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QUrl
+from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -139,7 +139,6 @@ class MainWindow(QMainWindow):
         self.rail_view.setModel(self.rail_model)
         self.rail_view.setHeaderHidden(True)
         self.rail_view.setItemDelegate(RailDelegate(self.rail_view))
-        self.rail_view.setFixedWidth(262)
         # The branch column/indentation was the residual left offset the
         # rule-to-the-right-edge/left-alignment pass (wave 1, items B/C)
         # couldn't reach -- it's QTreeView chrome, not delegate paint space.
@@ -163,6 +162,30 @@ class MainWindow(QMainWindow):
         self._theme_changed_slot = lambda _t: self.rail_view.viewport().update()
         theme.notifier.changed.connect(self._theme_changed_slot)
 
+        self._profile_filter: int | None = None
+        self.filter_bar = QWidget()
+        self.filter_bar.setObjectName("connFilterBar")
+        self.filter_bar.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        filter_layout = QHBoxLayout(self.filter_bar)
+        filter_layout.setContentsMargins(11, 6, 11, 6)
+        filter_layout.setSpacing(9)
+        self.filter_label = QLabel("")
+        self.filter_label.setWordWrap(True)
+        filter_layout.addWidget(self.filter_label, 1)
+        self.show_all_button = QPushButton("Show all")
+        self.show_all_button.setObjectName("textButton")
+        self.show_all_button.clicked.connect(self.clear_profile_filter)
+        filter_layout.addWidget(self.show_all_button)
+        self.filter_bar.hide()
+
+        rail_column = QWidget()
+        rail_column_layout = QVBoxLayout(rail_column)
+        rail_column_layout.setContentsMargins(0, 0, 0, 0)
+        rail_column_layout.setSpacing(0)
+        rail_column_layout.addWidget(self.filter_bar)
+        rail_column_layout.addWidget(self.rail_view, 1)
+        rail_column.setFixedWidth(262)
+
         self.progress_tab = ProgressTab()
         self.files_tab = FilesTab()
         self.errors_tab = ErrorsTab(
@@ -183,7 +206,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.summary_tab, "Summary")
 
         splitter = QSplitter()
-        splitter.addWidget(self.rail_view)
+        splitter.addWidget(rail_column)
         splitter.addWidget(self.tabs)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -377,7 +400,7 @@ class MainWindow(QMainWindow):
         if self._tray is not None:
             self._tray.notify_transitions(self._last_statuses, jobs)
         self._last_statuses = {job["id"]: job["status"] for job in jobs}
-        self._sync_rail_preserving_expansion(jobs, service_up=self._service_up)
+        self._sync_rail_preserving_expansion(self._filtered_jobs(jobs), service_up=self._service_up)
         self._update_first_run()
 
     def _on_down(self, _message: str) -> None:
@@ -392,7 +415,39 @@ class MainWindow(QMainWindow):
         # transition; a repeat failed tick would otherwise clear the user's
         # selection on every miss.
         if was_up:
-            self._sync_rail_preserving_expansion(self._last_jobs, service_up=False)
+            self._sync_rail_preserving_expansion(
+                self._filtered_jobs(self._last_jobs), service_up=False)
+
+    # -- rail profile filter ------------------------------------------
+
+    def _filtered_jobs(self, jobs: list[dict]) -> list[dict]:
+        if self._profile_filter is None:
+            return jobs
+        return [job for job in jobs
+                if job.get("profile_id") == self._profile_filter]
+
+    def show_jobs_for_profile(self, profile_id: int, name: str) -> None:
+        self._profile_filter = profile_id
+        self.filter_label.setText(f'Showing jobs using "{name}"')
+        self.filter_bar.show()
+        filtered_ids = {job["id"] for job in self._filtered_jobs(self._last_jobs)}
+        if self._selected_job_id is not None and self._selected_job_id not in filtered_ids:
+            self.rail_view.selectionModel().clearSelection()
+            self._selected_job_id = None
+            self._selected_status = None
+            self._update_action_states()
+            self.watcher.stop()
+            self.progress_tab.reset()
+            self.errors_tab.load_groups([])
+            self.summary_tab.set_causes(None, None)
+        self._sync_rail_preserving_expansion(
+            self._filtered_jobs(self._last_jobs), service_up=self._service_up)
+
+    def clear_profile_filter(self) -> None:
+        self._profile_filter = None
+        self.filter_bar.hide()
+        self._sync_rail_preserving_expansion(
+            self._last_jobs, service_up=self._service_up)
 
     def _on_profiles(self, profiles: list) -> None:
         self._no_connections = not profiles
@@ -549,7 +604,9 @@ class MainWindow(QMainWindow):
         self._poke_rail()
 
     def _open_connections(self) -> None:
-        ConnectionsDialog(self.client, self).exec()
+        dialog = ConnectionsDialog(self.client, self)
+        dialog.showJobsForProfile.connect(self.show_jobs_for_profile)
+        dialog.exec()
         call_async(self.client.list_profiles, parent=self, on_done=self._on_profiles)
 
     def _open_settings(self) -> None:
