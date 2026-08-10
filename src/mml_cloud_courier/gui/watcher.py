@@ -79,10 +79,11 @@ def poll_loop(
     interval: float = 2.0,
     on_jobs: Callable[[list], None],
     on_down: Callable[[str], None],
+    fetch: Callable[[], list] | None = None,
 ) -> None:
     while not stop():
         try:
-            on_jobs(client.list_jobs())
+            on_jobs((fetch or client.list_jobs)())
         except (requests.exceptions.RequestException, ServiceError, ValueError) as exc:
             on_down(str(exc))
         sleep(interval)

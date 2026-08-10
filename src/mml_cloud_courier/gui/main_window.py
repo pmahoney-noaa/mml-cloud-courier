@@ -77,6 +77,7 @@ class MainWindow(QMainWindow):
         self._selected_job_id: int | None = None
         self._selected_status: str | None = None
         self._pending_select: int | None = None
+        self._show_archived = False
         self._last_statuses: dict[int, str] = {}
         self._last_jobs: list[dict] = []
         self.poller: JobsPoller | None = None
@@ -150,6 +151,11 @@ class MainWindow(QMainWindow):
         self.rail_view.expandAll()
         completed_index = self.rail_model.index(RAIL_GROUPS.index("completed"), 0)
         self.rail_view.collapse(completed_index)   # once, at startup only
+        archived_index = self.rail_model.index(RAIL_GROUPS.index("archived"), 0)
+        self.rail_view.setRowHidden(
+            archived_index.row(), archived_index.parent(), True)
+        self.rail_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.rail_view.customContextMenuRequested.connect(self._show_rail_menu)
         self.rail_view.selectionModel().currentChanged.connect(
             self._on_rail_current_changed
         )
@@ -239,7 +245,10 @@ class MainWindow(QMainWindow):
         self.poller = JobsPoller(self)
         self.poller.jobs.connect(self._on_jobs)
         self.poller.down.connect(self._on_down)
-        self.poller.start(self.client, interval=self._poll_interval)
+        self.poller.start(
+            self.client, interval=self._poll_interval,
+            fetch=lambda: self.client.list_jobs(
+                include_archived=self._show_archived))
 
         call_async(self.client.list_profiles, parent=self, on_done=self._on_profiles)
 
@@ -470,6 +479,73 @@ class MainWindow(QMainWindow):
         self._sync_rail_preserving_expansion(
             self._last_jobs, service_up=self._service_up)
 
+    # -- archive ------------------------------------------------------
+
+    def _set_show_archived(self, on: bool) -> None:
+        self._show_archived = on
+        archived_index = self.rail_model.index(RAIL_GROUPS.index("archived"), 0)
+        self.rail_view.setRowHidden(
+            archived_index.row(), archived_index.parent(), not on)
+        if on:
+            self.rail_view.collapse(archived_index)    # starts shelved, like Completed
+        elif self._selected_job_id is not None:
+            selected = next((job for job in self._last_jobs
+                             if job["id"] == self._selected_job_id), None)
+            if selected is not None and selected.get("archived_at"):
+                self._clear_selection_and_tabs()
+        self._poke_rail()
+
+    def _rail_menu_spec(self, index) -> list[tuple[str, str, bool]]:
+        """(kind, label, checked) triples for the rail context menu at
+        `index` -- pure composition so tests can assert it without popping
+        a QMenu."""
+        spec: list[tuple[str, str, bool]] = []
+        job_id = index.data(JOB_ID_ROLE)
+        if job_id is not None:
+            job = next((j for j in self._last_jobs if j["id"] == job_id), None)
+            if job is not None:
+                if job.get("archived_at"):
+                    spec.append(("unarchive", "Unarchive job", False))
+                elif job.get("status") in ("complete", "cancelled"):
+                    spec.append(("archive", "Archive job", False))
+        spec.append(("toggle_archived", "Show archived", self._show_archived))
+        return spec
+
+    def _show_rail_menu(self, pos) -> None:
+        from PySide6.QtWidgets import QMenu
+        index = self.rail_view.indexAt(pos)
+        job_id = index.data(JOB_ID_ROLE)
+        menu = QMenu(self.rail_view)
+        for kind, label, checked in self._rail_menu_spec(index):
+            action = menu.addAction(label)
+            if kind == "toggle_archived":
+                action.setCheckable(True)
+                action.setChecked(checked)
+                action.triggered.connect(
+                    lambda on, self=self: self._set_show_archived(on))
+            elif kind == "archive":
+                action.triggered.connect(
+                    lambda _c=False, j=job_id: self._archive_job(j))
+            elif kind == "unarchive":
+                action.triggered.connect(
+                    lambda _c=False, j=job_id: self._unarchive_job(j))
+        menu.exec(self.rail_view.viewport().mapToGlobal(pos))
+
+    def _archive_job(self, job_id: int) -> None:
+        call_async(lambda: self.client.archive_job(job_id), parent=self,
+                   on_done=lambda _r, j=job_id: self._archived(j),
+                   on_failed=self._status_message)
+
+    def _archived(self, job_id: int) -> None:
+        if job_id == self._selected_job_id:
+            self._clear_selection_and_tabs()
+        self._poke_rail()
+
+    def _unarchive_job(self, job_id: int) -> None:
+        call_async(lambda: self.client.unarchive_job(job_id), parent=self,
+                   on_done=lambda _r: self._poke_rail(),
+                   on_failed=self._status_message)
+
     def _on_profiles(self, profiles: list) -> None:
         self._no_connections = not profiles
         if self._service_up:
@@ -580,7 +656,9 @@ class MainWindow(QMainWindow):
         self._poke_rail()
 
     def _poke_rail(self) -> None:
-        call_async(self.client.list_jobs, parent=self, on_done=self._on_jobs)
+        call_async(
+            lambda: self.client.list_jobs(include_archived=self._show_archived),
+            parent=self, on_done=self._on_jobs)
 
     def _status_message(self, message: str) -> None:
         self.statusBar().showMessage(message, 8000)

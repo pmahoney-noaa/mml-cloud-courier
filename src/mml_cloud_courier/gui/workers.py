@@ -90,7 +90,7 @@ class JobsPoller(QObject):
         super().__init__(parent)
         self._stop = threading.Event()
 
-    def start(self, client, interval: float = 2.0) -> None:
+    def start(self, client, interval: float = 2.0, fetch=None) -> None:
         self.stop()
         self._stop = threading.Event()
         stop_event = self._stop
@@ -99,6 +99,7 @@ class JobsPoller(QObject):
                 client, stop=stop_event.is_set, interval=interval,
                 on_jobs=_guarded(stop_event, self.jobs.emit),
                 on_down=_guarded(stop_event, self.down.emit),
+                fetch=fetch,
             ),
             daemon=True, name="mmlcc-gui-poll",
         ).start()
