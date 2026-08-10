@@ -348,13 +348,20 @@ class FilesTab(QWidget):
         layout.addWidget(self.error_label)
 
         self.state_combo.currentIndexChanged.connect(self._on_filter_changed)
+        self.table.verticalScrollBar().valueChanged.connect(self._on_scrolled)
 
         self._model: FileTableModel | None = None
         self._total: int | None = None
+        self._last_progress_sig: tuple | None = None
+        self._pending_refresh = False
+        self._last_auto_refresh = 0.0
 
     def attach(self, fetcher: Callable[..., list[dict]]) -> None:
         """Bind a new per-job fetcher and load its first page."""
         self._total = None   # previous job's total must not bleed into this one
+        self._last_progress_sig = None
+        self._pending_refresh = False
+        self._last_auto_refresh = 0.0
         self._model = FileTableModel(fetcher)
         self.table.setModel(self._model)
         self._model.rowsInserted.connect(self._update_header)
@@ -405,6 +412,42 @@ class FilesTab(QWidget):
             self.error_label.show()
         else:
             self.error_label.hide()
+
+    # -- polite auto-refresh ------------------------------------------
+    # File completions emit no events, so the watcher snapshot's progress
+    # dict is the live signal. A refresh resets the virtualized table's
+    # scroll position, so it only fires while the user is at the top;
+    # changes that arrive mid-browse (or inside the throttle window) set
+    # a pending flag flushed by a later tick or by scrolling back to top.
+
+    _AUTO_REFRESH_SECONDS = 2.0
+
+    def maybe_auto_refresh(self, progress: dict | None) -> None:
+        if not progress or self._model is None:
+            return
+        sig = (progress.get("files_done"),
+               tuple(sorted((progress.get("state_counts") or {}).items())))
+        if sig != self._last_progress_sig:
+            self._last_progress_sig = sig
+            self._pending_refresh = True
+        if not self._pending_refresh:
+            return
+        at_top = self.table.verticalScrollBar().value() == 0
+        cooled = (time.monotonic() - self._last_auto_refresh
+                  >= self._AUTO_REFRESH_SECONDS)
+        if at_top and cooled:
+            self._auto_refresh()
+
+    def _on_scrolled(self, value: int) -> None:
+        # Returning to the top flushes a deferred refresh; the throttle
+        # never blocks this flush (the user asked for the top of the list).
+        if value == 0 and self._pending_refresh and self._model is not None:
+            self._auto_refresh()
+
+    def _auto_refresh(self) -> None:
+        self._pending_refresh = False
+        self._last_auto_refresh = time.monotonic()
+        self.refresh()
 
 
 class SummaryTab(QWidget):

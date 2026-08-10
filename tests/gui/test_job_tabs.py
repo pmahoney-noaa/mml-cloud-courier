@@ -474,3 +474,79 @@ def test_summary_resume_button_hidden_for_archived_jobs(qtbot):
     tab.update_job({"id": 1, "status": "cancelled", "progress": {}})
     assert tab.archive_button.isVisibleTo(tab)
     assert tab.resume_button.isVisibleTo(tab)
+
+
+class _CountingFetcher:
+    def __init__(self):
+        self.fetches = 0
+
+    def __call__(self, **kw):
+        self.fetches += 1
+        return []
+
+
+def _progress(files_done, counts):
+    return {"files_total": 10, "files_done": files_done, "files_failed": 0,
+            "bytes_total": 0, "bytes_done": 0, "state_counts": counts}
+
+
+def test_auto_refresh_fires_on_progress_change_at_top(qtbot):
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    fetcher = _CountingFetcher()
+    tab.attach(fetcher)
+    baseline = fetcher.fetches                 # attach() does the first load
+    tab.maybe_auto_refresh(_progress(1, {"verified": 1}))
+    assert fetcher.fetches == baseline + 1
+    # identical signature: no churn
+    tab.maybe_auto_refresh(_progress(1, {"verified": 1}))
+    assert fetcher.fetches == baseline + 1
+    # None progress: no-op
+    tab.maybe_auto_refresh(None)
+    assert fetcher.fetches == baseline + 1
+
+
+def test_auto_refresh_throttles_within_two_seconds(qtbot, monkeypatch):
+    from mml_cloud_courier.gui import job_tabs as mod
+    now = {"t": 1000.0}
+    monkeypatch.setattr(mod.time, "monotonic", lambda: now["t"])
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    fetcher = _CountingFetcher()
+    tab.attach(fetcher)
+    baseline = fetcher.fetches
+    tab.maybe_auto_refresh(_progress(1, {"verified": 1}))
+    assert fetcher.fetches == baseline + 1
+    now["t"] += 0.5                            # inside the throttle window
+    tab.maybe_auto_refresh(_progress(2, {"verified": 2}))
+    assert fetcher.fetches == baseline + 1     # deferred, pending set
+    now["t"] += 2.0                            # window elapsed; same sig tick flushes
+    tab.maybe_auto_refresh(_progress(2, {"verified": 2}))
+    assert fetcher.fetches == baseline + 2
+
+
+def test_auto_refresh_defers_while_scrolled_and_flushes_on_return(qtbot):
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    fetcher = _CountingFetcher()
+    tab.attach(fetcher)
+    baseline = fetcher.fetches
+    tab.table.verticalScrollBar().setRange(0, 100)   # offscreen range is 0 otherwise
+    tab.table.verticalScrollBar().setValue(40)       # user is browsing deep
+    tab.maybe_auto_refresh(_progress(3, {"verified": 3}))
+    assert fetcher.fetches == baseline               # deferred
+    tab.table.verticalScrollBar().setValue(0)        # back to top -> flush
+    assert fetcher.fetches == baseline + 1
+
+
+def test_attach_resets_auto_refresh_state(qtbot):
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    tab.attach(_CountingFetcher())
+    tab.maybe_auto_refresh(_progress(1, {"verified": 1}))
+    fetcher2 = _CountingFetcher()
+    tab.attach(fetcher2)                       # new job
+    baseline = fetcher2.fetches
+    # same signature as the old job must still trigger: state was reset
+    tab.maybe_auto_refresh(_progress(1, {"verified": 1}))
+    assert fetcher2.fetches == baseline + 1
