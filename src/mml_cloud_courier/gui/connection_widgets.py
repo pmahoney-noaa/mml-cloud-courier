@@ -135,72 +135,83 @@ class StepRail(QWidget):
         self.current = step
         self.update()
 
+    def _segments(self) -> list[tuple[str, int, int, int]]:
+        """(kind, index, x, width) for circles, labels and rules at the
+        current width — pure layout, so tests can assert the run fits."""
+        from PySide6.QtGui import QFontMetrics
+        circle_d, gap = 20, 9
+        widths = []
+        for i, label in enumerate(self.LABELS):
+            f = QFont(self.font())
+            f.setWeight(QFont.Weight.DemiBold if i + 1 == self.current
+                        else QFont.Weight.Normal)
+            widths.append(QFontMetrics(f).horizontalAdvance(label))
+        # the painted run consumes 7 gaps (circle->label x3, label->rule x2,
+        # rule->circle x2) -- count them all or the last label clips
+        fixed = 3 * circle_d + sum(widths) + 7 * gap
+        rule_w = max(12, (self.width() - fixed) // 2)
+        segments = []
+        x = 0
+        for i in range(3):
+            segments.append(("circle", i, x, circle_d))
+            x += circle_d + gap
+            segments.append(("label", i, x, widths[i]))
+            x += widths[i]
+            if i < 2:
+                x += gap
+                segments.append(("rule", i, x, rule_w))
+                x += rule_w + gap
+        return segments
+
     def paintEvent(self, _event) -> None:
         t = theme.current()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         label_font = self.font()
-        metrics_width = self.width()
-        circle_d = 20
-        y = (self.height() - circle_d) // 2
-        gap = 9
-        # measure label widths at both weights to lay out three segments
-        from PySide6.QtGui import QFontMetrics
-        widths = []
-        for i, label in enumerate(self.LABELS):
-            f = QFont(label_font)
-            f.setWeight(QFont.Weight.DemiBold if i + 1 == self.current
-                        else QFont.Weight.Normal)
-            widths.append(QFontMetrics(f).horizontalAdvance(label))
-        fixed = 3 * circle_d + sum(widths) + 6 * gap
-        rule_w = max(12, (metrics_width - fixed) // 2)
-        x = 0
-        for i, label in enumerate(self.LABELS):
-            step = i + 1
-            # circle
-            cx, cy = x, y
-            if step < self.current:
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(theme._qcolor(t.accent))
-                painter.drawEllipse(cx, cy, circle_d, circle_d)
-                painter.setPen(QPen(theme._qcolor(t.accent_ink), 2))
-                painter.drawLine(cx + 6, cy + 10, cx + 9, cy + 13)
-                painter.drawLine(cx + 9, cy + 13, cx + 14, cy + 7)
-            elif step == self.current:
-                painter.setBrush(theme._qcolor(t.accent_soft))
-                painter.setPen(QPen(theme._qcolor(t.accent), 1.5))
-                painter.drawEllipse(cx + 1, cy + 1, circle_d - 2, circle_d - 2)
-                painter.setPen(theme._qcolor(t.accent_text))
-                painter.drawText(cx, cy, circle_d, circle_d,
-                                 Qt.AlignmentFlag.AlignCenter, str(step))
-            else:
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.setPen(QPen(theme._qcolor(t.line), 1.5))
-                painter.drawEllipse(cx + 1, cy + 1, circle_d - 2, circle_d - 2)
-                painter.setPen(theme._qcolor(t.faint))
-                painter.drawText(cx, cy, circle_d, circle_d,
-                                 Qt.AlignmentFlag.AlignCenter, str(step))
-            x += circle_d + gap
-            # label
-            f = QFont(label_font)
-            if step == self.current:
-                f.setWeight(QFont.Weight.DemiBold)
-                painter.setPen(theme._qcolor(t.ink))
-            elif step < self.current:
-                painter.setPen(theme._qcolor(t.muted))
-            else:
-                painter.setPen(theme._qcolor(t.faint))
-            painter.setFont(f)
-            painter.drawText(x, 0, widths[i], self.height(),
-                             Qt.AlignmentFlag.AlignVCenter, label)
-            x += widths[i] + gap
-            # rule to the next circle
-            if i < 2:
+        for kind, index, x, width in self._segments():
+            step = index + 1
+            if kind == "circle":
+                circle_d = width
+                cx, cy = x, (self.height() - circle_d) // 2
+                if step < self.current:
+                    painter.setPen(Qt.PenStyle.NoPen)
+                    painter.setBrush(theme._qcolor(t.accent))
+                    painter.drawEllipse(cx, cy, circle_d, circle_d)
+                    painter.setPen(QPen(theme._qcolor(t.accent_ink), 2))
+                    painter.drawLine(cx + 6, cy + 10, cx + 9, cy + 13)
+                    painter.drawLine(cx + 9, cy + 13, cx + 14, cy + 7)
+                elif step == self.current:
+                    painter.setBrush(theme._qcolor(t.accent_soft))
+                    painter.setPen(QPen(theme._qcolor(t.accent), 1.5))
+                    painter.drawEllipse(cx + 1, cy + 1, circle_d - 2, circle_d - 2)
+                    painter.setPen(theme._qcolor(t.accent_text))
+                    painter.drawText(cx, cy, circle_d, circle_d,
+                                     Qt.AlignmentFlag.AlignCenter, str(step))
+                else:
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.setPen(QPen(theme._qcolor(t.line), 1.5))
+                    painter.drawEllipse(cx + 1, cy + 1, circle_d - 2, circle_d - 2)
+                    painter.setPen(theme._qcolor(t.faint))
+                    painter.drawText(cx, cy, circle_d, circle_d,
+                                     Qt.AlignmentFlag.AlignCenter, str(step))
+            elif kind == "label":
+                f = QFont(label_font)
+                if step == self.current:
+                    f.setWeight(QFont.Weight.DemiBold)
+                    painter.setPen(theme._qcolor(t.ink))
+                elif step < self.current:
+                    painter.setPen(theme._qcolor(t.muted))
+                else:
+                    painter.setPen(theme._qcolor(t.faint))
+                painter.setFont(f)
+                painter.drawText(x, 0, width, self.height(),
+                                 Qt.AlignmentFlag.AlignVCenter,
+                                 self.LABELS[index])
+            else:  # "rule"
                 color = t.accent if step < self.current else t.line
                 painter.setPen(QPen(theme._qcolor(color), 1))
-                painter.drawLine(x, self.height() // 2, x + rule_w,
+                painter.drawLine(x, self.height() // 2, x + width,
                                  self.height() // 2)
-                x += rule_w + gap
 
 
 class RingSpinner(QWidget):

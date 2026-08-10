@@ -57,6 +57,18 @@ def test_step_rail_tracks_current(qtbot):
     assert rail.current == 2
 
 
+def test_step_rail_run_fits_its_width_on_every_step(qtbot):
+    rail = StepRail()
+    qtbot.addWidget(rail)
+    rail.resize(560, 28)   # the width the 600-wide stepper's header gives it
+    for step in (1, 2, 3):
+        rail.set_current(step)
+        segments = rail._segments()
+        kind, index, x, width = segments[-1]
+        assert (kind, index) == ("label", 2)      # trailing "Verify" label
+        assert x + width <= rail.width()           # fits — never clips
+
+
 def test_probe_list_paces_and_caps(qtbot):
     probes = ProbeList()
     qtbot.addWidget(probes)
