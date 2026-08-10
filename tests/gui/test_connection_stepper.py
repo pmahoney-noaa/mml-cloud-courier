@@ -449,3 +449,27 @@ def test_cancel_during_validating_discards_the_late_result(qtbot, tmp_path, monk
     assert created == []
     assert dialog._stack.currentWidget() is dialog.page_validating
     assert dialog._phase == "validating"
+
+
+def test_only_the_current_page_drives_the_dialog_height(qtbot, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QSizePolicy
+    client = CreateClient()
+    client.result = {"id": 9, "name": "MML imagery", "summary": "s"}
+    client.release.set()
+    dialog = NewConnectionDialog(client)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    # step 1: every non-current page has an Ignored vertical policy
+    for i in range(dialog._stack.count()):
+        widget = dialog._stack.widget(i)
+        expected = (QSizePolicy.Policy.Preferred if widget is dialog.page_where
+                    else QSizePolicy.Policy.Ignored)
+        assert widget.sizePolicy().verticalPolicy() == expected
+    height_step1 = dialog.height()
+    _choose_good_key(qtbot, dialog, tmp_path, monkeypatch)
+    qtbot.waitUntil(lambda: dialog._phase == "verified", timeout=5000)
+    # verified page now drives the height and fits fully inside the dialog
+    assert dialog._stack.currentWidget() is dialog.page_verified
+    assert dialog.page_verified.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Preferred
+    assert dialog.height() >= dialog.page_verified.sizeHint().height()

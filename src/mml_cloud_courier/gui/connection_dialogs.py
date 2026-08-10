@@ -18,6 +18,7 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -114,6 +116,9 @@ class NewConnectionDialog(QDialog):
         self.client = client
         self.setWindowTitle("New connection")
         self.setFixedWidth(600)
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        if screen is not None:
+            self.setMaximumHeight(screen.availableGeometry().height() - 80)
         self._step = 1
         self._phase = "idle"
         self._health_ok = False
@@ -189,6 +194,20 @@ class NewConnectionDialog(QDialog):
         call_async(self.client.health, parent=self,
                    on_done=self._service_ok, on_failed=self._service_down)
         self._go_to_step(1)
+
+    def _show_page(self, page) -> None:
+        # Only the current page drives the dialog's height ("600 x natural
+        # height" per state): inactive pages get an Ignored vertical policy
+        # so the stack's sizeHint tracks the visible step, then the dialog
+        # re-fits.
+        for i in range(self._stack.count()):
+            widget = self._stack.widget(i)
+            vertical = (QSizePolicy.Policy.Preferred if widget is page
+                        else QSizePolicy.Policy.Ignored)
+            widget.setSizePolicy(QSizePolicy.Policy.Preferred, vertical)
+        self._stack.setCurrentWidget(page)
+        self.layout().activate()
+        self.adjustSize()
 
     # -- pages -----------------------------------------------------------
 
@@ -601,7 +620,6 @@ class NewConnectionDialog(QDialog):
         return page
 
     def _copy_summary(self) -> None:
-        from PySide6.QtGui import QGuiApplication
         QGuiApplication.clipboard().setText(self.failed_summary.text())
 
     def _check_bucket_name(self) -> None:
@@ -627,7 +645,7 @@ class NewConnectionDialog(QDialog):
         self._step = step
         self.step_rail.set_current(step)
         if step == 1:
-            self._stack.setCurrentWidget(self.page_where)
+            self._show_page(self.page_where)
             self.back_button.setEnabled(False)
             self.back_button.setText("Back")
             self.next_button.show()
@@ -639,7 +657,7 @@ class NewConnectionDialog(QDialog):
         elif step == 2:
             self._phase = "idle"
             self.name_error.hide()
-            self._stack.setCurrentWidget(self.page_credential)
+            self._show_page(self.page_credential)
             self.back_button.setEnabled(True)
             self.back_button.setText("Back")
             self.next_button.hide()      # step 2 has no footer primary
@@ -756,7 +774,7 @@ class NewConnectionDialog(QDialog):
         self._phase = "signing-in"
         self._login_generation += 1
         generation = self._login_generation
-        self._stack.setCurrentWidget(self.page_signin)
+        self._show_page(self.page_signin)
         self.signin_spinner.start()
         self.back_button.setEnabled(False)
         self.next_button.hide()
@@ -789,7 +807,7 @@ class NewConnectionDialog(QDialog):
         self._phase = "validating"
         self._step = 3
         self.step_rail.set_current(3)
-        self._stack.setCurrentWidget(self.page_validating)
+        self._show_page(self.page_validating)
         self.validating_target.setText(self._target_path())
         self.back_button.setEnabled(False)
         self.next_button.hide()
@@ -812,7 +830,7 @@ class NewConnectionDialog(QDialog):
         self.verified_notice.setVisible(is_key)
         self.verified_key_path.setVisible(is_key)
         self.verified_key_path.setText(self._key_path or "")
-        self._stack.setCurrentWidget(self.page_verified)
+        self._show_page(self.page_verified)
         self.back_button.setEnabled(True)
         self.back_button.setText("Add another")
         try:
@@ -862,7 +880,7 @@ class NewConnectionDialog(QDialog):
         before_bucket = detail.startswith(
             "credential rejected before reaching the bucket")
         self.failed_chips_host.setVisible(code == 400 and not before_bucket)
-        self._stack.setCurrentWidget(self.page_failed)
+        self._show_page(self.page_failed)
         self.back_button.setEnabled(False)
         self.next_button.hide()
         self.done_button.hide()
