@@ -3,6 +3,24 @@
 **Date:** 2026-08-10
 **Status:** Approved (brainstorm 2026-08-10; installer tech, service-account
 handling, and end-state all user-selected)
+
+> **Amendments (2026-08-10, planning):**
+>
+> 1. `/tools/` is gitignored (downloaded binaries only), so build inputs live
+>    in a tracked `packaging/` directory instead: `packaging/mmlcc.spec`,
+>    `packaging/entry_{gui,cli,service}.py`, `packaging/mmlcc.iss`,
+>    `packaging/build_release.ps1` (was `tools/build_release.ps1` +
+>    `installer/mmlcc.iss`).
+> 2. The "installer grants the GUI user's SID" requirement gets its concrete
+>    mechanism: the GUI needs exactly one thing from the data dir — **read on
+>    `api_token`** (everything else goes through the API). But `ensure_token`
+>    strips inheritance and re-ACLs on every regeneration, so a one-shot
+>    installer icacls would not survive. Design (the hook `security.py`'s
+>    docstring reserved for Phase 6): the installer writes the installing
+>    user's SID to `<data_dir>\gui-users.sids` and applies an immediate
+>    `icacls <token> /grant *SID:(R)` if a token already exists;
+>    `ensure_token` re-applies read grants for every SID in that file each
+>    time it creates a token. Grants are raw SIDs always (6e45d4a).
 **Sequencing:** Second sub-project of the round icons → packaging → README.
 Consumes the icon sub-project's committed `mmlcc.ico`.
 
@@ -81,7 +99,7 @@ One spec file, **onedir**, producing three exes into one shared COLLECT folder:
   uvicorn/fastapi dynamic imports — verified by the gate's real service run and
   a packaged smoke checklist, not guessed at in the spec.
 
-### Build script — `tools/build_release.ps1`
+### Build script — `packaging/build_release.ps1`
 
 `.venv` → `pyinstaller` → `ISCC` → `dist/mml-cloud-courier-setup-<version>.exe`.
 Version is read from `pyproject.toml` (single source) and stamped into the exe
@@ -90,17 +108,19 @@ to **0.2.0** for the first packaged build and **0.2.1** for the gate's upgrade
 test (both real commits); christening 1.0.0 stays the user's call later.
 PyInstaller and Inno artifacts (`build/`, `dist/`) are gitignored.
 
-## Installer behavior — `installer/mmlcc.iss`
+## Installer behavior — `packaging/mmlcc.iss`
 
 - **Install dir:** `{autopf}\MML Cloud Courier`. **Data dir:**
   `%ProgramData%\MML Cloud Courier` (created if absent).
 - **Tasks:** Start Menu shortcut for the GUI (always); optional desktop icon;
   optional add-install-dir-to-PATH for the CLI.
 - **First install** (service not yet registered): register `MMLCloudCourier`
-  (auto-start, LocalSystem) via `mmlcc-service.exe install`, create the data dir,
-  `icacls` grant to the installing user's **SID** (resolved from the running
-  installer process), start the service, finish-page note about the Log On step
-  for named-account configs.
+  (auto-start, LocalSystem) via `mmlcc-service.exe install`, create the data
+  dir, write the installing user's **SID** (resolved from the running
+  installer process, never an account name) to `<data_dir>\gui-users.sids`
+  and `icacls`-grant it `(R)` on any existing `api_token` (see Amendment 2),
+  start the service, finish-page note about the Log On step for named-account
+  configs.
 - **Upgrade** (service already registered, ImagePath already the packaged exe):
   stop service → replace files → start service. No re-registration, no ACL
   changes, no data-dir writes. Log-on account and DPAPI blobs untouched.

@@ -40,7 +40,11 @@ Masters live at the repo root (`assets/`) because they are source, not payload.
 Rendered assets live inside the package so `importlib.resources` reaches them in
 dev (editable install), wheel, and frozen (PyInstaller) contexts alike.
 
-## Rasterizer — `tools/render_icons.py`
+## Rasterizer — `scripts/render_icons.py`
+
+> **Amendment (2026-08-10, planning):** originally `tools/render_icons.py`;
+> `/tools/` is gitignored (downloaded binaries only), so tracked dev scripts
+> live in a new `scripts/` directory instead.
 
 - Dev-run script (never a build step, never imported by the app). Uses the venv's
   PySide6 `QtSvg`/`QSvgRenderer` to render each size; when `mark-16.svg` exists it
@@ -72,7 +76,7 @@ dev (editable install), wheel, and frozen (PyInstaller) contexts alike.
   `icons.py` contains no color literals at all. SVG/asset files are out of scope
   for that test. `theme.py` remains the only `.py` exception.
 - The engine never imports gui/Qt — untouched here (all changes are gui-side +
-  root-level tools/assets).
+  root-level scripts/assets).
 - Existing GUI tests that call `app_icon()` (directly or via tray/main-window
   construction) must keep passing; offscreen rendering never paints, so any new
   assertion that needs pixels must force with `grab()` (recorded Qt gotcha) — but
