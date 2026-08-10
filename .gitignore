@@ -12,6 +12,7 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+packaging/_version_info.txt
 
 # Local credentials — never commit
 *.json.key

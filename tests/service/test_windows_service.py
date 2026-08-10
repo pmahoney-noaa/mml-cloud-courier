@@ -34,3 +34,78 @@ def test_service_is_hosted_by_the_venv_python_not_pythonservice():
     assert cls._exe_name_.lower().endswith("python.exe")
     module_path = str(Path(windows_service.__file__).resolve())
     assert cls._exe_args_ == f'"{module_path}"'
+
+
+def test_exe_args_are_none_when_frozen(monkeypatch):
+    """Packaged (PyInstaller), the exe IS the service host: ImagePath must
+    be the bare exe, no arguments — pywin32 omits them when None."""
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(windows_service.sys, "frozen", True, raising=False)
+    assert windows_service._service_exe_args() is None
+
+
+def test_exe_args_point_at_the_module_when_not_frozen(monkeypatch):
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.delattr(windows_service.sys, "frozen", raising=False)
+    args = windows_service._service_exe_args()
+    assert args.startswith('"') and args.endswith('windows_service.py"')
+
+
+def test_scm_launch_means_no_arguments(monkeypatch):
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(windows_service.sys, "argv", ["mmlcc-service.exe"])
+    assert windows_service._scm_launch()
+    monkeypatch.setattr(
+        windows_service.sys, "argv", ["mmlcc-service.exe", "install"]
+    )
+    assert not windows_service._scm_launch()
+
+
+def test_run_routes_command_lines_to_main(monkeypatch):
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(windows_service.sys, "argv", ["mmlcc-service", "--x"])
+    calls = []
+    monkeypatch.setattr(windows_service, "main", lambda: calls.append(1) or 0)
+    assert windows_service.run() == 0
+    assert calls
+
+
+def test_main_propagates_handle_command_line_error(monkeypatch):
+    """The installer gates registration success on this exit code — a
+    swallowed pywin32 error would show a green installer with no service
+    (final-review finding)."""
+    import win32serviceutil
+
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(
+        win32serviceutil, "HandleCommandLine", lambda cls, argv: 1072
+    )
+    calls = []
+    monkeypatch.setattr(
+        windows_service, "_configure_restart_on_failure",
+        lambda: calls.append(True),
+    )
+    assert windows_service.main(["install"]) == 1072
+    assert not calls  # failure actions never configured on a failed install
+
+
+def test_main_configures_restart_only_on_successful_install(monkeypatch):
+    import win32serviceutil
+
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(
+        win32serviceutil, "HandleCommandLine", lambda cls, argv: None
+    )
+    calls = []
+    monkeypatch.setattr(
+        windows_service, "_configure_restart_on_failure",
+        lambda: calls.append(True),
+    )
+    assert windows_service.main(["install"]) == 0
+    assert calls
