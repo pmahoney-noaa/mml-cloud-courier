@@ -8,9 +8,9 @@ from PySide6.QtCore import QModelIndex, Qt
 from mml_cloud_courier.gui.files_model import PAGE, FileTableModel
 
 
-def _rows(n, state="verified"):
+def _rows(n, state="verified", **extra):
     return [{"relative_path": f"f{i}.bin", "size_bytes": 1000 + i,
-             "state": state, "error_message": None} for i in range(n)]
+             "state": state, "error_message": None, **extra} for i in range(n)]
 
 
 class RecordingFetcher:
@@ -150,3 +150,58 @@ def test_path_column_tooltip_is_full_path():
     index = model.index(0, 0)
     assert model.data(index, Qt.ItemDataRole.ToolTipRole) == "leg3/imagery/IMG_1147.tif"
     assert model.data(model.index(0, 1), Qt.ItemDataRole.ToolTipRole) is None
+
+
+def test_headers_include_crc32c_before_detail(qapp):
+    assert FileTableModel.HEADERS == ("PATH", "SIZE", "STATE", "CRC32C", "DETAIL")
+
+
+def test_size_state_and_crc32c_are_centered(qapp):
+    from PySide6.QtCore import Qt
+    model = FileTableModel(RecordingFetcher(_rows(1)))
+    model.set_filter()
+    center = int(Qt.AlignmentFlag.AlignCenter)
+    for column in (1, 2, 3):
+        assert model.data(model.index(0, column),
+                          Qt.ItemDataRole.TextAlignmentRole) == center
+    assert model.data(model.index(0, 0),
+                      Qt.ItemDataRole.TextAlignmentRole) is None
+
+
+def test_crc32c_column_renders_base64_or_dash(qapp):
+    from mml_cloud_courier.core.hashing import crc32c_to_base64
+    done = _rows(1, remote_crc32c=3405691582, local_crc32c=3405691582)
+    pending = _rows(1, state="pending")          # no checksum keys at all
+    model = FileTableModel(RecordingFetcher(done))
+    model.set_filter()
+    assert model.data(model.index(0, 3)) == crc32c_to_base64(3405691582)
+    model = FileTableModel(RecordingFetcher(pending))
+    model.set_filter()
+    assert model.data(model.index(0, 3)) == "—"
+
+
+def test_crc32c_tooltip_lists_local_remote_and_optional_sha256(qapp):
+    from PySide6.QtCore import Qt
+    from mml_cloud_courier.core.hashing import crc32c_to_base64
+    with_sha = _rows(1, remote_crc32c=99, local_crc32c=99, sha256="ab" * 32)
+    model = FileTableModel(RecordingFetcher(with_sha))
+    model.set_filter()
+    tip = model.data(model.index(0, 3), Qt.ItemDataRole.ToolTipRole)
+    b64 = crc32c_to_base64(99)
+    assert f"local  {b64}" in tip and f"remote {b64}" in tip
+    assert "sha256 " + "ab" * 32 in tip
+    without = _rows(1, remote_crc32c=99)
+    model = FileTableModel(RecordingFetcher(without))
+    model.set_filter()
+    tip = model.data(model.index(0, 3), Qt.ItemDataRole.ToolTipRole)
+    assert "sha256" not in tip
+    assert "local  —" in tip                 # missing local renders as dash
+
+
+def test_detail_column_moved_to_index_4(qapp):
+    rows = _rows(1, state="failed")
+    rows[0]["error_message"] = "in use by EDITOR.EXE"
+    model = FileTableModel(RecordingFetcher(rows))
+    model.set_filter()
+    assert model.data(model.index(0, 4)) == "in use by EDITOR.EXE"
+    assert model.columnCount() == 5

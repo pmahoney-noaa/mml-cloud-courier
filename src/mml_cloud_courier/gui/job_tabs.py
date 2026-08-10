@@ -366,7 +366,9 @@ class FilesTab(QWidget):
         header.resizeSection(2, 204)   # STATE — hard requirement: "Excluded after
                                        # repeated failures" must render in full
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)   # DETAIL
+        header.resizeSection(3, 110)                                     # CRC32C
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)   # DETAIL
 
         self.refresh()
 

@@ -426,6 +426,18 @@ def test_files_state_column_fixed(qtbot):
     assert header.sectionSize(2) == 204
 
 
+def test_files_crc32c_column_fixed_and_detail_stretches(qtbot):
+    from PySide6.QtWidgets import QHeaderView
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    tab.attach(lambda **kw: [])
+    header = tab.table.horizontalHeader()
+    assert header.sectionResizeMode(3) == QHeaderView.ResizeMode.Fixed
+    assert header.sectionSize(3) == 110
+    assert header.sectionResizeMode(4) == QHeaderView.ResizeMode.Stretch
+    assert header.sectionSize(2) == 204          # STATE unchanged, load-bearing
+
+
 def test_summary_archive_button_visibility_and_callback(qtbot):
     archived_calls = []
     tab = SummaryTab(on_open_report=lambda: None, on_resume=lambda: None,

@@ -11,6 +11,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
+from mml_cloud_courier.core.hashing import crc32c_to_base64
 from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.format import STATE_LABELS, human_bytes
 from mml_cloud_courier.gui.progress_widgets import STATE_TEXT_TOKENS
@@ -18,8 +19,12 @@ from mml_cloud_courier.gui.progress_widgets import STATE_TEXT_TOKENS
 PAGE = 500
 
 
+def _crc_b64_or_dash(value: int | None) -> str:
+    return crc32c_to_base64(value) if value is not None else "—"
+
+
 class FileTableModel(QAbstractTableModel):
-    HEADERS = ("PATH", "SIZE", "STATE", "DETAIL")
+    HEADERS = ("PATH", "SIZE", "STATE", "CRC32C", "DETAIL")
 
     def __init__(self, fetcher: Callable[..., list[dict]], parent=None):
         super().__init__(parent)
@@ -83,8 +88,12 @@ class FileTableModel(QAbstractTableModel):
             return None
         if role == Qt.ItemDataRole.ToolTipRole and index.column() == 0:
             return self._rows[index.row()]["relative_path"]
-        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() == 1:
-            return int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        if role == Qt.ItemDataRole.ToolTipRole and index.column() == 3:
+            return self._checksum_tooltip(self._rows[index.row()])
+        if role == Qt.ItemDataRole.TextAlignmentRole and index.column() in (1, 2, 3):
+            return int(Qt.AlignmentFlag.AlignCenter)
+        if role == Qt.ItemDataRole.FontRole and index.column() == 3:
+            return theme.mono_font(8.5)
         if index.column() == 2 and role == Qt.ItemDataRole.ForegroundRole:
             state = self._rows[index.row()]["state"]
             token = STATE_TEXT_TOKENS.get(state, "muted")
@@ -99,4 +108,16 @@ class FileTableModel(QAbstractTableModel):
             return human_bytes(row["size_bytes"])
         if column == 2:
             return STATE_LABELS.get(row["state"], row["state"])
+        if column == 3:
+            return _crc_b64_or_dash(row.get("remote_crc32c"))
         return row.get("error_message") or ""
+
+    @staticmethod
+    def _checksum_tooltip(row: dict) -> str:
+        lines = [
+            f"local  {_crc_b64_or_dash(row.get('local_crc32c'))}",
+            f"remote {_crc_b64_or_dash(row.get('remote_crc32c'))}",
+        ]
+        if row.get("sha256"):
+            lines.append(f"sha256 {row['sha256']}")
+        return "\n".join(lines)
