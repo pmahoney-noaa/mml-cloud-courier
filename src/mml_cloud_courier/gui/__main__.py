@@ -14,14 +14,11 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName("MML Cloud Courier")
+    app.setWindowIcon(app_icon())
 
     from mml_cloud_courier.gui import theme
 
     theme.apply_theme(app, theme.resolve(theme.theme_setting()))
-    # Paint the icon only after the theme is applied -- app_icon() reads
-    # theme.current(), so painting it first bakes in LIGHT's accent color
-    # until the first theme change on a dark-system launch.
-    app.setWindowIcon(app_icon())
 
     def _on_scheme_changed(_scheme):
         if theme.theme_setting() == "system":
@@ -42,7 +39,6 @@ def main() -> int:
     window = MainWindow(discover_session())
     theme.apply_dark_titlebar(window, theme.current().dark)
     theme.notifier.changed.connect(lambda t: theme.apply_dark_titlebar(window, t.dark))
-    theme.notifier.changed.connect(lambda _t: app.setWindowIcon(app_icon()))
     window.show()
     code = app.exec()
     window.shutdown()

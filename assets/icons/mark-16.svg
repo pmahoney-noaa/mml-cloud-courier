@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <rect x="10" y="10" width="236" height="236" rx="54" fill="#e5f5fd" stroke="#c8dfeb" stroke-width="3"/>
+  <path transform="translate(128 128) scale(1.35) translate(-128 -179)" fill="#006ea0"
+        d="M52 132
+           C84 142 112 154 122 170
+           C125 174 126 176 128 176
+           C130 176 131 174 134 170
+           C144 154 172 142 204 132
+           C206 158 188 186 154 196
+           C146 199 142 206 140 214
+           L138 226
+           L118 226
+           C116 214 114 206 102 196
+           C68 186 50 158 52 132 Z"/>
+</svg>

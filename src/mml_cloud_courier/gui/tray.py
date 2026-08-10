@@ -13,7 +13,6 @@ from __future__ import annotations
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from mml_cloud_courier.gui import theme
 from mml_cloud_courier.gui.icons import app_icon
 from mml_cloud_courier.gui.watcher import detect_transitions
 
@@ -51,15 +50,11 @@ class TrayController:
         self.available = QSystemTrayIcon.isSystemTrayAvailable()
         self.icon = None
         self.menu = None
-        self._theme_refresh_slot = None
         if not self.available:
             return
 
         self.icon = QSystemTrayIcon(app_icon(), parent)
         self.icon.setToolTip("MML Cloud Courier")
-
-        self._theme_refresh_slot = lambda _t: self._refresh_icon(_t)
-        theme.notifier.changed.connect(self._theme_refresh_slot)
 
         self.menu = QMenu()
         open_action = QAction("Open", self.menu)
@@ -92,15 +87,6 @@ class TrayController:
     def _on_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.DoubleClick:
             self._open_window()
-
-    def _refresh_icon(self, _t) -> None:
-        if self.icon is not None:
-            self.icon.setIcon(app_icon())
-
-    def shutdown(self) -> None:
-        if self._theme_refresh_slot is not None:
-            theme.notifier.changed.disconnect(self._theme_refresh_slot)
-            self._theme_refresh_slot = None
 
     def handle_close(self, event) -> bool:
         """Called from MainWindow.closeEvent. Returns True when the tray
