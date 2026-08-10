@@ -22,6 +22,7 @@ itself: ImagePath is the bare ``mmlcc-service.exe`` (no arguments), and
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -29,6 +30,19 @@ from pathlib import Path
 
 SERVICE_NAME = "MMLCloudCourier"
 DISPLAY_NAME = "MML Cloud Courier Service"
+
+
+def _ensure_service_stdio() -> None:
+    """An SCM-launched PyInstaller exe has no console, and its bootloader
+    leaves sys.stdout/stderr as None — uvicorn's default log formatter
+    then dies on sys.stdout.isatty() at Config construction, killing
+    SvcDoRun before the host runs (found live at the Phase 6 gate). The
+    venv-hosted python.exe always provided stream objects even without a
+    console; restore that parity with devnull streams."""
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 
 def _service_exe_args() -> str | None:
@@ -70,6 +84,7 @@ def _build_service_class():
             self._host = None
 
         def SvcDoRun(self):
+            _ensure_service_stdio()
             servicemanager.LogMsg(
                 servicemanager.EVENTLOG_INFORMATION_TYPE,
                 servicemanager.PYS_SERVICE_STARTED,

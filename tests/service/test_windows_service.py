@@ -109,3 +109,42 @@ def test_main_configures_restart_only_on_successful_install(monkeypatch):
     )
     assert windows_service.main(["install"]) == 0
     assert calls
+
+
+def test_ensure_service_stdio_replaces_none_streams(monkeypatch):
+    """Frozen-service context: an SCM-launched PyInstaller exe has no
+    console, so sys.stdout/stderr are None — and uvicorn's default log
+    formatter calls sys.stdout.isatty() at Config construction, killing
+    SvcDoRun before the host runs (live Phase 6 gate failure: ValueError
+    'Unable to configure formatter default', service-specific 0x20000001).
+    The venv-hosted python.exe always provided stream objects even without
+    a console; _ensure_service_stdio restores that parity."""
+    import sys
+
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)
+    windows_service._ensure_service_stdio()
+    # NUL is a character device, so isatty() is True on Windows — that is
+    # fine (colors written to NUL are discarded); what matters is that the
+    # streams exist and are probeable.
+    assert sys.stdout is not None and sys.stdout.isatty() in (True, False)
+    assert sys.stderr is not None
+    import uvicorn
+
+    # The exact construction that crashed live: must not raise with the
+    # repaired stdio (app import string is never resolved at Config time).
+    uvicorn.Config("never.imported:app", host="127.0.0.1", port=59999,
+                   log_level="warning")
+
+
+def test_ensure_service_stdio_leaves_real_streams_alone():
+    import sys
+
+    from mml_cloud_courier.service import windows_service
+
+    before_out, before_err = sys.stdout, sys.stderr
+    windows_service._ensure_service_stdio()
+    assert sys.stdout is before_out
+    assert sys.stderr is before_err
