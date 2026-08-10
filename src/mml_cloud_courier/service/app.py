@@ -35,7 +35,9 @@ from mml_cloud_courier.service.controller import JobController
 from mml_cloud_courier.service.security import ensure_token
 from mml_cloud_courier.service.sse import progress_events
 from mml_cloud_courier.store.db import connect
-from mml_cloud_courier.store.repository import JobRepository, ProfileInUse
+from mml_cloud_courier.store.repository import (
+    JobNotArchivable, JobRepository, ProfileInUse,
+)
 
 try:
     VERSION = importlib.metadata.version("mml-cloud-courier")
@@ -326,10 +328,11 @@ def create_app(
         }
 
     @router.get("/jobs")
-    def list_jobs() -> list[dict]:
+    def list_jobs(include_archived: bool = False) -> list[dict]:
         conn, repo = _open()
         try:
-            return [_row_dict(row) for row in repo.list_jobs()]
+            return [_row_dict(row)
+                    for row in repo.list_jobs(include_archived=include_archived)]
         finally:
             conn.close()
 
@@ -482,6 +485,31 @@ def create_app(
             repo.set_job_status(job_id, JobStatus.PENDING)
             repo.record_event(job_id, "resumed_by_user")
             return {"status": JobStatus.PENDING.value}
+        finally:
+            conn.close()
+
+    @router.post("/jobs/{job_id}/archive")
+    def archive_job(job_id: int) -> dict:
+        conn, repo = _open()
+        try:
+            _job_or_404(repo, job_id)
+            try:
+                repo.archive_job(job_id)
+            except JobNotArchivable as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from None
+            repo.record_event(job_id, "archived_by_user")
+            return {"archived": job_id}
+        finally:
+            conn.close()
+
+    @router.post("/jobs/{job_id}/unarchive")
+    def unarchive_job(job_id: int) -> dict:
+        conn, repo = _open()
+        try:
+            _job_or_404(repo, job_id)
+            repo.unarchive_job(job_id)
+            repo.record_event(job_id, "unarchived_by_user")
+            return {"unarchived": job_id}
         finally:
             conn.close()
 
