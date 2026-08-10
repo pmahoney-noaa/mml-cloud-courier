@@ -15,6 +15,7 @@ $python = Join-Path $root ".venv\Scripts\python.exe"
 if (-not (Test-Path $python)) { throw "venv python not found at $python" }
 
 $version = & $python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path(r'$root\pyproject.toml').read_text('utf-8'))['project']['version'])"
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($version)) { throw "failed to read [project].version from pyproject.toml" }
 Write-Host "Building MML Cloud Courier $version"
 
 & $python (Join-Path $root "packaging\version_info.py")
