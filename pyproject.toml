@@ -22,6 +22,7 @@ dev = [
     "PySide6>=6.7,<7",
     "pytest-qt>=4.4",
 ]
+build = ["pyinstaller>=6.10,<7"]
 
 [project.scripts]
 mmlcc = "mml_cloud_courier.cli.__main__:main"
