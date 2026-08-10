@@ -1041,6 +1041,11 @@ class ConnectionsDialog(QDialog):
                    on_failed=lambda message, c=card: self._delete_failed(c, message))
 
     def _delete_failed(self, card, message) -> None:
+        # refresh() deleteLater()s every card and rebuilds self.cards; a
+        # delete that was in flight during that refresh must not touch the
+        # now-dead card its callback still closes over.
+        if card not in self.cards:
+            return
         code, detail = split_service_error(message)
         match = re.search(r"used by (\d+) job", detail)
         if code == 409 and match:

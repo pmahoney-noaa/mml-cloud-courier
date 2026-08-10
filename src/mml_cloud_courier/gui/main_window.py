@@ -367,6 +367,22 @@ class MainWindow(QMainWindow):
           rather than silently vanish -- the group is force-expanded and
           the job force-selected, same as if the user had clicked it.
         """
+        pending = self._pending_select
+        if (pending is not None and self._profile_filter is not None
+                and any(job["id"] == pending for job in self._last_jobs)
+                and not any(job["id"] == pending for job in jobs)):
+            # The just-submitted job exists but the profile filter hides
+            # it. An explicit submission wins over view state -- the same
+            # doctrine as the force-expand below -- so drop the filter;
+            # clear_profile_filter re-syncs with the full list and this
+            # method's pending branch then selects the job. This has to
+            # run before sync_rail below: the filtered `jobs` this method
+            # was called with may be identical to what the rail already
+            # shows (the new job lives outside the filter), which makes
+            # sync_rail a no-op that returns before ever reaching the
+            # pending/target/index logic further down.
+            self.clear_profile_filter()
+            return
         expanded_before = {
             group: self.rail_view.isExpanded(self.rail_model.index(i, 0))
             for i, group in enumerate(RAIL_GROUPS)
@@ -377,7 +393,6 @@ class MainWindow(QMainWindow):
         for i, group in enumerate(RAIL_GROUPS):
             self.rail_view.setExpanded(self.rail_model.index(i, 0), expanded_before[group])
 
-        pending = self._pending_select
         target = pending if pending is not None else self._selected_job_id
         if target is None:
             return
@@ -426,20 +441,26 @@ class MainWindow(QMainWindow):
         return [job for job in jobs
                 if job.get("profile_id") == self._profile_filter]
 
+    def _clear_selection_and_tabs(self) -> None:
+        """The full deselection reset: mirrors what selecting a different
+        job would tear down, so no tab keeps rendering a job the rail no
+        longer shows."""
+        self.rail_view.selectionModel().clearSelection()
+        self._selected_job_id = None
+        self._selected_status = None
+        self._update_action_states()
+        self.watcher.stop()
+        self.progress_tab.reset()
+        self.errors_tab.load_groups([])
+        self.summary_tab.set_causes(None, None)
+
     def show_jobs_for_profile(self, profile_id: int, name: str) -> None:
         self._profile_filter = profile_id
         self.filter_label.setText(f'Showing jobs using "{name}"')
         self.filter_bar.show()
         filtered_ids = {job["id"] for job in self._filtered_jobs(self._last_jobs)}
         if self._selected_job_id is not None and self._selected_job_id not in filtered_ids:
-            self.rail_view.selectionModel().clearSelection()
-            self._selected_job_id = None
-            self._selected_status = None
-            self._update_action_states()
-            self.watcher.stop()
-            self.progress_tab.reset()
-            self.errors_tab.load_groups([])
-            self.summary_tab.set_causes(None, None)
+            self._clear_selection_and_tabs()
         self._sync_rail_preserving_expansion(
             self._filtered_jobs(self._last_jobs), service_up=self._service_up)
 
