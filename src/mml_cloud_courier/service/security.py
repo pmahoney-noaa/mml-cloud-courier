@@ -3,7 +3,8 @@
 Localhost is not access control on a multi-user machine (spec). The ACL is
 cut to SYSTEM, Administrators, and the account that created the file — the
 account the service runs as. Which additional principal the GUI's user gets
-is an installer decision (Phase 6), not made here.
+is an installer decision (Phase 6): the installer lists reader SIDs in
+gui-users.sids next to the token, honored on every token creation.
 """
 
 from __future__ import annotations
@@ -67,6 +68,38 @@ def restrict_acl(path: Path, *, inheritable: bool = False) -> None:
     )
 
 
+def _reader_sids(directory: Path) -> list[str]:
+    """SIDs granted read on the API token: <data_dir>\\gui-users.sids,
+    one raw SID per line, `#` comments and blanks ignored. Written by the
+    installer (Phase 6) — this is the 'which additional principal the
+    GUI's user gets' decision the module docstring reserves for it.
+    Missing file means no extra readers."""
+    try:
+        lines = (directory / "gui-users.sids").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    except OSError:
+        return []
+    sids = []
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith("#") and line.upper().startswith("S-1-"):
+            sids.append(line)
+    return sids
+
+
+def _grant_readers(path: Path) -> None:
+    """Additive (R) grants for the installer-listed GUI users. Runs on
+    every token creation because restrict_acl just wiped the ACL."""
+    if sys.platform != "win32":
+        return
+    for sid in _reader_sids(path.parent):
+        subprocess.run(
+            ["icacls", str(path), "/grant", f"*{sid}:(R)"],
+            check=True, capture_output=True, text=True,
+        )
+
+
 def ensure_token(path: Path) -> str:
     """Create (if missing) and return the API bearer token.
 
@@ -83,6 +116,7 @@ def ensure_token(path: Path) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch()
     restrict_acl(path)
+    _grant_readers(path)
     token = secrets.token_urlsafe(32)
     path.write_text(token, encoding="utf-8")
     return token

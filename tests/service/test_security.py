@@ -97,3 +97,50 @@ def test_acl_grants_default_stays_non_inheritable(monkeypatch):
     monkeypatch.setattr(security, "_current_sid", lambda: None)
     grants = _acl_grants()
     assert "*S-1-5-18:(F)" in grants
+
+
+def test_reader_sids_parses_sids_skipping_comments_blanks_and_junk(tmp_path):
+    (tmp_path / "gui-users.sids").write_text(
+        "# gui users\n\nS-1-5-21-111-222-333-1001\nnot-a-sid\n"
+        "s-1-5-21-9-9-9-500\n",
+        encoding="utf-8",
+    )
+    assert security._reader_sids(tmp_path) == [
+        "S-1-5-21-111-222-333-1001",
+        "s-1-5-21-9-9-9-500",
+    ]
+
+
+def test_reader_sids_missing_file_means_no_readers(tmp_path):
+    assert security._reader_sids(tmp_path) == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="ACLs are Windows-only")
+def test_ensure_token_grants_listed_readers(tmp_path, monkeypatch):
+    """The installer writes gui-users.sids (Phase 6); every token
+    (re)creation must re-apply the read grants, or a regeneration would
+    silently lock the GUI user out again."""
+    calls = []
+    real_run = subprocess.run
+
+    def spy(cmd, **kwargs):
+        calls.append(list(cmd))
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(security.subprocess, "run", spy)
+    # S-1-5-32-545 = BUILTIN\Users: a well-known SID that always resolves.
+    (tmp_path / "gui-users.sids").write_text("S-1-5-32-545\n", encoding="utf-8")
+    ensure_token(tmp_path / "api_token")
+    grant_calls = [c for c in calls if "/grant" in c]
+    assert any("*S-1-5-32-545:(R)" in c for c in grant_calls)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="ACLs are Windows-only")
+def test_token_acl_actually_includes_reader_sids(tmp_path):
+    (tmp_path / "gui-users.sids").write_text("S-1-5-32-545\n", encoding="utf-8")
+    ensure_token(tmp_path / "api_token")
+    out = subprocess.run(
+        ["icacls", str(tmp_path / "api_token")],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert "S-1-5-32-545" in out or "Users" in out
