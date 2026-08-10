@@ -386,6 +386,10 @@ class FilesTab(QWidget):
     def refresh(self) -> None:
         if self._model is None:
             return
+        # A manual refresh satisfies any pending auto-refresh; clearing the
+        # flag first also stops the model reset's scrollbar snap-to-0 from
+        # triggering a redundant second fetch via _on_scrolled.
+        self._pending_refresh = False
         state = self.state_combo.currentData()
         self._model.set_filter(state=state)
         self._show_error()

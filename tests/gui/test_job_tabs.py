@@ -550,3 +550,18 @@ def test_attach_resets_auto_refresh_state(qtbot):
     # same signature as the old job must still trigger: state was reset
     tab.maybe_auto_refresh(_progress(1, {"verified": 1}))
     assert fetcher2.fetches == baseline + 1
+
+
+def test_manual_refresh_clears_pending_and_avoids_double_fetch(qtbot):
+    tab = FilesTab()
+    qtbot.addWidget(tab)
+    fetcher = _CountingFetcher()
+    tab.attach(fetcher)
+    tab.table.verticalScrollBar().setRange(0, 100)
+    tab.table.verticalScrollBar().setValue(40)
+    tab.maybe_auto_refresh(_progress(5, {"verified": 5}))   # deferred: pending set
+    baseline = fetcher.fetches
+    tab.refresh()          # manual refresh (e.g. filter change): snaps scroll to 0
+    tab.table.verticalScrollBar().setValue(0)               # ensure the flush path runs
+    assert fetcher.fetches == baseline + 1                  # exactly one fetch, no double
+    assert tab._pending_refresh is False
