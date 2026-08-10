@@ -1,6 +1,6 @@
 """The left rail: jobs grouped by status, Needs attention pinned on top.
 
-A QStandardItemModel with four permanent group rows; sync_rail replaces
+A QStandardItemModel with five permanent group rows; sync_rail replaces
 each group's children when the incoming jobs actually differ from the
 last sync (see the signature check below) -- otherwise it's a no-op.
 Cheap and correct for the tens of jobs a workstation accumulates;
@@ -15,12 +15,13 @@ from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from mml_cloud_courier.gui.format import STATUS_LABELS, human_schedule
 
-RAIL_GROUPS = ("needs_attention", "running", "queued", "completed")
+RAIL_GROUPS = ("needs_attention", "running", "queued", "completed", "archived")
 GROUP_LABELS = {
     "needs_attention": "Needs attention",
     "running": "Running",
     "queued": "Queued",
     "completed": "Completed",
+    "archived": "Archived",
 }
 _GROUP_FOR_STATUS = {
     "incomplete": "needs_attention",
@@ -44,6 +45,13 @@ STALLED_OVERRIDE = "Stalled — service stopped"
 def group_for_status(status: str) -> str:
     # Unknown statuses surface at the top rather than vanishing.
     return _GROUP_FOR_STATUS.get(status, "needs_attention")
+
+
+def group_for_job(job: dict) -> str:
+    # Archived is a shelf, not a lifecycle state: it wins over status.
+    if job.get("archived_at"):
+        return "archived"
+    return group_for_status(job["status"])
 
 
 def build_rail_model() -> QStandardItemModel:
@@ -78,7 +86,7 @@ def _job_item(job: dict, service_up: bool = True) -> QStandardItem:
 def _grouped_and_sorted(jobs: list[dict]) -> dict[str, list[dict]]:
     buckets: dict[str, list[dict]] = {group: [] for group in RAIL_GROUPS}
     for job in jobs:
-        buckets[group_for_status(job["status"])].append(job)
+        buckets[group_for_job(job)].append(job)
     for group in RAIL_GROUPS:
         buckets[group].sort(key=lambda j: j["id"], reverse=True)
     return buckets
@@ -93,7 +101,7 @@ def _rail_signature(buckets: dict[str, list[dict]], service_up: bool) -> tuple:
     return (
         service_up,
         tuple(
-            tuple((job["id"], job["status"], job["name"], job.get("scheduled_start_at"))
+            tuple((job["id"], job["status"], job["name"], job.get("scheduled_start_at"), job.get("archived_at"))
                  for job in buckets[group])
             for group in RAIL_GROUPS
         ),

@@ -356,3 +356,39 @@ def test_error_actions_guard_against_controller_claimed_pending_job(api):
     assert all(f["error_category"] == "permission_denied" for f in failed_files)
 
     controller.job_finished()
+
+
+def test_archive_lifecycle(api, tmp_path):
+    client, _, _ = api
+    job_id = _submit(client, tmp_path)
+    # queued job: not archivable
+    response = client.post(f"/jobs/{job_id}/archive")
+    assert response.status_code == 409
+    assert "only complete or cancelled jobs can" in response.json()["detail"]
+    assert f"job {job_id} is pending" in response.json()["detail"]
+    # cancel it -> archivable
+    assert client.post(f"/jobs/{job_id}/cancel").status_code == 200
+    assert client.post(f"/jobs/{job_id}/archive").json() == {"archived": job_id}
+    # hidden from the default list, present with include_archived
+    assert [j["id"] for j in client.get("/jobs").json()] == []
+    listed = client.get("/jobs", params={"include_archived": "true"}).json()
+    assert [j["id"] for j in listed] == [job_id]
+    assert listed[0]["archived_at"] is not None
+    # unarchive restores it
+    assert client.post(f"/jobs/{job_id}/unarchive").json() == {"unarchived": job_id}
+    assert [j["id"] for j in client.get("/jobs").json()] == [job_id]
+    # 404s
+    assert client.post("/jobs/999/archive").status_code == 404
+    assert client.post("/jobs/999/unarchive").status_code == 404
+
+
+def test_resume_refuses_archived_jobs(api, tmp_path):
+    client, _, _ = api
+    job_id = _submit(client, tmp_path)
+    assert client.post(f"/jobs/{job_id}/cancel").status_code == 200
+    assert client.post(f"/jobs/{job_id}/archive").status_code == 200
+    response = client.post(f"/jobs/{job_id}/resume")
+    assert response.status_code == 409
+    assert "unarchive it before resuming" in response.json()["detail"]
+    assert client.post(f"/jobs/{job_id}/unarchive").status_code == 200
+    assert client.post(f"/jobs/{job_id}/resume").json()["status"] == "pending"

@@ -181,3 +181,21 @@ def test_new_connection_refreshes_the_list_after_close(qtbot, monkeypatch):
     monkeypatch.setattr(mod.NewConnectionDialog, "exec", lambda self: 0)
     dialog._new_connection()
     qtbot.waitUntil(lambda: calls["n"] > before, timeout=5000)
+
+
+def test_delete_failure_after_refresh_ignores_the_dead_card(qtbot, monkeypatch):
+    client = FakeClient([profile(1)])
+    dialog = ConnectionsDialog(client)
+    qtbot.addWidget(dialog)
+    wait_cards(qtbot, dialog, 1)
+    old_card = dialog.cards[0]
+    dialog._profiles_loaded([profile(1)])        # refresh replaces every card
+    assert old_card not in dialog.cards
+    touched = []
+    monkeypatch.setattr(old_card, "show_refusal", lambda n: touched.append(n))
+    monkeypatch.setattr(old_card, "show_error_line", lambda t: touched.append(t))
+    monkeypatch.setattr(old_card, "reset_region", lambda: touched.append("reset"))
+    dialog._delete_failed(
+        old_card,
+        "409: profile 1 is used by 2 job(s) and cannot be deleted while they exist")
+    assert touched == []                          # the dead card was never touched

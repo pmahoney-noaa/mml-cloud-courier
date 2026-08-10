@@ -51,8 +51,11 @@ class ApiClient:
             json={"prefix": prefix}, timeout=300,
         ))
 
-    def list_jobs(self) -> list[dict]:
-        return self._check(self._session.get(f"{self._base}/jobs", timeout=30))
+    def list_jobs(self, include_archived: bool = False) -> list[dict]:
+        params = {"include_archived": "true"} if include_archived else None
+        return self._check(
+            self._session.get(f"{self._base}/jobs", params=params, timeout=30)
+        )
 
     def get_job(self, job_id: int) -> dict:
         return self._check(
@@ -62,6 +65,16 @@ class ApiClient:
     def pause(self, job_id: int) -> dict:
         return self._check(
             self._session.post(f"{self._base}/jobs/{job_id}/pause", timeout=30)
+        )
+
+    def archive_job(self, job_id: int) -> dict:
+        return self._check(
+            self._session.post(f"{self._base}/jobs/{job_id}/archive", timeout=30)
+        )
+
+    def unarchive_job(self, job_id: int) -> dict:
+        return self._check(
+            self._session.post(f"{self._base}/jobs/{job_id}/unarchive", timeout=30)
         )
 
     def resume(self, job_id: int) -> dict:

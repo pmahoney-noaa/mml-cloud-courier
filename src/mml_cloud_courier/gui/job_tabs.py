@@ -51,6 +51,7 @@ from mml_cloud_courier.gui.progress_widgets import (
 
 _RESUME_VISIBLE = frozenset({"paused", "stalled", "incomplete", "cancelled"})
 _REPORT_VISIBLE = frozenset({"complete", "paused", "stalled", "incomplete", "cancelled"})
+_ARCHIVE_VISIBLE = frozenset({"complete", "cancelled"})
 
 
 def _local_event_time(at: str) -> tuple[str, str | None]:
@@ -408,10 +409,11 @@ class SummaryTab(QWidget):
     """The verdict, the state breakdown, and the two follow-up actions
     that only make sense once a job has stopped moving on its own."""
 
-    def __init__(self, *, on_open_report, on_resume, parent=None):
+    def __init__(self, *, on_open_report, on_resume, on_archive=lambda: None, parent=None):
         super().__init__(parent)
         self._on_open_report = on_open_report
         self._on_resume = on_resume
+        self._on_archive = on_archive
         self._last_job: dict | None = None
         # Cached like _last_job: causes arrive separately (from
         # MainWindow._render_errors, after the errors groups load) and must
@@ -481,15 +483,19 @@ class SummaryTab(QWidget):
 
         self.report_button = QPushButton("Open report")
         self.resume_button = QPushButton("Resume remaining")
+        self.archive_button = QPushButton("Archive this job")
         self.report_button.clicked.connect(lambda: self._on_open_report())
         self.resume_button.clicked.connect(lambda: self._on_resume())
+        self.archive_button.clicked.connect(lambda: self._on_archive())
         self.report_button.hide()
         self.resume_button.hide()
+        self.archive_button.hide()
 
         footer_row = QHBoxLayout()
         footer_row.addWidget(self.footer_label, 1)
         footer_row.addWidget(self.report_button)
         footer_row.addWidget(self.resume_button)
+        footer_row.addWidget(self.archive_button)
 
         layout = QVBoxLayout(self)
         layout.addLayout(verdict_row)
@@ -565,7 +571,10 @@ class SummaryTab(QWidget):
         self.footer_label.setVisible(state_counts.get("quarantined", 0) > 0)
 
         self.report_button.setVisible(status in _REPORT_VISIBLE)
-        self.resume_button.setVisible(status in _RESUME_VISIBLE)
+        self.resume_button.setVisible(
+            status in _RESUME_VISIBLE and not job.get("archived_at"))
+        self.archive_button.setVisible(
+            status in _ARCHIVE_VISIBLE and not job.get("archived_at"))
 
     def set_causes(self, total: int | None, needs_you: int | None) -> None:
         """Cause counts for the sentence's trailing clause, pushed

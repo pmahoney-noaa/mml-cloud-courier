@@ -84,3 +84,38 @@ def test_first_run_gate_uses_unfiltered_jobs(qtbot, window):
     window.show_jobs_for_profile(99, "gone")   # filters out every job
     # jobs exist, so first-run must NOT take over even though the rail is empty
     assert window._content_stack.currentWidget() is not window._first_run
+
+
+@pytest.mark.gui
+def test_submitted_job_hidden_by_filter_clears_the_filter(qtbot, window):
+    window._on_jobs(JOBS)                       # profiles 10, 10, 20
+    window.show_jobs_for_profile(20, "PAM archive")
+    assert window.rail_job_ids() == [3]
+    # a poll tick arrives carrying a just-submitted job for another profile
+    window._pending_select = 4
+    window._on_jobs(JOBS + [_job(4, 10)])
+    assert not window.filter_bar.isVisibleTo(window)     # submission wins
+    assert sorted(window.rail_job_ids()) == [1, 2, 3, 4]
+    qtbot.waitUntil(lambda: window.selected_job_id == 4, timeout=5000)
+    assert window._pending_select is None
+
+
+@pytest.mark.gui
+def test_pending_job_not_yet_polled_leaves_filter_alone(qtbot, window):
+    window._on_jobs(JOBS)
+    window.show_jobs_for_profile(20, "PAM archive")
+    window._pending_select = 99                  # poll has not seen it yet
+    window._on_jobs(JOBS)
+    assert window.filter_bar.isVisibleTo(window)          # filter intact
+    assert window._pending_select == 99                   # still pending
+
+
+@pytest.mark.gui
+def test_pending_job_matching_the_filter_keeps_it(qtbot, window):
+    window._on_jobs(JOBS)
+    window.show_jobs_for_profile(10, "MML imagery")
+    window._pending_select = 4
+    window._on_jobs(JOBS + [_job(4, 10)])        # profile 10: visible under the filter
+    assert window.filter_bar.isVisibleTo(window)          # filter kept
+    qtbot.waitUntil(lambda: window.selected_job_id == 4, timeout=5000)
+    assert window._pending_select is None

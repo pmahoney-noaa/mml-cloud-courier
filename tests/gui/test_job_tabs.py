@@ -424,3 +424,41 @@ def test_files_state_column_fixed(qtbot):
     header = tab.table.horizontalHeader()
     assert header.sectionResizeMode(2) == QHeaderView.ResizeMode.Fixed
     assert header.sectionSize(2) == 204
+
+
+def test_summary_archive_button_visibility_and_callback(qtbot):
+    archived_calls = []
+    tab = SummaryTab(on_open_report=lambda: None, on_resume=lambda: None,
+                     on_archive=lambda: archived_calls.append(True))
+    qtbot.addWidget(tab)
+    assert tab.archive_button.text() == "Archive this job"
+
+    tab.update_job({"id": 1, "status": "complete", "progress": {}})
+    assert tab.archive_button.isVisibleTo(tab)
+    tab.archive_button.click()
+    assert archived_calls == [True]
+
+    tab.update_job({"id": 1, "status": "cancelled", "progress": {}})
+    assert tab.archive_button.isVisibleTo(tab)
+
+    tab.update_job({"id": 1, "status": "running", "progress": {}})
+    assert not tab.archive_button.isVisibleTo(tab)
+
+    tab.update_job({"id": 1, "status": "complete", "progress": {},
+                    "archived_at": "2026-08-09T00:00:00+00:00"})
+    assert not tab.archive_button.isVisibleTo(tab)
+
+
+def test_summary_resume_button_hidden_for_archived_jobs(qtbot):
+    tab = SummaryTab(on_open_report=lambda: None, on_resume=lambda: None,
+                     on_archive=lambda: None)
+    qtbot.addWidget(tab)
+
+    tab.update_job({"id": 1, "status": "cancelled", "progress": {},
+                    "archived_at": "2026-08-09T00:00:00+00:00"})
+    assert not tab.archive_button.isVisibleTo(tab)
+    assert not tab.resume_button.isVisibleTo(tab)
+
+    tab.update_job({"id": 1, "status": "cancelled", "progress": {}})
+    assert tab.archive_button.isVisibleTo(tab)
+    assert tab.resume_button.isVisibleTo(tab)

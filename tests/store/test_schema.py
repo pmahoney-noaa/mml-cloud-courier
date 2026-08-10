@@ -88,12 +88,14 @@ def test_duplicate_relative_path_in_one_job_is_rejected(conn):
         conn.execute(insert)
 
 
-def test_fresh_database_is_version_2_with_validated_at(tmp_path):
+def test_fresh_database_is_version_3_with_validated_at_and_archived_at(tmp_path):
     conn = connect(tmp_path / "jobs.db")
     try:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
         columns = {r[1] for r in conn.execute("PRAGMA table_info(profiles)")}
         assert "validated_at" in columns
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+        assert "archived_at" in columns
     finally:
         conn.close()
 
@@ -128,7 +130,7 @@ def test_a_v1_database_is_migrated_in_place(tmp_path):
 
     conn = connect(db)
     try:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
         row = conn.execute("SELECT * FROM profiles WHERE name = 'legacy'").fetchone()
         assert row["validated_at"] is None  # new column, old row intact
     finally:
@@ -164,6 +166,65 @@ def test_an_interrupted_migration_recovers_on_the_next_connect(tmp_path):
 
     conn = connect(db)
     try:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 2
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+    finally:
+        conn.close()
+
+
+def test_a_v2_database_gains_archived_at_in_place(tmp_path):
+    """Build a database exactly as schema v2 wrote it (no jobs.archived_at,
+    version=2), then connect(): the column appears, the version bumps, and
+    existing rows survive with archived_at NULL."""
+    db = tmp_path / "jobs.db"
+    raw = sqlite3.connect(db)
+    raw.executescript(
+        """
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (2);
+        CREATE TABLE jobs (
+            id                 INTEGER PRIMARY KEY,
+            name               TEXT NOT NULL,
+            direction          TEXT NOT NULL,
+            profile_id         INTEGER,
+            source_root        TEXT NOT NULL,
+            dest_prefix        TEXT NOT NULL,
+            status             TEXT NOT NULL,
+            audit_hash         INTEGER NOT NULL DEFAULT 0,
+            scheduled_start_at TEXT,
+            created_at         TEXT NOT NULL,
+            started_at         TEXT,
+            finished_at        TEXT,
+            planned_files      INTEGER NOT NULL DEFAULT 0,
+            planned_bytes      INTEGER NOT NULL DEFAULT 0
+        );
+        INSERT INTO jobs (name, direction, source_root, dest_prefix, status, created_at)
+        VALUES ('legacy', 'upload', 'C:\\d', 'p', 'complete', '2026-08-09T00:00:00+00:00');
+        """
+    )
+    raw.commit()
+    raw.close()
+
+    conn = connect(db)
+    try:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        row = conn.execute("SELECT * FROM jobs WHERE name = 'legacy'").fetchone()
+        assert row["archived_at"] is None       # new column, old row intact
+    finally:
+        conn.close()
+
+
+def test_an_interrupted_v3_migration_recovers_on_the_next_connect(tmp_path):
+    """Simulate a crash between the ALTER and the version bump: the column
+    exists but the version still says 2. connect() must not re-ALTER (which
+    would raise) and must catch the version up."""
+    db = tmp_path / "jobs.db"
+    conn = connect(db)          # fresh v3
+    conn.execute("UPDATE schema_version SET version = 2")
+    conn.commit()
+    conn.close()
+
+    conn = connect(db)
+    try:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
     finally:
         conn.close()
