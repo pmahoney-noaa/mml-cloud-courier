@@ -108,3 +108,14 @@ def test_pending_job_not_yet_polled_leaves_filter_alone(qtbot, window):
     window._on_jobs(JOBS)
     assert window.filter_bar.isVisibleTo(window)          # filter intact
     assert window._pending_select == 99                   # still pending
+
+
+@pytest.mark.gui
+def test_pending_job_matching_the_filter_keeps_it(qtbot, window):
+    window._on_jobs(JOBS)
+    window.show_jobs_for_profile(10, "MML imagery")
+    window._pending_select = 4
+    window._on_jobs(JOBS + [_job(4, 10)])        # profile 10: visible under the filter
+    assert window.filter_bar.isVisibleTo(window)          # filter kept
+    qtbot.waitUntil(lambda: window.selected_job_id == 4, timeout=5000)
+    assert window._pending_select is None
