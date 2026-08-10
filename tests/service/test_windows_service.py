@@ -72,3 +72,40 @@ def test_run_routes_command_lines_to_main(monkeypatch):
     monkeypatch.setattr(windows_service, "main", lambda: calls.append(1) or 0)
     assert windows_service.run() == 0
     assert calls
+
+
+def test_main_propagates_handle_command_line_error(monkeypatch):
+    """The installer gates registration success on this exit code — a
+    swallowed pywin32 error would show a green installer with no service
+    (final-review finding)."""
+    import win32serviceutil
+
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(
+        win32serviceutil, "HandleCommandLine", lambda cls, argv: 1072
+    )
+    calls = []
+    monkeypatch.setattr(
+        windows_service, "_configure_restart_on_failure",
+        lambda: calls.append(True),
+    )
+    assert windows_service.main(["install"]) == 1072
+    assert not calls  # failure actions never configured on a failed install
+
+
+def test_main_configures_restart_only_on_successful_install(monkeypatch):
+    import win32serviceutil
+
+    from mml_cloud_courier.service import windows_service
+
+    monkeypatch.setattr(
+        win32serviceutil, "HandleCommandLine", lambda cls, argv: None
+    )
+    calls = []
+    monkeypatch.setattr(
+        windows_service, "_configure_restart_on_failure",
+        lambda: calls.append(True),
+    )
+    assert windows_service.main(["install"]) == 0
+    assert calls

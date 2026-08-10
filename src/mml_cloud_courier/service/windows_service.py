@@ -105,10 +105,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv if argv is None else [sys.argv[0], *argv])
     if "install" in args and "--startup" not in args:
         args[args.index("install"):args.index("install")] = ["--startup", "auto"]
-    win32serviceutil.HandleCommandLine(_build_service_class(), argv=args)
-    if "install" in args:
+    err = win32serviceutil.HandleCommandLine(_build_service_class(), argv=args)
+    err = int(err or 0)
+    if "install" in args and err == 0:
         _configure_restart_on_failure()
-    return 0
+    return err
 
 
 def run() -> int:

@@ -143,4 +143,4 @@ def test_token_acl_actually_includes_reader_sids(tmp_path):
         ["icacls", str(tmp_path / "api_token")],
         capture_output=True, text=True, check=True,
     ).stdout
-    assert "S-1-5-32-545" in out or "Users" in out
+    assert "BUILTIN\\Users:(R)" in out
