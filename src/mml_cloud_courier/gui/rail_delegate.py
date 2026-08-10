@@ -13,7 +13,7 @@ from mml_cloud_courier.gui.jobs_model import (
 )
 
 _HEADER_TEXT_TOKENS = {"needs_attention": "danger", "running": "accent_text",
-                       "queued": "faint", "completed": "faint"}
+                       "queued": "faint", "completed": "faint", "archived": "faint"}
 _STATUS_DOT_TOKENS = {"incomplete": "danger", "stalled": "warn", "paused": "warn",
                       "running": "accent_2", "scanning": "accent_2",
                       "pending": "skip", "complete": "accent", "cancelled": "skip"}
@@ -47,7 +47,7 @@ class RailDelegate(QStyledItemDelegate):
             font = theme.mono_font(8.0, 600)
             font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 109)
             painter.setFont(font)
-            painter.setPen(_color(_HEADER_TEXT_TOKENS[group]))
+            painter.setPen(_color(_HEADER_TEXT_TOKENS.get(group, "faint")))
             label = f"{index.data(Qt.ItemDataRole.DisplayRole).upper()}  {index.model().itemFromIndex(index).rowCount()}"
             text_rect = rect.adjusted(8, 11, -6, -6)
             painter.drawText(text_rect,

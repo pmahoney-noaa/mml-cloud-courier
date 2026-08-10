@@ -1,6 +1,6 @@
 """The left rail: jobs grouped by status, Needs attention pinned on top.
 
-A QStandardItemModel with four permanent group rows; sync_rail replaces
+A QStandardItemModel with five permanent group rows; sync_rail replaces
 each group's children when the incoming jobs actually differ from the
 last sync (see the signature check below) -- otherwise it's a no-op.
 Cheap and correct for the tens of jobs a workstation accumulates;

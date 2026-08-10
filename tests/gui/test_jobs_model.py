@@ -160,3 +160,21 @@ def test_archiving_a_job_changes_the_rail_signature(qapp):
     assert sync_rail(model, [job]) is False              # unchanged: no-op
     archived = {**job, "archived_at": "2026-08-09T00:00:00+00:00"}
     assert sync_rail(model, [archived]) is True          # archive forces a rebuild
+
+
+def test_rail_headers_paint_without_error_including_archived(qtbot):
+    from PySide6.QtWidgets import QTreeView
+    from mml_cloud_courier.gui.rail_delegate import RailDelegate
+    view = QTreeView()
+    qtbot.addWidget(view)
+    model = build_rail_model()
+    sync_rail(model, [_job(1, "complete"),
+                      {**_job(2, "complete"),
+                       "archived_at": "2026-08-09T00:00:00+00:00"}])
+    view.setModel(model)
+    view.setItemDelegate(RailDelegate(view))
+    view.expandAll()
+    view.show()
+    qtbot.wait(100)  # allow paint events to process
+    pixmap = view.grab()          # forces paint of every header incl. Archived
+    assert not pixmap.isNull()
