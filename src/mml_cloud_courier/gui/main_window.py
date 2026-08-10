@@ -203,6 +203,7 @@ class MainWindow(QMainWindow):
         self.summary_tab = SummaryTab(
             on_open_report=self._on_open_report,
             on_resume=self._on_resume_from_summary,
+            on_archive=self._on_archive_from_summary,
         )
 
         self.tabs = QTabWidget()
@@ -826,3 +827,7 @@ class MainWindow(QMainWindow):
         call_async(lambda: self.client.resume(job_id), parent=self,
                    on_done=lambda _r: self._on_job_action_done(job_id),
                    on_failed=self._status_message)
+
+    def _on_archive_from_summary(self) -> None:
+        if self._selected_job_id is not None:
+            self._archive_job(self._selected_job_id)
