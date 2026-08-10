@@ -35,7 +35,7 @@ def test_sync_rail_places_jobs_and_roles(qapp):
     model = build_rail_model()
     sync_rail(model, [_job(1, "complete"), _job(2, "incomplete"), _job(3, "running")])
 
-    assert model.rowCount() == 4
+    assert model.rowCount() == 5
     attention = model.item(0)
     assert attention.text() == GROUP_LABELS["needs_attention"]
     child = attention.child(0)
@@ -132,3 +132,31 @@ def test_delegate_dot_token_warns_on_stalled_override():
     assert _dot_token("running", STALLED_OVERRIDE) == "warn"
     assert _dot_token("running", "Running") == "accent_2"
     assert _dot_token("incomplete", "Needs attention") == "danger"
+
+
+def test_archived_jobs_route_to_the_archived_group(qapp):
+    from mml_cloud_courier.gui.jobs_model import group_for_job
+    active = _job(1, "complete")
+    archived = {**_job(2, "complete"), "archived_at": "2026-08-09T00:00:00+00:00"}
+    assert group_for_job(active) == "completed"
+    assert group_for_job(archived) == "archived"
+    # regardless of status
+    assert group_for_job({**_job(3, "cancelled"),
+                          "archived_at": "2026-08-09T00:00:00+00:00"}) == "archived"
+
+    model = build_rail_model()
+    sync_rail(model, [active, archived])
+    completed = model.item(RAIL_GROUPS.index("completed"))
+    archived_group = model.item(RAIL_GROUPS.index("archived"))
+    assert completed.rowCount() == 1 and completed.child(0).data(JOB_ID_ROLE) == 1
+    assert archived_group.rowCount() == 1 and archived_group.child(0).data(JOB_ID_ROLE) == 2
+    assert archived_group.text() == GROUP_LABELS["archived"]
+
+
+def test_archiving_a_job_changes_the_rail_signature(qapp):
+    model = build_rail_model()
+    job = _job(1, "complete")
+    assert sync_rail(model, [job]) is True
+    assert sync_rail(model, [job]) is False              # unchanged: no-op
+    archived = {**job, "archived_at": "2026-08-09T00:00:00+00:00"}
+    assert sync_rail(model, [archived]) is True          # archive forces a rebuild
