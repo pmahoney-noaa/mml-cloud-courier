@@ -38,6 +38,10 @@ class ProfileInUse(Exception):
     """Deleting a profile that jobs still reference."""
 
 
+class JobNotArchivable(Exception):
+    """Archiving a job that is not in a completed-group status."""
+
+
 @dataclass(frozen=True, slots=True)
 class JobProgress:
     files_total: int
@@ -55,6 +59,7 @@ class JobRepository:
         JobStatus.RUNNING.value, JobStatus.PAUSED.value,
         JobStatus.STALLED.value, JobStatus.INCOMPLETE.value,
     )
+    _ARCHIVABLE_STATUSES = frozenset({"complete", "cancelled"})
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
@@ -178,8 +183,12 @@ class JobRepository:
         value = row["precondition_generation"]
         return None if value is None else int(value)
 
-    def list_jobs(self) -> list[sqlite3.Row]:
-        return self._conn.execute("SELECT * FROM jobs ORDER BY id").fetchall()
+    def list_jobs(self, include_archived: bool = False) -> list[sqlite3.Row]:
+        if include_archived:
+            return self._conn.execute("SELECT * FROM jobs ORDER BY id").fetchall()
+        return self._conn.execute(
+            "SELECT * FROM jobs WHERE archived_at IS NULL ORDER BY id"
+        ).fetchall()
 
     def jobs_with_status(self, status: JobStatus) -> list[sqlite3.Row]:
         return self._conn.execute(
@@ -200,6 +209,26 @@ class JobRepository:
             " ORDER BY id LIMIT 1",
             (JobStatus.PENDING.value, now),
         ).fetchone()
+
+    def archive_job(self, job_id: int) -> None:
+        """Hide from the default list without deleting. Only completed-group
+        statuses qualify; the first archive time survives re-archiving."""
+        row = self.get_job(job_id)               # LookupError on a bogus id
+        if row["status"] not in self._ARCHIVABLE_STATUSES:
+            raise JobNotArchivable(
+                f"job {job_id} is {row['status']} and cannot be archived;"
+                " only complete or cancelled jobs can"
+            )
+        self._conn.execute(
+            "UPDATE jobs SET archived_at = COALESCE(archived_at, ?) WHERE id = ?",
+            (_now(), job_id),
+        )
+
+    def unarchive_job(self, job_id: int) -> None:
+        self.get_job(job_id)                     # LookupError on a bogus id
+        self._conn.execute(
+            "UPDATE jobs SET archived_at = NULL WHERE id = ?", (job_id,)
+        )
 
     # ---- planning -------------------------------------------------------
 

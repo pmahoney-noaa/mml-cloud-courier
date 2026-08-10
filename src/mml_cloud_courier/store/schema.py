@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     started_at         TEXT,
     finished_at        TEXT,
     planned_files      INTEGER NOT NULL DEFAULT 0,
-    planned_bytes      INTEGER NOT NULL DEFAULT 0
+    planned_bytes      INTEGER NOT NULL DEFAULT 0,
+    archived_at        TEXT
 );
 
 CREATE TABLE IF NOT EXISTS job_files (
@@ -130,4 +131,11 @@ def apply_migrations(conn: sqlite3.Connection) -> None:
         if "validated_at" not in columns:
             conn.execute("ALTER TABLE profiles ADD COLUMN validated_at TEXT")
         conn.execute("UPDATE schema_version SET version = 2")
+    if version < 3:
+        # v2 -> v3: jobs.archived_at (archive = hide from the default list,
+        # keep the row). Same crash-safe guard as v1 -> v2.
+        columns = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+        if "archived_at" not in columns:
+            conn.execute("ALTER TABLE jobs ADD COLUMN archived_at TEXT")
+        conn.execute("UPDATE schema_version SET version = 3")
     conn.commit()
